@@ -9,6 +9,7 @@ mod coverage;
 mod diff_places;
 mod osm;
 mod place;
+mod s2_util;
 mod u64_table;
 
 // Re-exported for main.rs.
