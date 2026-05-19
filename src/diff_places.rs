@@ -1,4 +1,5 @@
 use crate::place::{PlaceIter, S2RowGroupIndex};
+use crate::s2_util::MergedCellRanges;
 use crate::{make_progress_bar, match_distance};
 use anyhow::Result;
 use indicatif::MultiProgress;
@@ -36,8 +37,11 @@ pub fn diff_places(
         let s2_cell = Cell::from(CellID(place.s2_cell_id));
         let radius = match_distance(&place.mask);
         let cap = Cap::from_center_chordangle(&s2_cell.center(), &radius);
-        // TODO: Merge adjacent cell_id ranges.
-        for _cell_id in coverer.covering(&cap).0.into_iter() {}
+        let covering = coverer.covering(&cap);
+        for (_lo, _hi) in MergedCellRanges::new(covering) {
+            // println!("TODO: find matches in range {}..={}", lo, hi);
+            // if cap.contains_point(&candidate.cell_id.center()) {}
+        }
         Ok::<(), anyhow::Error>(())
     })?;
 
