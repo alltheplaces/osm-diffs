@@ -1,4 +1,4 @@
-use crate::place::{PlaceIter, S2RowGroupIndex};
+use crate::places::{PlaceIter, S2RowGroupIndex};
 use crate::s2_util::MergedCellRanges;
 use crate::{make_progress_bar, match_distance};
 use anyhow::Result;

@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
-use crate::place::{ParquetWriter, Place};
+use crate::places::{ParquetWriter, Place};
 use crate::{MatchMask, PROGRESS_BAR_STYLE};
 
 mod fetch;
@@ -229,7 +229,7 @@ fn find_point(geojson: &GeoJson) -> Option<Point> {
 
 #[cfg(test)]
 mod tests {
-    use crate::place::Place;
+    use crate::places::Place;
     use geo::Point;
     use geojson::GeoJson;
 

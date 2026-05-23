@@ -12,7 +12,7 @@ use std::thread;
 
 use crate::{
     MatchMask,
-    place::{ParquetWriter, Place},
+    places::{ParquetWriter, Place},
 };
 
 pub fn assemble(
@@ -171,7 +171,7 @@ mod tests {
     use super::{assemble_nodes, assemble_ways};
     use crate::MatchMask;
     use crate::osm::{Node, Way, tests::MockFeatureStore};
-    use crate::place::Place;
+    use crate::places::Place;
     use anyhow::{Ok, Result};
     use indicatif::{ProgressBar, ProgressDrawTarget};
     use std::sync::mpsc::sync_channel;
