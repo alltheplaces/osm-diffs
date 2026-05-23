@@ -1,4 +1,4 @@
-use crate::places::{PlaceIter, S2RowGroupIndex};
+use crate::places::PlaceIndex;
 use crate::s2_util::MergedCellRanges;
 use crate::{make_progress_bar, match_distance};
 use anyhow::Result;
@@ -21,34 +21,34 @@ pub fn diff_places(
         return Ok(out_path);
     }
 
+    // TODO: Open out_path for writing.
+
     let coverer = RegionCoverer {
         max_cells: 16,
         min_level: 12,
         max_level: s2::cellid::MAX_LEVEL as u8,
         level_mod: 1,
     };
-
-    // TODO: Implement.
-    let atp_places = PlaceIter::try_new(atp)?;
-    let row_group_index = S2RowGroupIndex::from_path(osm)?;
-    atp_places.par_bridge().try_for_each(|place| {
+    let atp_places = PlaceIndex::open(atp, 1)?;
+    let num_atp_places = atp_places.total_rows() as u64;
+    let progress_bar = make_progress_bar(progress, "diff     ", num_atp_places, "features");
+    let osm_places = PlaceIndex::open(osm, 32)?;
+    atp_places.scan().par_bridge().try_for_each(|place| {
         let place = place?;
-        // println!("got {:?}", place);
         let s2_cell = Cell::from(CellID(place.s2_cell_id));
         let radius = match_distance(&place.mask);
         let cap = Cap::from_center_chordangle(&s2_cell.center(), &radius);
         let covering = coverer.covering(&cap);
-        for (_lo, _hi) in MergedCellRanges::new(covering) {
-            // println!("TODO: find matches in range {}..={}", lo, hi);
-            // if cap.contains_point(&candidate.cell_id.center()) {}
+        for (lo, hi) in MergedCellRanges::new(covering) {
+            for candidate in osm_places.query(lo..=hi, place.mask)? {
+                let _candidate = candidate?;
+                // TODO: Compute spatial distance between candidate and place.
+                // TODO: Compute match score between candidate and place.
+            }
         }
+        progress_bar.inc(1);
         Ok::<(), anyhow::Error>(())
     })?;
-
-    let _ = row_group_index.query(34, 78);
-
-    let num_features = 1234u64;
-    let _progress_bar = make_progress_bar(progress, "diff     ", num_features, "features");
-
+    progress_bar.finish();
     Ok(out_path)
 }

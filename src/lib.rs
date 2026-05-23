@@ -63,7 +63,9 @@ fn make_download_bar(
     }
 }
 
-#[derive(Debug, DeepSizeOf, Default, Deserialize, PartialEq, Eq, Ord, PartialOrd, Serialize)]
+#[derive(
+    Clone, Copy, Debug, DeepSizeOf, Default, Deserialize, PartialEq, Eq, Ord, PartialOrd, Serialize,
+)]
 #[repr(transparent)]
 struct MatchMask(u16);
 
