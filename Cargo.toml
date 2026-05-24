@@ -21,6 +21,7 @@ librqbit = { version = "8.1.1", default-features = false, features = ["disable-u
 log = { version = "0.4.29", default-features = false }
 lru = { version = "0.18.0", default-features = false }
 memmap2 = "0.9.10"
+once_cell = "1.21.4"
 osm_pbf_iter = { version = "0.2.2", default-features = false }
 parquet = { version = "58.3.0", default-features = false, features = ["arrow", "zstd"] }
 piz = "0.5.1"

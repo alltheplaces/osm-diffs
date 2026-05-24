@@ -884,6 +884,7 @@ dependencies = [
  "lru",
  "memmap2",
  "mockito",
+ "once_cell",
  "osm_pbf_iter",
  "parquet",
  "piz",

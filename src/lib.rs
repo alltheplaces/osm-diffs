@@ -67,7 +67,7 @@ fn make_download_bar(
     Clone, Copy, Debug, DeepSizeOf, Default, Deserialize, PartialEq, Eq, Ord, PartialOrd, Serialize,
 )]
 #[repr(transparent)]
-struct MatchMask(u16);
+pub struct MatchMask(u16);
 
 impl MatchMask {
     pub const SHOP: MatchMask = MatchMask(1 << 0);
