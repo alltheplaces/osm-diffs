@@ -3,10 +3,12 @@ use deepsize::DeepSizeOf;
 use geo::Coord;
 use serde::{Deserialize, Serialize};
 
+mod matcher;
 mod place_index;
 mod writer;
-pub use place_index::PlaceIndex;
 
+pub use matcher::create_matcher;
+pub use place_index::PlaceIndex;
 pub use writer::ParquetWriter;
 
 #[derive(Debug, DeepSizeOf, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

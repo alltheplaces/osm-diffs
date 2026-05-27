@@ -1,10 +1,10 @@
-use crate::places::{Place, PlaceIndex};
+use crate::places::{Place, PlaceIndex, create_matcher};
 use crate::s2_util::MergedCellRanges;
-use crate::{MatchMask, make_progress_bar, match_distance};
+use crate::{make_progress_bar, match_distance};
 use anyhow::Result;
 use indicatif::MultiProgress;
 use rayon::prelude::*;
-use s2::{cap::Cap, cell::Cell, cellid::CellID, point::Point, region::RegionCoverer};
+use s2::{cap::Cap, cell::Cell, cellid::CellID, region::RegionCoverer};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -37,6 +37,7 @@ pub fn diff_places(
 
     let num_atp_features = AtomicU64::new(0);
     let num_candidates = AtomicU64::new(0);
+    let num_matches = AtomicU64::new(0);
 
     for group in atp_places.scan_row_groups() {
         // Each group is processed by the Rayon thread pool in parallel,
@@ -70,12 +71,15 @@ pub fn diff_places(
                     }
                 }
                 if let Some(best_candidate) = best_candidate
-                    && false
+                    && best_score > 0.0
                 {
-                    println!(
-                        "score={} place={:?} best_candidate={:?}",
-                        best_score, place, best_candidate
-                    );
+                    num_matches.fetch_add(1, Ordering::Relaxed);
+                    if false {
+                        println!(
+                            "score={} place={:?} best_candidate={:?}",
+                            best_score, place, best_candidate
+                        );
+                    }
                 }
             };
             Ok::<(), anyhow::Error>(())
@@ -85,9 +89,10 @@ pub fn diff_places(
     let cache_stats = osm_places.cache_stats();
     progress_bar.finish();
     println!(
-        "  features: {} candidates: {}",
+        "  features: {} candidates: {} matches: {}",
         num_atp_features.load(Ordering::SeqCst),
-        num_candidates.load(Ordering::SeqCst)
+        num_candidates.load(Ordering::SeqCst),
+        num_matches.load(Ordering::SeqCst)
     );
     println!(
         "  cache hits: {} misses: {} hit rate: {:.1}%",
@@ -97,50 +102,4 @@ pub fn diff_places(
     );
 
     Ok(out_path)
-}
-
-// TODO: Figure out how to best model matchers for different types, such as trees vs shops.
-fn distance(pt: &Point, place: &Place) -> f64 {
-    let pt2 = Point(CellID(place.s2_cell_id).raw_point().normalize());
-    pt.distance(&pt2).rad() * 6_371_000.0
-}
-
-fn distance_score(pt: &Point, place: &Place, max_meters: f64) -> f64 {
-    let dist = distance(pt, place);
-    if dist <= max_meters {
-        (max_meters - dist) / max_meters
-    } else {
-        0.0
-    }
-}
-
-/// Trait for objects that can score a `Place`.
-pub trait Matcher {
-    /// Returns a score between 0.0 and 1.0 indicating how well the place matches.
-    fn score(&self, place: &Place) -> f64;
-}
-
-pub fn create_matcher(place: &Place) -> Option<Box<dyn Matcher + '_>> {
-    if place.mask.intersects(&MatchMask::SHOP) {
-        Some(Box::new(ShopMatcher::new(place)))
-    } else {
-        None
-    }
-}
-
-pub struct ShopMatcher {
-    center: Point,
-}
-
-impl ShopMatcher {
-    fn new(place: &Place) -> ShopMatcher {
-        let center = Cell::from(CellID(place.s2_cell_id)).center();
-        ShopMatcher { center }
-    }
-}
-
-impl Matcher for ShopMatcher {
-    fn score(&self, p: &Place) -> f64 {
-        distance_score(&self.center, p, 2000.0)
-    }
 }
