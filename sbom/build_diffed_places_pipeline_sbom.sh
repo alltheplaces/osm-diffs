@@ -6,7 +6,6 @@
 
 SBOM_IN="diffed-places-pipeline.cdx.json"
 CBOM_PATCH="sbom/cbom.cdx.json"
-SBOM_OUT="sbom/sbom.cdx.json"
 
 cargo cyclonedx --no-build-deps --format json --spec-version=1.5
 
@@ -34,4 +33,4 @@ jq \
     )) |
     .dependencies += ($cbom[0].dependencies // [])
   ' \
-  "$SBOM_IN" > "$SBOM_OUT"
+  "$SBOM_IN"

@@ -1,19 +1,72 @@
-# Build and package the diffed-places-pipeline binary as a container.
+# SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
+# SPDX-License-Identifier: MIT
 #
-# This file is used in continuous integration to automatically build
-# containers; as a regular developer, you do not need to do this.
-# Should you really want to build the container yourself, for example
-# when testing a change to this file before sending out a pull/merge
-# request, use podman:
+# This file is used in continuous integration to automatically
+# build containers, invoked from .github/workflows/release.yml.
+# As a developer, you do not need to build production containers.
+# However, here’s how to test a change to this file:
 #
-#     podman build -t test-container -f Containerfile .
+#     mkdir artifacts
+#     podman build -t test-container                                    \
+#         --build-arg BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  \
+#         --volume $(pwd)/artifacts:/artifacts                          \
+#         -f Containerfile .
 #     podman run -t test-container --help
 
+
 # ----------------------------------------------------------------------------
-#  Build Stage 1: Build, test, create Software Bill of Materials (SBOM)
+#  Stage 1.1: Setup
 # ----------------------------------------------------------------------------
 
 FROM rust:1.92.0-alpine3.23 AS builder
+
+ARG BUILD_TIMESTAMP
+ARG TIPPECANOE_VERSION=2.79.0
+
+# TODO: Take cargo-cyclonedx from stable Alpine Linux (not edge)
+# once Alpine 3.24 has been released.
+RUN echo "@edge https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories && \
+    apk update && \
+    apk add \
+      bash \
+      build-base \
+      cargo-cyclonedx@edge \
+      cmake \
+      git \
+      jq \
+      sqlite-static \
+      sqlite-dev \
+      zlib-static \
+      zlib-dev
+
+
+# ----------------------------------------------------------------------------
+#  Stage 1.2: Build statically linked tippecanoe binary
+# ----------------------------------------------------------------------------
+
+WORKDIR /build/tippecanoe
+
+RUN git clone --depth 1 --branch ${TIPPECANOE_VERSION} \
+    https://github.com/felt/tippecanoe.git /build/tippecanoe
+
+RUN make -j"$(nproc)" \
+        PREFIX=/usr/local \
+        LDFLAGS="-static -static-libgcc -static-libstdc++" && \
+    make install PREFIX=/usr/local && \
+    strip --strip-all /usr/local/bin/tippecanoe
+
+# Sanity-check: confirm the binary is truly statically linked
+RUN readelf -d /usr/local/bin/tippecanoe 2>&1 | grep -q NEEDED \
+    && (echo "✗ dynamic deps detected" && exit 1) \
+    || echo "✓ no dynamic library dependencies"
+
+COPY sbom/build_tippecanoe_sbom.sh .
+RUN sh build_tippecanoe_sbom.sh >/artifacts/tippecanoe.cdx.json
+
+
+# ----------------------------------------------------------------------------
+#  Stage 1.3: Build and test diffed-places-pipeline binary
+# ----------------------------------------------------------------------------
 
 WORKDIR /usr/diffed-places
 
@@ -24,17 +77,12 @@ COPY tests tests
 
 RUN cargo build --release --locked
 RUN cargo test --release --locked
-
-# TODO: Remove this once Alpine 3.24 has been released.
-RUN echo "@edge https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories \
-    && apk update \
-    && apk add --no-cache cargo-cyclonedx@edge
-RUN apk add --no-cache jq
-RUN sh sbom/build_sbom.sh
+RUN sh sbom/build_diffed_places_pipeline_sbom.sh >/artifacts/diffed-places-pipeline.cdx.json
+RUN sh sbom/merge_sbom.sh >/artifacts/sbom.cdx.json
 
 
 # ----------------------------------------------------------------------------
-#  Build Stage 2: Package build artifacts into an otherwise empty container
+#  Stage 2: Package binaries into a scratch container
 # ----------------------------------------------------------------------------
 
 FROM scratch
@@ -43,13 +91,11 @@ ARG BUILD_TIMESTAMP
 ARG VCS_REF
 ARG VCS_URL
 
+COPY --from=builder /usr/local/bin/tippecanoe /usr/local/bin/tippecanoe
+    
 COPY --from=builder --chown=1000:1000  \
     /usr/diffed-places/target/release/diffed-places-pipeline  \
     /app/diffed-places-pipeline
-
-COPY --from=builder --chown=1000:1000 \
-    /usr/diffed-places/sbom/sbom.cdx.json  \
-    /sbom/sbom.cdx.json
 
 USER 1000
 
@@ -61,6 +107,5 @@ LABEL  \
     org.opencontainers.image.description="Data pipeline for Diffed Places"  \
     org.opencontainers.image.licenses="MIT"  \
     org.opencontainers.image.revision=$VCS_REF  \
-    org.opencontainers.image.sbom="/sbom/sbom.cdx.json"  \
     org.opencontainers.image.source=$VCS_URL  \
     org.opencontainers.image.vendor="Sascha Brawer <sascha@brawer.ch>"
