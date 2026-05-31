@@ -13,8 +13,6 @@ cargo cyclonedx --no-build-deps --format json --spec-version=1.5
 WEBPKI_VERSION=$(cargo metadata --format-version 1 --locked |
   jq -r '.packages[] | select(.name == "webpki-roots") | .version')
 
-echo "webpki-roots version: $WEBPKI_VERSION"
-
 jq \
   --slurpfile cbom "$CBOM_PATCH" \
   --arg webpki_version "$WEBPKI_VERSION" \
