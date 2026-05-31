@@ -64,6 +64,7 @@ jobs:
             --squash \
             --tag ${IMAGE} \
             --timestamp $(date -d "${TIMESTAMP}" +%s) \
+	    --volume $(pwd)/artifacts:/artifacts \
             .
 
       - name: Push image
@@ -72,15 +73,6 @@ jobs:
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }}
           podman push ${IMAGE} \
             --digestfile artifacts/digest.txt
-
-      - name: Copy SBOM out of container
-        run: |
-          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }}
-          podman create --name diffed-places-pipeline ${IMAGE}
-          podman cp \
-            diffed-places-pipeline:/sbom/sbom.cdx.json \
-            artifacts/sbom.cdx.json
-          podman rm diffed-places-pipeline
 
       - name: Upload image digest and SBOM to artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
