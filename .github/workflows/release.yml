@@ -74,6 +74,14 @@ jobs:
           podman push ${IMAGE} \
             --digestfile artifacts/digest.txt
 
+      - name: Merge SBOM for container
+        id: merge-sbom
+	run: |
+          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST=$(cat artifacts/digest.txt)
+          TIMESTAMP=${{ steps.commit-info.outputs.timestamp }}
+          sh sbom/merge_sbom.sh ${IMAGE} ${DIGEST} ${TIMESTAMP}
+
       - name: Upload image digest and SBOM to artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
@@ -170,14 +178,14 @@ jobs:
       - name: Attest amd64 SBOM
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 #v4.1.0
         with:
-          sbom-path: artifacts-amd64/sbom.cdx.json
+          sbom-path: artifacts-amd64/container.cdx.json
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.retrieve-digests.outputs.amd64_digest }}
 
       - name: Attest arm64 SBOM
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 #v4.1.0
         with:
-          sbom-path: artifacts-arm64/sbom.cdx.json
+          sbom-path: artifacts-arm64/container.cdx.json
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.retrieve-digests.outputs.arm64_digest }}
 
