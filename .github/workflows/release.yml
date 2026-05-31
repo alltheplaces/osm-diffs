@@ -64,7 +64,7 @@ jobs:
             --squash \
             --tag ${IMAGE} \
             --timestamp $(date -d "${TIMESTAMP}" +%s) \
-	    --volume $(pwd)/artifacts:/artifacts \
+            --volume $(pwd)/artifacts:/artifacts \
             .
 
       - name: Push image
