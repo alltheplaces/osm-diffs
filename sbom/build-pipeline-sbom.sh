@@ -4,17 +4,8 @@
 # SPDX-License-Identifier: MIT
 #
 # Generate and post-process a CycloneDX SBOM for diffed-places-pipeline
-# so it passes the FOSSA NTIA validator.
-#
-# Steps:
-#   1. Runs `cargo cyclonedx` to produce a raw SBOM.
-#   2. Fixes multiple roots: removes all non-binary workspace-member components
-#      from .components[] and collapses the .dependencies[] roots so that only
-#      the named binary is a root node; former extra-roots' children are merged
-#      into that root's dependsOn.
-#   3. Fixes missing supplier: every dependency component lacking a supplier
-#      gets { "name": "crates.io", "url": ["https://crates.io"] }.
-#      The root application component always gets ROOT_SUPPLIER_NAME / _URL.
+# so it passes the FOSSA NTIA validator and contains a Cryptographic
+# Bill Of Materials (CBOM).
 #
 # Usage:
 #   ./sbom/build-pipeline-sbom.sh [OUTPUT]
@@ -30,11 +21,6 @@ set -eu
 
 # ── constants ────────────────────────────────────────────────────────────────
 BINARY_NAME="diffed-places-pipeline"
-
-# Supplier injected into the root application component (metadata.component).
-# Edit these two values to match your organisation.
-ROOT_SUPPLIER_NAME="Diffed Places"
-ROOT_SUPPLIER_URL="https://github.com/diffed-places/"
 
 # Supplier applied to every third-party crate that is missing one.
 CRATES_IO_SUPPLIER='{"name":"crates.io","url":["https://crates.io"]}'
@@ -71,6 +57,7 @@ if [ ! -f "$RAW_FILE" ]; then
     echo "ERROR: cargo cyclonedx did not produce expected file: $RAW_FILE" >&2
     exit 1
 fi
+
 
 # ── jq program ───────────────────────────────────────────────────────────────
 #
@@ -150,21 +137,82 @@ def add_supplier:
 ] |
 
 # ── step 5: add supplier to every component missing one ──────────────────────
-# metadata (the root) always gets the project supplier, overwriting whatever
-# cargo-cyclonedx may have left blank.
-.metadata.supplier = $rootsupplier |
+.metadata.supplier = {"name": "Diffed Places", "url": "https://github.com/diffed-places/"} |
+.metadata.component.purl = "pkg:github/diffed-places/pipeline@" + .metadata.component.version |
+.metadata.component.licenses = [{expression: "MIT"}] |
+.components |= [ .[] | add_supplier ] |
 
-# all entries in .components[] get the crates.io supplier if absent.
-.components |= [ .[] | add_supplier ]
+# ── step 6: declare that we only use TLS 1.3, with the AWS BoringSSL fork ────
+.specVersion = "1.6" |
+.metadata.component.properties += [
+  {"name": "cdx:cbom:version",      "value": "1.0"},
+  {"name": "crypto:tls:library",    "value": "rustls"},
+  {"name": "crypto:tls:backend",    "value": "aws-lc-rs"},
+  {"name": "crypto:tls:minVersion", "value": "1.3"},
+  {"name": "crypto:tls:maxVersion", "value": "1.3"}
+] |
+.components += [
+  {
+    "type": "library",
+    "bom-ref": "pkg/aws-lc",
+    "name": "aws-lc",
+    "author": "AWS Cryptography",
+    "purl": "pkg:github/aws/aws-lc@v" + $aws_lc_sys_version,
+    "version": $aws_lc_sys_version,
+    "description":"AWS fork of BoringSSL; native crypto primitives beneath aws-lc-rs",
+    "supplier": {
+      "name": "AWS Cryptography",
+      "url": ["https://github.com/aws/aws-lc"]
+     },
+     "licenses": [{"expression": "Apache-2.0 OR ISC" }],
+     "externalReferences":[{
+       "type": "certification-report",
+       "url": "https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/4816",
+       "comment": "FIPS 140-3 Level 1 — CMVP certificate #4816"
+     }]
+  },
+  {
+    "type": "cryptographic-asset",
+    "bom-ref": "crypto/protocol/tls-1.3",
+    "name": "TLS",
+    "version": "1.3",
+    "cpe": "cpe:2.3:a:ietf:tls:1.3:*:*:*:*:*:*:*",
+    "supplier": {
+      "name": "IETF",
+      "url": ["https://www.rfc-editor.org/rfc/rfc8446"]
+    },
+    "cryptoProperties": {
+      "assetType": "protocol",
+      "protocolProperties": {
+        "type": "tls",
+        "version": "1.3",
+        "cipherSuites": [
+          {"name":"TLS_AES_256_GCM_SHA384"},
+          { "name": "TLS_AES_128_GCM_SHA256" },
+          { "name": "TLS_CHACHA20_POLY1305_SHA256" }
+        ]
+      }
+    }
+  }
+] |
+.dependencies += [
+  {
+    ref: (.components[] | select(.name == "aws-lc-sys") | ."bom-ref"),
+    dependsOn: ["pkg/aws-lc"]
+  }
+] |
+
+(.components[] | select(.name == "rustls") | ."bom-ref") as $rustls_ref |
+(.dependencies[] | select(.ref == $rustls_ref)).dependsOn += ["crypto/protocol/tls-1.3"]
 
 JQEOF
 )
 
 # ── post-process and write output ────────────────────────────────────────────
 jq \
-  --argjson cratesio     "$CRATES_IO_SUPPLIER" \
-  --argjson rootsupplier "{\"name\":\"$ROOT_SUPPLIER_NAME\",\"url\":[\"$ROOT_SUPPLIER_URL\"]}" \
-  --arg     binary       "$BINARY_NAME" \
+  --argjson cratesio           "$CRATES_IO_SUPPLIER" \
+  --arg     binary             "$BINARY_NAME" \
+  --arg     aws_lc_sys_version "$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')" \
   "$JQ_PROGRAM" \
   "$RAW_FILE" > "$OUTPUT"
 
