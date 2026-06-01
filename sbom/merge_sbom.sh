@@ -5,7 +5,7 @@ IMAGE_NAME="${1:-diffed-places/pipeline}"
 IMAGE_DIGEST="${2:-sha256:unknown}"
 DEFAULT_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TIMESTAMP="${3:-$DEFAULT_TIMESTAMP}"
-PIPELINE_SBOM="artifacts/diffed-places-pipeline.cdx.json"
+PIPELINE_SBOM="artifacts/pipeline.cdx.json"
 TIPPECANOE_SBOM="artifacts/tippecanoe.cdx.json"
 OUTPUT="artifacts/container.cdx.json"
 

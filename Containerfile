@@ -77,7 +77,7 @@ COPY tests tests
 
 RUN cargo build --release --locked
 RUN cargo test --release --locked
-RUN sh sbom/build_diffed_places_pipeline_sbom.sh >/artifacts/diffed-places-pipeline.cdx.json
+RUN sh sbom/build-pipeline-sbom.sh /artifacts/pipeline.cdx.json
 
 
 # ----------------------------------------------------------------------------
