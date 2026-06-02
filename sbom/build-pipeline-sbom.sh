@@ -135,6 +135,7 @@ def add_supplier:
 
 # ── step 5: add supplier to every component missing one ──────────────────────
 .metadata.supplier = {"name": "Diffed Places", "url": "https://github.com/diffed-places/"} |
+.metadata.component.supplier = {"name": "Diffed Places", "url": "https://github.com/diffed-places/"} |
 .metadata.component.purl = "pkg:github/diffed-places/pipeline@" + .metadata.component.version |
 .metadata.component.licenses = [{expression: "MIT"}] |
 .components |= [ .[] | add_supplier ] |
