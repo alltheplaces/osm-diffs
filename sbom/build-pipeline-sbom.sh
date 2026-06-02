@@ -22,9 +22,6 @@ set -eu
 # ── constants ────────────────────────────────────────────────────────────────
 BINARY_NAME="diffed-places-pipeline"
 
-# Supplier applied to every third-party crate that is missing one.
-CRATES_IO_SUPPLIER='{"name":"crates.io","url":["https://crates.io"]}'
-
 # ── locate project root ──────────────────────────────────────────────────────
 # The script lives in <project-root>/sbom/, so the project root is one level
 # up from the directory containing this file.  We resolve it here so the
@@ -70,7 +67,7 @@ JQ_PROGRAM=$(cat <<'JQEOF'
 # Add a crates.io supplier to a component object if it lacks one.
 def add_supplier:
   if .supplier == null or .supplier == {} then
-    .supplier = $cratesio
+    .supplier = {"name": "crates.io", "url": ["https://crates.io"]}
   else
     .
   end;
@@ -210,7 +207,6 @@ JQEOF
 
 # ── post-process and write output ────────────────────────────────────────────
 jq \
-  --argjson cratesio           "$CRATES_IO_SUPPLIER" \
   --arg     binary             "$BINARY_NAME" \
   --arg     aws_lc_sys_version "$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')" \
   "$JQ_PROGRAM" \
