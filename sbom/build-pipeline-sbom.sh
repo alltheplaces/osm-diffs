@@ -56,14 +56,7 @@ if [ ! -f "$RAW_FILE" ]; then
 fi
 
 
-# ── jq program ───────────────────────────────────────────────────────────────
-#
-# Written as a series of named steps via `as` bindings so each transformation
-# is easy to follow and test independently.
-#
 JQ_PROGRAM=$(cat <<'JQEOF'
-# ── helpers ──────────────────────────────────────────────────────────────────
-
 # Add a crates.io supplier to a component object if it lacks one.
 def add_supplier:
   if .supplier == null or .supplier == {} then
@@ -72,82 +65,28 @@ def add_supplier:
     .
   end;
 
-# ── step 1: identify the single root ─────────────────────────────────────────
-# cargo-cyclonedx stores the primary component in .metadata.component.
-# Its bom-ref is what we want as the sole dependency graph root.
-# If for some reason it is absent, fall back to the first component whose
-# name matches the binary name.
-(
-  if .metadata.component != null then
-    .metadata.component."bom-ref"
-  else
-    (.components[] | select(.name == $binary) | ."bom-ref") // null
-  end
-) as $root_ref |
+# Patch bom-ref of main application to read "diffed-places-pipeline-1.2.3"
+# instead of "path+file:///Users/sascha/src/pipeline#diffed-places-pipeline".
+( .metadata.component.name + "-" + .metadata.component.version ) as $root_ref |
+.metadata.component."bom-ref" = $root_ref |
+.dependencies[0].ref = $root_ref |
 
-# ── step 2: collect bom-refs that are "extra roots" ──────────────────────────
-# Extra roots are .dependencies[] entries whose ref is NOT $root_ref AND
-# that are not already a dependee of any other component — i.e. they appear
-# as a top-level key in .dependencies but not inside any .dependsOn list.
-([ .dependencies[].ref ] | sort | unique) as $all_dep_refs |
-([ .dependencies[].dependsOn[]? ] | sort | unique) as $all_dependees |
-(
-  [ $all_dep_refs[] |
-    select(. != $root_ref) |
-    select(. as $r | $all_dependees | contains([$r]) | not)
-  ]
-) as $extra_roots |
-
-# ── step 3: remove extra-root components from .components[] ──────────────────
-# cargo-cyclonedx emits one component per Cargo target (bin, lib, example…).
-# Extra roots are workspace members, not third-party crates.  They don't
-# belong in the FOSSA dependency list.
-.components |= [
-  .[] | select(."bom-ref" as $r | ($extra_roots | contains([$r])) | not)
-] |
-
-# ── step 4: rebuild .dependencies so there is exactly one root ───────────────
-# a. Remove entries for the now-deleted extra-root components.
-# b. Merge their dependsOn lists into the real root's dependsOn.
-# c. Remove any dependsOn references to the extra roots themselves.
-([ .dependencies[] |
-   select(.ref as $r | ($extra_roots | contains([$r])) | not) |
-   .dependsOn = [ .dependsOn[]? |
-                  select(. as $d | ($extra_roots | contains([$d])) | not) ]
-] ) as $pruned_deps |
-
-( [ $pruned_deps[] |
-    select(.ref != $root_ref) |
-    .dependsOn[]?
-  ] | sort | unique
-) as $extra_root_children |
-
-# Build the final dependencies array
-.dependencies = [
-  $pruned_deps[] |
-  if .ref == $root_ref then
-    # Merge former extra-root children into this node's dependsOn (deduplicated)
-    .dependsOn = ([ .dependsOn[]?, $extra_root_children[] ] | sort | unique)
-  else
-    .
-  end
-] |
-
-# ── step 5: add supplier to every component missing one ──────────────────────
-.metadata.supplier = {"name": "Diffed Places", "url": "https://github.com/diffed-places/"} |
-.metadata.component.supplier = {"name": "Diffed Places", "url": "https://github.com/diffed-places/"} |
+.bomFormat = "CycloneDX" |
+.specVersion = "1.7" |
+.metadata.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
+.metadata.tools += [{name: "jq", version: $jq_version}] |
+.metadata.component.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
 .metadata.component.purl = "pkg:github/diffed-places/pipeline@" + .metadata.component.version |
 .metadata.component.licenses = [{expression: "MIT"}] |
 .components |= [ .[] | add_supplier ] |
 
-# ── step 6: declare that we only use TLS 1.3, with the AWS BoringSSL fork ────
-.specVersion = "1.6" |
+# Declare that we only use TLS 1.3, with the AWS BoringSSL fork.
 .metadata.component.properties += [
-  {"name": "cdx:cbom:version",      "value": "1.0"},
-  {"name": "crypto:tls:library",    "value": "rustls"},
-  {"name": "crypto:tls:backend",    "value": "aws-lc-rs"},
-  {"name": "crypto:tls:minVersion", "value": "1.3"},
-  {"name": "crypto:tls:maxVersion", "value": "1.3"}
+  {name: "cdx:cbom:version",      value: "1.0"},
+  {name: "crypto:tls:library",    value: "rustls"},
+  {name: "crypto:tls:backend",    value: "aws-lc-rs"},
+  {name: "crypto:tls:minVersion", value: "1.3"},
+  {name: "crypto:tls:maxVersion", value: "1.3"}
 ] |
 .components += [
   {
@@ -210,6 +149,7 @@ JQEOF
 jq \
   --arg     binary             "$BINARY_NAME" \
   --arg     aws_lc_sys_version "$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')" \
+  --arg     jq_version         "$(jq --version | sed -n 's/jq-//p')" \
   "$JQ_PROGRAM" \
   "$RAW_FILE" > "$OUTPUT"
 
