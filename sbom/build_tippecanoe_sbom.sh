@@ -25,6 +25,7 @@ cat << EOF | jq .
   "specVersion": "1.7",
   "serialNumber": "urn:uuid:${UUID}",
   "version": 1,
+  "lifecycles": [{phase: "build"}],
   "metadata": {
     "timestamp": "${BUILD_TIMESTAMP}",
     "supplier": {

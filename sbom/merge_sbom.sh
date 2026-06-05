@@ -67,6 +67,7 @@ jq -n \
       name: "Diffed Places",
       url:  ["https://github.com/diffed-places/"]
     },
+    lifecycles: [{phase: "build"}],
     component: {
       type:      "container",
       "bom-ref": $image,

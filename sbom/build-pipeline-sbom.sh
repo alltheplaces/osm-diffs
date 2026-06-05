@@ -73,6 +73,7 @@ def add_supplier:
 
 .bomFormat = "CycloneDX" |
 .specVersion = "1.7" |
+.metadata.lifecycles = [{phase: "build"}] |
 .metadata.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
 .metadata.tools += [{name: "jq", version: $jq_version}] |
 .metadata.component.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
