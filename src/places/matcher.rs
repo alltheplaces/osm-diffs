@@ -80,7 +80,7 @@ impl<'a> ShopMatcher<'a> {
     /// so we use an allowlist to prevent spamming human OpenStreetMap editors.
     fn is_atp_tag_trustworthy(key: &str) -> bool {
         // Before you add entries to this list, please make sure that the quality
-        // is good. To evaluate, look at the diff of workdir/suggested-edits.jsonl
+        // is good. To evaluate, look at the diff of workdir/shops.jsonl
         // from before and after your change to this code.
         matches!(
             key,
