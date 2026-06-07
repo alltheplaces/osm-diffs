@@ -11,6 +11,7 @@ mod diff_places;
 mod osm;
 mod places;
 mod s2_util;
+mod tiles;
 mod u64_table;
 
 // Re-exported for main.rs.
@@ -18,6 +19,7 @@ pub use atp::import_atp;
 pub use coverage::build_coverage;
 pub use diff_places::suggest_edits;
 pub use osm::import_osm;
+pub use tiles::render_tiles;
 
 #[cfg(fuzzing)]
 pub use import_atp::fuzz::fuzz_process_geojson;
@@ -258,7 +260,8 @@ fn meters_to_chord_angle(radius_meters: f64) -> ChordAngle {
 }
 
 /// A single layer to be rendered into tiles with Tippecanoe.
-/// Instances are passed from `suggest_edits()` to `render_tiles()`.
+/// Instances are passed from `suggest_edits()` to `tiles::render()`.
+#[derive(Debug)]
 pub struct TileLayer {
     pub name: String,
     pub path: PathBuf,
