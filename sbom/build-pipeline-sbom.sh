@@ -74,8 +74,19 @@ def add_supplier:
 .bomFormat = "CycloneDX" |
 .specVersion = "1.7" |
 .metadata.lifecycles = [{phase: "build"}] |
+.metadata.authors = [{name: "Sascha Brawer", email: "sascha@brawer.ch"}] |
 .metadata.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
-.metadata.tools += [{name: "jq", version: $jq_version}] |
+.metadata.tools = {
+  "components": .metadata.tools + [{
+      name: "jq",
+      version: $jq_version,
+      supplier: {
+        name: "Alpine Linux",
+        url: ["https://alpinelinux.org"]
+      }
+    }
+  ]
+} |
 .metadata.component.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
 .metadata.component.purl = "pkg:github/diffed-places/pipeline@" + .metadata.component.version |
 .metadata.component.licenses = [{expression: "MIT"}] |
