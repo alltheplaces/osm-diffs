@@ -7,6 +7,9 @@
 # which automatically runs on GitHub infrastructure after a git tag
 # for a fresh release has been pushed.
 
+ALPINE_VERSION=$(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)
+APK_VERSION=$(apk --version             | sed -E 's/.* ([0-9]+\.[0-9]+(\.[0-9]+(-r[0-9]+)?)?).*/\1/')
+JQ_VERSION=$(jq --version               | sed -n 's/jq-//p')
 MUSL_VERSION=$(apk info musl            | head -1 | sed 's/musl-//;s/ .*//')
 SQLITE_VERSION=$(apk info sqlite-static | head -1 | sed 's/sqlite-static-//;s/ .*//')
 ZLIB_VERSION=$(apk info zlib-static     | head -1 | sed 's/zlib-static-//;s/ .*//')
@@ -25,9 +28,15 @@ cat << EOF | jq .
   "specVersion": "1.7",
   "serialNumber": "urn:uuid:${UUID}",
   "version": 1,
-  "lifecycles": [{phase: "build"}],
   "metadata": {
     "timestamp": "${BUILD_TIMESTAMP}",
+    "lifecycles": [{"phase": "build"}],
+    "authors": [
+      {
+        "name": "Sascha Brawer",
+        "email": "sascha@brawer.ch"
+      }
+    ],
     "supplier": {
       "name": "Diffed Places",
       "url": ["https://github.com/diffed-places"]
@@ -44,78 +53,123 @@ cat << EOF | jq .
       },
       "licenses": [{ "license": { "id": "BSD-2-Clause" } }]
     },
-    "tools": [
-      {
-        "type": "manual",
-        "name": "apk info",
-        "description": "Package versions extracted via apk info"
-      }
-    ]
-  },
-  "citations": [
-    {
-      "id": "cite-apk-zlib",
-      "source": {
-        "name": "Alpine Package Manager",
-        "url": "https://pkgs.alpinelinux.org"
-      },
-      "attributedTo": "apk info zlib-static",
-      "process": "Build-time query during container builder stage"
-    },
-    {
-      "id": "cite-apk-sqlite",
-      "source": {
-        "name": "Alpine Package Manager",
-        "url": "https://pkgs.alpinelinux.org"
-      },
-      "attributedTo": "apk info sqlite-static",
-      "process": "Build-time query during container builder stage"
-    },
-    {
-      "id": "cite-apk-musl",
-      "source": {
-        "name": "Alpine Package Manager",
-        "url": "https://pkgs.alpinelinux.org"
-      },
-      "attributedTo": "apk info musl",
-      "process": "Build-time query during container builder stage"
+    "tools": {
+      "components": [
+        {
+          "type": "operating-system",
+          "name": "Alpine Linux",
+          "version": "${ALPINE_VERSION}",
+          "bom-ref": "alpine-${ALPINE_VERSION}",
+          "description": "Operating system on which this SBOM was built",
+          "supplier": {
+            "name": "Alpine Linux",
+            "url": ["https://alpinelinux.org"]
+          }
+        },
+        {
+          "type": "application",
+          "name": "apk",
+          "version": "${APK_VERSION}",
+          "bom-ref": "apk-${APK_VERSION}",
+          "description": "Package versions extracted via apk info",
+          "supplier": {
+            "name": "Alpine Linux",
+            "url": ["https://alpinelinux.org"]
+          }
+        },
+        {
+          "type": "application",
+          "name": "jq",
+          "version": "${JQ_VERSION}",
+          "bom-ref": "jq-${JQ_VERSION}",
+          "description": "Supplemental information injected with jq",
+          "supplier": {
+            "name": "Alpine Linux",
+            "url": ["https://alpinelinux.org"]
+          }
+	}
+      ]
     }
-  ],
+  },
   "components": [
     {
       "type": "library",
       "name": "musl",
       "version": "${MUSL_VERSION}",
+      "bom-ref": "musl-${MUSL_VERSION}",
       "purl": "pkg:apk/alpine/musl@${MUSL_VERSION}?arch=${ARCH}",
       "supplier": {
         "name": "Alpine Linux",
         "url": ["https://alpinelinux.org"]
       },
       "licenses": [{ "license": { "id": "MIT" } }],
-      "evidence": { "identity": [{ "field": "version", "confidence": 1, "methods": [{ "technique": "instrumentation", "confidence": 1, "value": "apk info musl" }] }] }
+      "evidence": {
+        "identity": [
+          {
+            "field": "version",
+            "confidence": 1,
+            "concludedValue": "${MUSL_VERSION}",
+            "methods": [{ "technique": "manifest-analysis", "confidence": 1, "value": "apk info musl" }],
+            "tools": ["apk-${APK_VERSION}"]
+          }
+        ]
+      }
     },
     {
       "type": "library",
       "name": "sqlite",
       "version": "${SQLITE_VERSION}",
+      "bom-ref": "sqlite-${SQLITE_VERSION}",
       "purl": "pkg:apk/alpine/sqlite@${SQLITE_VERSION}?arch=${ARCH}",
       "supplier": {
         "name": "Alpine Linux",
         "url": ["https://alpinelinux.org"]
-      },      "licenses": [{ "license": { "id": "blessing" } }],
-      "evidence": { "identity": [{ "field": "version", "confidence": 1, "methods": [{ "technique": "instrumentation", "confidence": 1, "value": "apk info sqlite-static" }] }] }
+      },
+      "licenses": [{ "license": { "id": "blessing" } }],
+      "evidence": {
+        "identity": [
+          {
+            "field": "version",
+            "confidence": 1,
+            "concludedValue": "${SQLITE_VERSION}",
+            "methods": [{ "technique": "manifest-analysis", "confidence": 1, "value": "apk info sqlite-static" }],
+            "tools": ["apk-${APK_VERSION}"]
+          }
+        ]
+      }
     },
     {
       "type": "library",
       "name": "zlib",
       "version": "${ZLIB_VERSION}",
+      "bom-ref": "zlib-${ZLIB_VERSION}",
       "purl": "pkg:apk/alpine/zlib@${ZLIB_VERSION}?arch=${ARCH}",
       "supplier": {
         "name": "Alpine Linux",
         "url": ["https://alpinelinux.org"]
       },
       "licenses": [{ "license": { "id": "Zlib" } }],
-      "evidence": { "identity": [{ "field": "version", "confidence": 1, "methods": [{ "technique": "instrumentation", "confidence": 1, "value": "apk info zlib-static" }] }] }
+      "evidence": {
+        "identity": [
+          {
+            "field": "version",
+            "confidence": 1,
+            "concludedValue": "${ZLIB_VERSION}",
+            "methods": [{ "technique": "manifest-analysis", "confidence": 1, "value": "apk info zlib-static" }],
+            "tools": ["apk-${APK_VERSION}"]
+          }
+        ]
+      }
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "tippecanoe-${TIPPECANOE_VERSION}",
+      "dependsOn": [
+        "musl-${MUSL_VERSION}",
+        "sqlite-${SQLITE_VERSION}",
+        "zlib-${ZLIB_VERSION}"
+      ]
     }
   ]
 }
