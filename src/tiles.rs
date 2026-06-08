@@ -15,8 +15,13 @@ pub fn render_tiles(
     if out_path.exists() {
         return Ok(out_path);
     }
+
+    // Write tiles to a temporary file, which we’ll rename to the
+    // final filename in an atomic operation.  However, the temporary
+    // file needs to have a suffix of `.pmtiles`; otherwise, tippecanoe
+    // will produce an SQLite database with MapBox Vector Tiles.
     let mut tmp_path = PathBuf::from(&out_path);
-    tmp_path.add_extension("tmp");
+    tmp_path.add_extension("tmp.pmtiles");
 
     let progress_bar = make_progress_bar(progress, "tiles.render", 100, "percent");
 
