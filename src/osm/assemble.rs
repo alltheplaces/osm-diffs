@@ -61,14 +61,14 @@ fn assemble_nodes(
                     x: node.lon_e7 as f64 * 1e-7,
                     y: node.lat_e7 as f64 * 1e-7,
                 };
-                let source = String::from("n");
+                let source = String::from("osm");
                 let tags = node
                     .tags
                     .chunks_exact(2)
                     .map(|c| (c[0].clone(), c[1].clone()))
                     .collect();
                 if let Some(mut place) = Place::new(&coord, source, mask, tags) {
-                    place.osm_id = node.id;
+                    place.osm_id = node.id * 10 + 1;
                     out.send(place)?;
                 }
             }
@@ -111,9 +111,9 @@ fn assemble_ways(
                         .chunks_exact(2)
                         .map(|c| (c[0].clone(), c[1].clone()))
                         .collect();
-                    let source = String::from("w");
+                    let source = String::from("osm");
                     if let Some(mut place) = Place::new(&centroid.0, source, mask, tags) {
-                        place.osm_id = way.id;
+                        place.osm_id = way.id * 10 + 2;
                         out.send(place)?;
                     }
                 }
@@ -195,12 +195,12 @@ mod tests {
 
         let mut want = Place::new(
             &geo::Coord { x: 11.0, y: 12.0 },
-            String::from("n"),
+            String::from("osm"),
             MatchMask::SHOP,
             vec![(String::from("shop"), String::from("supermarket"))],
         )
         .expect("cannot construct wanted Place");
-        want.osm_id = 12345;
+        want.osm_id = 123451;
         assert_eq!(rx.next(), Some(want));
         assert_eq!(rx.next(), None);
         Ok(())
@@ -237,12 +237,12 @@ mod tests {
 
         let mut want = Place::new(
             &geo::Coord { x: 60.0, y: 30.0 }, // centroid
-            String::from("w"),
+            String::from("osm"),
             MatchMask::SHRUBBERY,
             vec![(String::from("natural"), String::from("tree_row"))],
         )
         .expect("cannot construct wanted Place");
-        want.osm_id = 3;
+        want.osm_id = 32;
         assert_eq!(rx.next(), Some(want));
         assert_eq!(rx.next(), None);
         Ok(())

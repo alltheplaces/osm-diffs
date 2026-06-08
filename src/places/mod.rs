@@ -59,11 +59,21 @@ impl Place {
         let rounded_lon = (lat_lon.lng.deg() * 1e7).round() / 1e7;
         let rounded_lat = (lat_lon.lat.deg() * 1e7).round() / 1e7;
         let point = geo::point!(x: rounded_lon, y: rounded_lat);
+
         let id = if self.osm_id > 0 {
-            // TODO: Handle ways and relations.
-            let id_string = format!("node/{}", self.osm_id);
-            Some(geojson::feature::Id::String(id_string))
+            Some(geojson::feature::Id::Number(self.osm_id.into()))
         } else {
+            // TODO: Generate a unique ID from an AtomicU64. Use
+            // counter value * 10, so it does not conflict with OSM
+            // nodes (id * 10 + 1), ways (id * 10 + 2) or relations
+            // (id * 10 + 3). For now, this is not an issue:
+            // Currently, we never emit edit suggestions that aren't
+            // for existing OSM features.  At some point in the
+            // future, we’ll likely want to suggest creating new
+            // features (from AllThePlaces features that don’t match
+            // anything existing in OSM), and then we’ll need to give
+            // them feature IDs that don’t conflict with anything else
+            // in the generated PMTiles file.
             None
         };
         geojson::Feature {
@@ -116,7 +126,7 @@ mod tests {
             ("name:gsw".to_string(), "Zytglogge".to_string()),
         ];
         let mut place = Place::new(&p, source, MatchMask::SHOP, tags.clone()).unwrap();
-        place.osm_id = 789;
+        place.osm_id = 7891;
         let mut got_geojson = place.to_geojson();
         let (got_lon, got_lat) = point_coords(got_geojson.geometry.as_ref().unwrap());
         assert!((got_lon - p.x).abs() < 1e-6);
@@ -124,7 +134,7 @@ mod tests {
         got_geojson.geometry = None;
         let expected_geojson: geojson::Feature = r#"{
             "type": "Feature",
-            "id": "node/789",
+            "id": 7891,
             "properties": { "building": "tower", "name:gsw": "Zytglogge" }
         }"#
         .parse()

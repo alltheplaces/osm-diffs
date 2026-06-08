@@ -1,7 +1,7 @@
 use super::Place;
 use anyhow::{Ok, Result};
 use arrow::{
-    array::{ArrayRef, MapArray, StringArray, StructArray, UInt8Array, UInt16Array, UInt64Array},
+    array::{ArrayRef, MapArray, StringArray, StructArray, UInt16Array, UInt64Array},
     buffer::OffsetBuffer,
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -11,7 +11,6 @@ use parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::{EnabledStatistics, WriterProperties},
 };
-use std::collections::HashMap;
 use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
@@ -76,14 +75,6 @@ impl ParquetWriter {
             values.push(Arc::new(StringArray::from_iter_values(
                 self.places.iter().map(|_| "osm"),
             )));
-            values.push(Arc::new(UInt8Array::from_iter(self.places.iter().map(
-                |p| match p.source.as_ref() {
-                    "n" => 0_u8,
-                    "w" => 1_u8,
-                    "r" => 2_u8,
-                    _ => panic!("source must be \"n\", \"w\" or \"r\""),
-                },
-            ))));
             values.push(Arc::new(UInt64Array::from_iter(
                 self.places.iter().map(|p| p.osm_id),
             )));
@@ -157,13 +148,6 @@ fn make_schema(osm: bool) -> Schema {
         Field::new("source", DataType::Utf8, /* nullable */ false),
     ];
     if osm {
-        let mut osm_type_metadata = HashMap::new();
-        osm_type_metadata.insert("ENUM_VALUES".to_string(), "node,way,relation".to_string());
-        osm_type_metadata.insert("ENUM_TYPE".to_string(), "u8".to_string());
-        fields.push(
-            Field::new("osm_type", DataType::UInt8, /* nullable */ false)
-                .with_metadata(osm_type_metadata),
-        );
         fields.push(Field::new(
             "osm_id",
             DataType::UInt64,
