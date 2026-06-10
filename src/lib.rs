@@ -13,6 +13,7 @@ mod places;
 mod s2_util;
 mod tiles;
 mod u64_table;
+mod upload;
 
 // Re-exported for main.rs.
 pub use atp::import_atp;
@@ -20,6 +21,7 @@ pub use coverage::build_coverage;
 pub use diff_places::suggest_edits;
 pub use osm::import_osm;
 pub use tiles::render_tiles;
+pub use upload::upload_tiles;
 
 #[cfg(fuzzing)]
 pub use import_atp::fuzz::fuzz_process_geojson;

@@ -9,7 +9,9 @@ use rustls::{ClientConfig, RootCertStore};
 use std::fs::create_dir;
 use webpki_roots::TLS_SERVER_ROOTS;
 
-use diffed_places_pipeline::{build_coverage, import_atp, import_osm, render_tiles, suggest_edits};
+use diffed_places_pipeline::{
+    build_coverage, import_atp, import_osm, render_tiles, suggest_edits, upload_tiles,
+};
 
 #[derive(Parser)]
 #[command(name = "diffed-places-pipeline")]
@@ -47,7 +49,8 @@ fn main() -> Result<()> {
             let coverage = build_coverage(&atp, &progress, workdir)?;
             let osm = import_osm(&coverage, &progress, workdir)?;
             let layers = suggest_edits(&coverage, &atp, &osm, &progress, workdir)?;
-            let _tiles = render_tiles(&layers, &progress, workdir)?;
+            let tiles = render_tiles(&layers, &progress, workdir)?;
+            upload_tiles(&tiles, &progress)?;
 
             Ok(())
         }
