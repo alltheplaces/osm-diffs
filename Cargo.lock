@@ -941,48 +941,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diffed-places-pipeline"
-version = "0.4.0"
-dependencies = [
- "anyhow",
- "arrow",
- "assert_cmd",
- "aws-lc-rs",
- "clap",
- "deepsize",
- "deepsize_derive",
- "env_logger",
- "ext-sort",
- "futures-util",
- "geo",
- "geo-traits",
- "geojson",
- "indicatif",
- "librqbit",
- "log",
- "lru",
- "memmap2",
- "mockito",
- "once_cell",
- "osm_pbf_iter",
- "parquet",
- "piz",
- "predicates",
- "protobuf_iter",
- "rayon",
- "reqwest 0.13.4",
- "rmp-serde",
- "rustls",
- "s2",
- "s3",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "webpki-roots",
-]
-
-[[package]]
 name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2678,6 +2636,48 @@ name = "option-ext"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
+name = "osm-diffs"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "arrow",
+ "assert_cmd",
+ "aws-lc-rs",
+ "clap",
+ "deepsize",
+ "deepsize_derive",
+ "env_logger",
+ "ext-sort",
+ "futures-util",
+ "geo",
+ "geo-traits",
+ "geojson",
+ "indicatif",
+ "librqbit",
+ "log",
+ "lru",
+ "memmap2",
+ "mockito",
+ "once_cell",
+ "osm_pbf_iter",
+ "parquet",
+ "piz",
+ "predicates",
+ "protobuf_iter",
+ "rayon",
+ "reqwest 0.13.4",
+ "rmp-serde",
+ "rustls",
+ "s2",
+ "s3",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "webpki-roots",
+]
 
 [[package]]
 name = "osm_pbf_iter"

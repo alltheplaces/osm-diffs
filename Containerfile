@@ -65,10 +65,10 @@ RUN sh build_tippecanoe_sbom.sh >/artifacts/tippecanoe.cdx.json
 
 
 # ----------------------------------------------------------------------------
-#  Stage 1.3: Build and test diffed-places-pipeline binary
+#  Stage 1.3: Build and test osm-diffs binary
 # ----------------------------------------------------------------------------
 
-WORKDIR /usr/diffed-places
+WORKDIR /usr/osm-diffs
 
 COPY Cargo.toml Cargo.lock .
 COPY sbom sbom
@@ -93,18 +93,18 @@ ARG VCS_URL
 COPY --from=builder /usr/local/bin/tippecanoe /usr/local/bin/tippecanoe
     
 COPY --from=builder --chown=1000:1000  \
-    /usr/diffed-places/target/release/diffed-places-pipeline  \
-    /app/diffed-places-pipeline
+    /usr/osm-diffs/target/release/osm-diffs  \
+    /app/osm-diffs
 
 USER 1000
 
-ENTRYPOINT ["/app/diffed-places-pipeline"]
+ENTRYPOINT ["/app/osm-diffs"]
 
 LABEL  \
     org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>"  \
     org.opencontainers.image.created=$BUILD_TIMESTAMP  \
-    org.opencontainers.image.description="Data pipeline for Diffed Places"  \
+    org.opencontainers.image.description="Data pipeline for alltheplaces/osm-diffs"  \
     org.opencontainers.image.licenses="MIT"  \
     org.opencontainers.image.revision=$VCS_REF  \
     org.opencontainers.image.source=$VCS_URL  \
-    org.opencontainers.image.vendor="Sascha Brawer <sascha@brawer.ch>"
+    org.opencontainers.image.vendor="alltheplaces.xyz"

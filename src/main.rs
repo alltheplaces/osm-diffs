@@ -9,7 +9,7 @@ use rustls::{ClientConfig, RootCertStore};
 use std::fs::create_dir;
 use webpki_roots::TLS_SERVER_ROOTS;
 
-use diffed_places_pipeline::{
+use osm_diffs::{
     build_coverage, import_atp, import_osm, render_tiles, suggest_edits, upload_tiles,
 };
 
