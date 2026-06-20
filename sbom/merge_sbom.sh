@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-IMAGE_NAME="${1:-diffed-places/pipeline}"
+IMAGE_NAME="${1:-alltheplaces/osm-diffs}"
 IMAGE_DIGEST="${2:-sha256:unknown}"
 DEFAULT_TIMESTAMP="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 TIMESTAMP="${3:-$DEFAULT_TIMESTAMP}"
@@ -64,8 +64,8 @@ jq -n \
   metadata: {
     timestamp: $timestamp,
     supplier: {
-      name: "Diffed Places",
-      url:  ["https://github.com/diffed-places/"]
+      name: "All the Places",
+      url:  ["https://github.com/alltheplaces/"]
     },
     lifecycles: [{phase: "build"}],
     component: {

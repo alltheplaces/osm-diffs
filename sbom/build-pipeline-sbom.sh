@@ -11,7 +11,7 @@
 #   ./sbom/build-pipeline-sbom.sh [OUTPUT]
 #
 #   OUTPUT  path to write the fixed SBOM
-#           defaults to diffed-places-pipeline.cdx.json in the project root
+#           defaults to osm-diffs.cdx.json in the project root
 #
 # Requirements
 #   cargo, cargo-cyclonedx   (`cargo install cargo-cyclonedx`)
@@ -20,7 +20,7 @@
 set -eu
 
 # ── constants ────────────────────────────────────────────────────────────────
-BINARY_NAME="diffed-places-pipeline"
+BINARY_NAME="osm-diffs"
 
 # ── locate project root ──────────────────────────────────────────────────────
 # The script lives in <project-root>/sbom/, so the project root is one level
@@ -39,7 +39,7 @@ command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo is not installed" >&2; 
 command -v jq    >/dev/null 2>&1 || { echo "ERROR: jq is not installed"    >&2; exit 1; }
 
 # ── generate raw SBOM ────────────────────────────────────────────────────────
-RAW_FILE="${PROJECT_ROOT}/diffed-places-pipeline_bin.cdx.json"
+RAW_FILE="${PROJECT_ROOT}/osm-diffs_bin.cdx.json"
 
 # Clean up any leftover file from a previous failed run.
 rm -f "$RAW_FILE"
@@ -65,8 +65,8 @@ def add_supplier:
     .
   end;
 
-# Patch bom-ref of main application to read "diffed-places-pipeline-1.2.3"
-# instead of "path+file:///Users/sascha/src/pipeline#diffed-places-pipeline".
+# Patch bom-ref of main application to read "osm-diffs-1.2.3"
+# instead of "path+file:///Users/sascha/src/osm-diffs#osm-diffs".
 ( .metadata.component.name + "-" + .metadata.component.version ) as $root_ref |
 .metadata.component."bom-ref" = $root_ref |
 .dependencies[0].ref = $root_ref |
@@ -75,7 +75,7 @@ def add_supplier:
 .specVersion = "1.7" |
 .metadata.lifecycles = [{phase: "build"}] |
 .metadata.authors = [{name: "Sascha Brawer", email: "sascha@brawer.ch"}] |
-.metadata.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
+.metadata.supplier = {name: "All The Places", url: "https://github.com/alltheplaces/"} |
 .metadata.tools = {
   "components": .metadata.tools + [{
       name: "jq",
@@ -87,8 +87,8 @@ def add_supplier:
     }
   ]
 } |
-.metadata.component.supplier = {name: "Diffed Places", url: "https://github.com/diffed-places/"} |
-.metadata.component.purl = "pkg:github/diffed-places/pipeline@" + .metadata.component.version |
+.metadata.component.supplier = {name: "All The Places", url: "https://github.com/alltheplaces/"} |
+.metadata.component.purl = "pkg:github/alltheplaces/osm-diffs@" + .metadata.component.version |
 .metadata.component.licenses = [{expression: "MIT"}] |
 .components |= [ .[] | add_supplier ] |
 
