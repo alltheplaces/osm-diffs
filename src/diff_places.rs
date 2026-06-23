@@ -1,4 +1,5 @@
-use crate::places::{Place, PlaceIndex, create_matcher};
+use crate::matchers::create_matcher;
+use crate::places::{Place, PlaceIndex};
 use crate::s2_util::MergedCellRanges;
 use crate::{TileLayer, make_progress_bar, match_distance};
 use anyhow::Result;

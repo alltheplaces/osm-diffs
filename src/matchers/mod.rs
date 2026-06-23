@@ -1,3 +1,5 @@
+//! Logic for matching AllThePlaces with OpenStreetMap features.
+
 use crate::{MatchMask, places::Place};
 use s2::{cell::Cell, cellid::CellID, point::Point};
 use std::collections::HashMap;
@@ -5,15 +7,25 @@ use std::collections::HashMap;
 /// Trait for objects that can score a `Place`.
 pub trait Matcher {
     /// Returns a score between 0.0 and 1.0 indicating how well the place matches.
+    /// A high score means a good match; 0.0 means the place is clearly not a match.
     fn score(&self, place: &Place) -> f64;
 
     fn suggest_edit(&self, osm_feature: &Place) -> Option<Place>;
 }
 
+/// Construct a matcher for a given AllThePlaces feature.
+///
+/// Use the returned matcher to score nearby OpenStreetMap features
+/// how likely they are to be about the same real-world object.
+/// For example, a matcher for brand stores will look at the brand
+/// of OpenStreetMap features, and only match when the candidate
+/// is of the same brand; a matcher for trees might consider
+/// the plant species.
 pub fn create_matcher(place: &Place) -> Option<Box<dyn Matcher + '_>> {
     if let Some(matcher) = ShopMatcher::for_place(place) {
         Some(Box::new(matcher))
     } else {
+        // TODO: Implement matchers for fire hydrants, defibrillators, etc.
         None
     }
 }

@@ -8,6 +8,7 @@ use std::sync::LazyLock;
 mod atp;
 mod coverage;
 mod diff_places;
+mod matchers;
 mod osm;
 mod places;
 mod s2_util;
