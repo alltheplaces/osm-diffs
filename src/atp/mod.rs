@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 
 use crate::places::{ParquetWriter, Place};
-use crate::{MatchMask, PROGRESS_BAR_STYLE};
+use crate::{PROGRESS_BAR_STYLE, matchers::MatchMask};
 
 mod fetch;
 

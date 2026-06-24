@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{MatchMask, places::Place};
+use crate::{matchers::MatchMask, places::Place};
 
 // TODO: Replace once_cell::sync::OnceCell by std::sync::OnceLock.
 // However, this needs get_or_try_init to be stabilised on std::sync::OnceLock.
