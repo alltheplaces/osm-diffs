@@ -136,8 +136,7 @@ fn write_places(
     tmp.add_extension("tmp");
 
     let mut writer = ParquetWriter::try_new(
-        /* batch size, in records */ 64 * 1024,
-        /* page size, in bytes */ 1024 * 1024,
+        /* batch size, in records */ 4 * 1024,
         /* osm */ true,
         &tmp,
     )?;

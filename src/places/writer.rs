@@ -25,8 +25,7 @@ pub struct ParquetWriter {
 
 impl ParquetWriter {
     pub fn try_new(
-        batch_size: usize,
-        page_size: usize, // 1 MiB is a good value for production data
+        batch_size: usize, // number of records per row group
         osm: bool,
         out: &Path,
     ) -> Result<ParquetWriter> {
@@ -36,7 +35,7 @@ impl ParquetWriter {
         let props = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::try_new(15)?))
             .set_statistics_enabled(EnabledStatistics::Page)
-            .set_data_page_size_limit(page_size)
+            .set_max_row_group_row_count(Some(batch_size))
             .build();
         let writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
         Ok(ParquetWriter {
