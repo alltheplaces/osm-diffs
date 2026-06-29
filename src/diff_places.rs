@@ -1,7 +1,7 @@
 use crate::matchers::create_matcher;
 use crate::places::{Place, PlaceIndex};
 use crate::s2_util::MergedCellRanges;
-use crate::{TileLayer, make_progress_bar, match_distance};
+use crate::{TileLayer, make_progress_bar, matchers::match_distance};
 use anyhow::Result;
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use indicatif::{MultiProgress, ProgressBar};

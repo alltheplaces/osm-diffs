@@ -259,7 +259,7 @@ mod writer {
     use super::{
         Coverage, S2_CELL_ID_SHIFT, S2_GRANULARITY_LEVEL, is_wikidata_key, parse_wikidata_ids,
     };
-    use crate::{MatchMask, PROGRESS_BAR_STYLE};
+    use crate::{PROGRESS_BAR_STYLE, matchers::MatchMask};
     use anyhow::{Ok, Result, anyhow};
     use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
     use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
@@ -388,7 +388,7 @@ mod writer {
                     let s2_cell = Cell::from(CellID(row.get_ulong(s2_cell_id_column)?));
                     // let source = row.get_string(source_column)?;
                     let mask = MatchMask(row.get_ushort(mask_column)?);
-                    let radius = crate::match_distance(&mask);
+                    let radius = crate::matchers::match_distance(&mask);
                     let cap = Cap::from_center_chordangle(&s2_cell.center(), &radius);
                     for cell_id in coverer.covering(&cap).0.into_iter() {
                         out_cells.send(cell_id)?;

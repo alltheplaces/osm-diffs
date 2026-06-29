@@ -1,4 +1,4 @@
-use crate::MatchMask;
+use crate::matchers::MatchMask;
 use deepsize::DeepSizeOf;
 use geo::Coord;
 use serde::{Deserialize, Serialize};
@@ -92,7 +92,6 @@ impl Place {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::MatchMask;
     use geo::Coord;
 
     #[test]

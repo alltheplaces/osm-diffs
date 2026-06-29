@@ -11,7 +11,7 @@ use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::thread;
 
 use crate::{
-    MatchMask,
+    matchers::MatchMask,
     places::{ParquetWriter, Place},
 };
 
@@ -169,7 +169,7 @@ fn write_places(
 #[cfg(test)]
 mod tests {
     use super::{assemble_nodes, assemble_ways};
-    use crate::MatchMask;
+    use crate::matchers::MatchMask;
     use crate::osm::{Node, Way, tests::MockFeatureStore};
     use crate::places::Place;
     use anyhow::{Ok, Result};
