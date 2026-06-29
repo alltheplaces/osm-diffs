@@ -5,6 +5,7 @@ use geo::{Centroid, Coord, LineString};
 use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
 use std::fs::rename;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -68,7 +69,7 @@ fn assemble_nodes(
                     .map(|c| (c[0].clone(), c[1].clone()))
                     .collect();
                 if let Some(mut place) = Place::new(&coord, source, mask, tags) {
-                    place.osm_id = node.id * 10 + 1;
+                    place.osm_id = NonZeroU64::new(node.id * 10 + 1);
                     out.send(place)?;
                 }
             }
@@ -113,7 +114,7 @@ fn assemble_ways(
                         .collect();
                     let source = String::from("osm");
                     if let Some(mut place) = Place::new(&centroid.0, source, mask, tags) {
-                        place.osm_id = way.id * 10 + 2;
+                        place.osm_id = NonZeroU64::new(way.id * 10 + 2);
                         out.send(place)?;
                     }
                 }
@@ -173,6 +174,7 @@ mod tests {
     use crate::places::Place;
     use anyhow::{Ok, Result};
     use indicatif::{ProgressBar, ProgressDrawTarget};
+    use std::num::NonZeroU64;
     use std::sync::mpsc::sync_channel;
 
     #[test]
@@ -199,7 +201,7 @@ mod tests {
             vec![(String::from("shop"), String::from("supermarket"))],
         )
         .expect("cannot construct wanted Place");
-        want.osm_id = 123451;
+        want.osm_id = NonZeroU64::new(123451);
         assert_eq!(rx.next(), Some(want));
         assert_eq!(rx.next(), None);
         Ok(())
@@ -241,7 +243,7 @@ mod tests {
             vec![(String::from("natural"), String::from("tree_row"))],
         )
         .expect("cannot construct wanted Place");
-        want.osm_id = 32;
+        want.osm_id = NonZeroU64::new(32);
         assert_eq!(rx.next(), Some(want));
         assert_eq!(rx.next(), None);
         Ok(())

@@ -386,7 +386,7 @@ impl<'a> Matcher for ShopMatcher<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::LazyLock;
+    use std::{num::NonZeroU64, sync::LazyLock};
 
     #[test]
     fn test_match_distance() {
@@ -400,7 +400,7 @@ mod tests {
 
     static CH_CLOTHES_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664633565895,
-        osm_id: 0,
+        osm_id: None,
         source: String::from("atp/newyorker"),
         mask: MatchMask::SHOP,
         tags: tags(&[
@@ -420,7 +420,7 @@ mod tests {
 
     static CH_CLOTHES_OSM: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664662121729,
-        osm_id: 10761965859,
+        osm_id: NonZeroU64::new(10761965859),
         source: String::from("osm"),
         mask: MatchMask(1),
         tags: tags(&[
@@ -437,7 +437,7 @@ mod tests {
 
     static CH_KIOSK_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637400739491865,
-        osm_id: 0,
+        osm_id: None,
         source: String::from("atp/valora"),
         mask: MatchMask::SHOP,
         tags: tags(&[
@@ -456,7 +456,7 @@ mod tests {
 
     static CH_KIOSK_OSM: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637400743919515,
-        osm_id: 6028968648,
+        osm_id: NonZeroU64::new(6028968648),
         source: String::from("osm"),
         mask: MatchMask::SHOP,
         tags: tags(&[

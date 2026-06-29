@@ -6,7 +6,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::file::statistics::Statistics;
 use s2::cellid::CellID;
 use std::fs::File;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::ops::RangeInclusive;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -320,7 +320,7 @@ impl<'iter> Iterator for &'iter mut PlaceIter {
 fn extract_place(batch: &RecordBatch, row: usize) -> anyhow::Result<Place> {
     Ok(Place {
         s2_cell_id: get_u64_required(batch, "s2_cell_id", row)?,
-        osm_id: get_u64_optional(batch, "osm_id", row)?.unwrap_or(0),
+        osm_id: get_u64_optional(batch, "osm_id", row)?.and_then(NonZeroU64::new),
         source: get_string_required(batch, "source", row)?,
         mask: MatchMask(get_u16_required(batch, "mask", row)?),
         tags: get_tags(batch, row)?,

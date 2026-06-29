@@ -176,7 +176,7 @@ fn write_edits(edits: Receiver<Place>, path: &Path, workdir: &Path) -> Result<u6
         num_edits.fetch_add(1, Ordering::Relaxed);
         std::io::Result::Ok(x)
     }))?;
-    let mut last_osm_id = 0;
+    let mut last_osm_id = None;
     for edit in sorted {
         let edit = edit?;
         // Only emit one single edit per OSM ID.

@@ -74,9 +74,15 @@ impl ParquetWriter {
             values.push(Arc::new(StringArray::from_iter_values(
                 self.places.iter().map(|_| "osm"),
             )));
-            values.push(Arc::new(UInt64Array::from_iter(
-                self.places.iter().map(|p| p.osm_id),
-            )));
+            values.push(Arc::new(UInt64Array::from_iter(self.places.iter().map(
+                |p| {
+                    if let Some(osm_id) = p.osm_id {
+                        osm_id.get()
+                    } else {
+                        0
+                    }
+                },
+            ))));
         } else {
             values.push(Arc::new(StringArray::from_iter_values(
                 self.places.iter().map(|p| p.source.as_str()),
