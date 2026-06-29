@@ -2,6 +2,7 @@ use crate::matchers::MatchMask;
 use deepsize::DeepSizeOf;
 use geo::Coord;
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU64;
 
 mod place_index;
 mod writer;
@@ -12,7 +13,7 @@ pub use writer::ParquetWriter;
 #[derive(Debug, DeepSizeOf, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Place {
     pub s2_cell_id: u64,
-    pub osm_id: u64,
+    pub osm_id: Option<NonZeroU64>,
     pub source: String,
     pub mask: MatchMask,
     pub tags: Vec<(String, String)>,
@@ -33,7 +34,7 @@ impl Place {
         let s2_cell_id = s2::cellid::CellID::from(s2_lat_lng).0;
         Some(Place {
             s2_cell_id,
-            osm_id: 0,
+            osm_id: None,
             source,
             mask,
             tags,
@@ -58,22 +59,20 @@ impl Place {
         let rounded_lat = (lat_lon.lat.deg() * 1e7).round() / 1e7;
         let point = geo::point!(x: rounded_lon, y: rounded_lat);
 
-        let id = if self.osm_id > 0 {
-            Some(geojson::feature::Id::Number(self.osm_id.into()))
-        } else {
-            // TODO: Generate a unique ID from an AtomicU64. Use
-            // counter value * 10, so it does not conflict with OSM
-            // nodes (id * 10 + 1), ways (id * 10 + 2) or relations
-            // (id * 10 + 3). For now, this is not an issue:
-            // Currently, we never emit edit suggestions that aren't
-            // for existing OSM features.  At some point in the
-            // future, we’ll likely want to suggest creating new
-            // features (from AllThePlaces features that don’t match
-            // anything existing in OSM), and then we’ll need to give
-            // them feature IDs that don’t conflict with anything else
-            // in the generated PMTiles file.
-            None
-        };
+        // TODO: Generate a unique ID from an AtomicU64 if osm_id is None.
+        // Use counter value * 10, so it does not conflict with OSM nodes
+        // (id * 10 + 1), ways (id * 10 + 2) or relations (id * 10 + 3).
+        // For now, this is not an issue: Currently, we never
+        // emit edit suggestions that aren't for existing OSM
+        // features.  At some point in the future, we’ll likely want
+        // to suggest creating new features (from AllThePlaces
+        // features that don’t match anything existing in OSM), and
+        // then we’ll need to give them feature IDs that don’t
+        // conflict with anything else in the generated PMTiles file.
+        let id = self
+            .osm_id
+            .map(|osm_id| geojson::feature::Id::Number(osm_id.get().into()));
+
         geojson::Feature {
             bbox: None,
             geometry: Some(geojson::Geometry::from(&point)),
@@ -123,7 +122,7 @@ mod tests {
             ("name:gsw".to_string(), "Zytglogge".to_string()),
         ];
         let mut place = Place::new(&p, source, MatchMask::SHOP, tags.clone()).unwrap();
-        place.osm_id = 7891;
+        place.osm_id = NonZeroU64::new(7891);
         let mut got_geojson = place.to_geojson();
         let (got_lon, got_lat) = point_coords(got_geojson.geometry.as_ref().unwrap());
         assert!((got_lon - p.x).abs() < 1e-6);
