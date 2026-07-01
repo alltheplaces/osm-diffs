@@ -117,7 +117,7 @@ struct Way {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct Relation {
-    id: u64, // TODO: NonZeroI64?
+    id: u64,
     changeset: Option<NonZeroU64>,
     version: Option<NonZeroU32>,
     tags: Vec<String>,

@@ -1,6 +1,7 @@
 use anyhow::{Context, Ok, Result};
 use std::{path::Path, time::SystemTime};
 
+mod conflate;
 mod edits;
 mod tiles;
 mod upload;
@@ -17,6 +18,7 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
         .block_on(crate::atp::import_atp(http_client, &progress, workdir))?;
     let coverage = crate::coverage::build_coverage(&atp, &progress, workdir)?;
     let osm = crate::osm::import_osm(&coverage, &progress, workdir)?;
+    let _conflated = conflate::conflate(&atp, &coverage, &osm, &progress, workdir)?;
     let edits = edits::suggest_edits(&coverage, &atp, &osm, &progress, workdir)?;
     let tiles = tiles::render_tiles(&edits, &progress, workdir)?;
     upload::upload_tiles(&tiles, &progress)?;
@@ -26,7 +28,6 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
 
 /// Returns the highest (most recent) last modification time among all paths.
 /// If any path does not exist or cannot be accessed, an error is returned.
-#[allow(unused)] // TODO: Remove once this function is used in production code.
 fn last_modified(paths: &[&Path]) -> Result<SystemTime> {
     if !paths.is_empty() {
         let mut last = modified(paths[0])?;
