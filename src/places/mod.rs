@@ -2,7 +2,7 @@ use crate::matchers::MatchMask;
 use deepsize::DeepSizeOf;
 use geo::Coord;
 use serde::{Deserialize, Serialize};
-use std::num::{NonZeroI32, NonZeroI64, NonZeroU64};
+use std::num::{NonZeroU32, NonZeroU64};
 
 mod place_index;
 mod writer;
@@ -13,9 +13,9 @@ pub use writer::ParquetWriter;
 #[derive(Debug, DeepSizeOf, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Place {
     pub s2_cell_id: u64,
-    pub osm_id: Option<NonZeroU64>,        // TODO: Option<NonZeroI64>?
-    pub osm_changeset: Option<NonZeroI64>, // TODO: Remove if not needed for MapRoulette.
-    pub osm_version: Option<NonZeroI32>,
+    pub osm_id: Option<NonZeroU64>,
+    pub osm_changeset: Option<NonZeroU64>,
+    pub osm_version: Option<NonZeroU32>,
     pub source: String,
     pub mask: MatchMask,
     pub tags: Vec<(String, String)>,
