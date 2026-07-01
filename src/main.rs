@@ -2,16 +2,10 @@ use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
 use clap::{Parser, Subcommand};
-use indicatif::MultiProgress;
 use reqwest::Client;
 use rustls::version::TLS13;
 use rustls::{ClientConfig, RootCertStore};
-use std::fs::create_dir;
 use webpki_roots::TLS_SERVER_ROOTS;
-
-use osm_diffs::{
-    build_coverage, import_atp, import_osm, render_tiles, suggest_edits, upload_tiles,
-};
 
 #[derive(Parser)]
 #[command(name = "diffed-places-pipeline")]
@@ -36,23 +30,7 @@ fn main() -> Result<()> {
     match &args.command {
         Some(Commands::Run { workdir }) => {
             let client = build_client();
-            let progress = MultiProgress::new();
-            if !workdir.exists() {
-                create_dir(workdir)?;
-            }
-
-            let atp = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()?
-                .block_on(import_atp(&client, &progress, workdir))?;
-
-            let coverage = build_coverage(&atp, &progress, workdir)?;
-            let osm = import_osm(&coverage, &progress, workdir)?;
-            let layers = suggest_edits(&coverage, &atp, &osm, &progress, workdir)?;
-            let tiles = render_tiles(&layers, &progress, workdir)?;
-            upload_tiles(&tiles, &progress)?;
-
-            Ok(())
+            osm_diffs::run_pipeline(&client, workdir)
         }
         None => Err(anyhow!("no subcommand given")),
     }

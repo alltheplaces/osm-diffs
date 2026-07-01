@@ -3,22 +3,15 @@ use std::path::PathBuf;
 
 mod atp;
 mod coverage;
-mod diff_places;
 mod matchers;
 mod osm;
+mod pipeline;
 mod places;
 mod s2_util;
-mod tiles;
 mod u64_table;
-mod upload;
 
 // Re-exported for main.rs.
-pub use atp::import_atp;
-pub use coverage::build_coverage;
-pub use diff_places::suggest_edits;
-pub use osm::import_osm;
-pub use tiles::render_tiles;
-pub use upload::upload_tiles;
+pub use pipeline::run_pipeline;
 
 #[cfg(fuzzing)]
 pub use import_atp::fuzz::fuzz_process_geojson;
@@ -68,7 +61,7 @@ fn make_download_bar(
 /// A single layer to be rendered into tiles with Tippecanoe.
 /// Instances are passed from `suggest_edits()` to `tiles::render()`.
 #[derive(Debug)]
-pub struct TileLayer {
-    pub name: String,
-    pub path: PathBuf,
+struct TileLayer {
+    name: String,
+    path: PathBuf,
 }
