@@ -178,7 +178,7 @@ mod tests {
     use crate::places::Place;
     use anyhow::{Ok, Result};
     use indicatif::{ProgressBar, ProgressDrawTarget};
-    use std::num::{NonZeroI32, NonZeroI64, NonZeroU64};
+    use std::num::{NonZeroU32, NonZeroU64};
     use std::sync::mpsc::sync_channel;
 
     #[test]
@@ -186,8 +186,8 @@ mod tests {
         let store = MockFeatureStore::new(
             vec![Node {
                 id: 12345,
-                changeset: NonZeroI64::new(999),
-                version: NonZeroI32::new(7),
+                changeset: NonZeroU64::new(999),
+                version: NonZeroU32::new(7),
                 tags: vec![String::from("shop"), String::from("supermarket")],
                 lon_e7: 11_000_000_0,
                 lat_e7: 12_000_000_0,
@@ -208,8 +208,8 @@ mod tests {
         )
         .expect("cannot construct wanted Place");
         want.osm_id = NonZeroU64::new(123451);
-        want.osm_changeset = NonZeroI64::new(999);
-        want.osm_version = NonZeroI32::new(7);
+        want.osm_changeset = NonZeroU64::new(999);
+        want.osm_version = NonZeroU32::new(7);
         assert_eq!(rx.next(), Some(want));
         assert_eq!(rx.next(), None);
         Ok(())
@@ -221,16 +221,16 @@ mod tests {
             vec![
                 Node {
                     id: 1,
-                    changeset: NonZeroI64::new(1999),
-                    version: NonZeroI32::new(17),
+                    changeset: NonZeroU64::new(1999),
+                    version: NonZeroU32::new(17),
                     tags: vec![],
                     lon_e7: 50_000_000_0,
                     lat_e7: 20_000_000_0,
                 },
                 Node {
                     id: 2,
-                    changeset: NonZeroI64::new(2999),
-                    version: NonZeroI32::new(27),
+                    changeset: NonZeroU64::new(2999),
+                    version: NonZeroU32::new(27),
                     tags: vec![],
                     lon_e7: 70_000_000_0,
                     lat_e7: 40_000_000_0,
@@ -238,8 +238,8 @@ mod tests {
             ],
             vec![Way {
                 id: 3,
-                changeset: NonZeroI64::new(3999),
-                version: NonZeroI32::new(37),
+                changeset: NonZeroU64::new(3999),
+                version: NonZeroU32::new(37),
                 nodes: vec![1, 2, 666],
                 tags: vec![String::from("natural"), String::from("tree_row")],
             }],
@@ -258,8 +258,8 @@ mod tests {
         )
         .expect("cannot construct wanted Place");
         want.osm_id = NonZeroU64::new(32);
-        want.osm_changeset = NonZeroI64::new(3999);
-        want.osm_version = NonZeroI32::new(37);
+        want.osm_changeset = NonZeroU64::new(3999);
+        want.osm_version = NonZeroU32::new(37);
         assert_eq!(rx.next(), Some(want));
         assert_eq!(rx.next(), None);
         Ok(())

@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::fs::{File, remove_file, rename};
 use std::io::{BufWriter, Cursor, Read, Seek, Write};
-use std::num::{NonZeroI32, NonZeroI64};
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
 use std::thread;
@@ -558,23 +558,21 @@ pub fn filter_nodes<'a, R: Read + Seek + Send>(
     Ok(FilteredFile::open(&out_path)?)
 }
 
-fn get_changeset(info: &osm_pbf_iter::info::Info) -> Option<NonZeroI64> {
+fn get_changeset(info: &osm_pbf_iter::info::Info) -> Option<NonZeroU64> {
     if let Some(changeset) = info.changeset
         && changeset > 0
-        && changeset <= i64::MAX as u64
     {
-        NonZeroI64::new(changeset as i64)
+        NonZeroU64::new(changeset)
     } else {
         None
     }
 }
 
-fn get_version(info: &osm_pbf_iter::info::Info) -> Option<NonZeroI32> {
+fn get_version(info: &osm_pbf_iter::info::Info) -> Option<NonZeroU32> {
     if let Some(version) = info.version
         && version > 0
-        && version <= i32::MAX as u32
     {
-        NonZeroI32::new(version as i32)
+        NonZeroU32::new(version)
     } else {
         None
     }
