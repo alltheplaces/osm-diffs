@@ -1,8 +1,13 @@
-use crate::matchers::create_matcher;
-use crate::places::{Place, PlaceIndex};
-use crate::s2_util::MergedCellRanges;
-use crate::{TileLayer, make_progress_bar, matchers::match_distance};
-use anyhow::Result;
+// TODO: Change src/tiles.rs to visualize edit suggestions instead of the output of this function.
+// Afterwards, remove this file (ie., src/diff_places.rs).
+
+use crate::{
+    TileLayer, make_progress_bar,
+    matchers::{Match, create_matcher, find_matches, match_distance},
+    places::{Place, PlaceIndex},
+    s2_util::MergedCellRanges,
+};
+use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
@@ -17,13 +22,11 @@ use std::thread;
 
 struct EditWriter {
     shops: SyncSender<Place>,
-    _infrastructure: SyncSender<Place>,
-    _trees: SyncSender<Place>,
 }
 
 impl EditWriter {
     fn make_layers(workdir: &Path) -> Vec<TileLayer> {
-        ["shops", "infrastructure", "trees"]
+        ["shops"]
             .iter()
             .map(|&s| TileLayer {
                 name: String::from(s),
@@ -47,6 +50,24 @@ pub fn suggest_edits(
         return Ok(layers);
     }
 
+    // TODO: Find a better place for this. Probably in a future edits module.
+    {
+	let (shops_tx, shops_rx) = sync_channel::<Place>(8192);
+        let writer = EditWriter { shops: shops_tx };
+        let mut producer_result = Ok(());
+        let mut consumer_result = Ok(());
+        thread::scope(|s| {
+            let (match_tx, match_rx) = sync_channel::<Match>(8192);
+            s.spawn(|| producer_result = find_matches(atp, osm, progress, workdir, match_tx));
+            s.spawn(|| consumer_result = consume_matches(match_rx, writer));
+        });
+        consumer_result?;
+        producer_result?;
+        if true {
+            anyhow::bail!("not implemented, here you are, Sascha");
+        }
+    }
+
     let atp = PlaceIndex::open(atp, 1)?;
     let num_atp_places = atp.total_rows() as u64;
     let progress_bar = make_progress_bar(progress, "sugg-edit", num_atp_places, "ATP features");
@@ -54,28 +75,16 @@ pub fn suggest_edits(
 
     let mut producer_result = Ok(());
     let mut num_shop_edits = Ok(0);
-    let mut num_infrastructure_edits = Ok(0);
-    let mut num_tree_edits = Ok(0);
     thread::scope(|s| {
         let (shops_tx, shops_rx) = sync_channel::<Place>(8192);
-        let (infrastructure_tx, infrastructure_rx) = sync_channel::<Place>(8192);
-        let (trees_tx, trees_rx) = sync_channel::<Place>(8192);
-        let writer = EditWriter {
-            shops: shops_tx,
-            _infrastructure: infrastructure_tx,
-            _trees: trees_tx,
-        };
+        let writer = EditWriter { shops: shops_tx };
         s.spawn(|| {
             producer_result = produce_edits(atp.clone(), osm.clone(), &progress_bar, writer)
         });
         s.spawn(|| num_shop_edits = write_edits(shops_rx, &layers[0].path, workdir));
-        s.spawn(|| {
-            num_infrastructure_edits = write_edits(infrastructure_rx, &layers[1].path, workdir)
-        });
-        s.spawn(|| num_tree_edits = write_edits(trees_rx, &layers[2].path, workdir));
     });
     producer_result?;
-    let num_edits = num_shop_edits? + num_infrastructure_edits? + num_tree_edits?;
+    let num_edits = num_shop_edits?;
     progress_bar.finish_with_message(format!("ATP features → {} suggested OSM edits", num_edits));
 
     let cache_stats = osm.cache_stats();
@@ -87,6 +96,17 @@ pub fn suggest_edits(
     );
 
     Ok(layers)
+}
+
+fn consume_matches(matches: Receiver<Match>, out: EditWriter) -> Result<()> {
+    for m in matches {
+        assert!(!m.atp_matches.is_empty());
+        if let Some(matcher) = create_matcher(&m.atp_matches[0])
+	    && let Some(ref osm) = m.osm
+            && let Some(_edit) = matcher.suggest_edit(osm)
+        {}
+    }
+    Ok(())
 }
 
 fn produce_edits(
@@ -153,7 +173,7 @@ fn produce_edits(
                     }
                 }
             };
-            Ok::<(), anyhow::Error>(())
+            Ok(())
         })?;
     }
 

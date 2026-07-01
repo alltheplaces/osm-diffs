@@ -6,6 +6,9 @@ use s2::{cellid::CellID, point::Point, s1::ChordAngle};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 
+mod find_matches;
+pub use find_matches::{Match, find_matches};
+
 mod poi_matcher;
 
 /// A bitmask to speed up the matching of AllThePlaces with OpenStreetMap.
