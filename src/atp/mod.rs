@@ -13,6 +13,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
+use time::{OffsetDateTime, UtcDateTime, format_description::well_known::Iso8601};
 
 use crate::places::{ParquetWriter, Place};
 use crate::{PROGRESS_BAR_STYLE, matchers::MatchMask};
@@ -106,7 +107,8 @@ fn process_zip(path: &Path, progress: &MultiProgress, channel: SyncSender<Place>
     archive.entries().par_iter().try_for_each(|entry| {
         if entry.size > 0 {
             let reader = archive.read(entry)?;
-            process_geojson(reader, Some(channel.clone()))?;
+            let path = entry.path.as_str();
+            process_geojson(reader, path, Some(channel.clone()))?;
         }
         bar.inc(1);
         Ok(())
@@ -115,10 +117,15 @@ fn process_zip(path: &Path, progress: &MultiProgress, channel: SyncSender<Place>
     Ok(())
 }
 
-fn process_geojson<T: Read>(reader: T, channel: Option<SyncSender<Place>>) -> Result<()> {
+fn process_geojson<T: Read>(
+    reader: T,
+    path: &str,
+    channel: Option<SyncSender<Place>>,
+) -> Result<()> {
     let buffer = BufReader::new(reader);
     let mut lines = buffer.lines();
 
+    let collection_time: Option<UtcDateTime>;
     if let Some(first_line) = lines.next() {
         let mut json = first_line?;
         json.push_str("]}");
@@ -128,6 +135,7 @@ fn process_geojson<T: Read>(reader: T, channel: Option<SyncSender<Place>>) -> Re
             // according to the AllThePlaces metadata.
             return Ok(());
         }
+        collection_time = parse_spider_collection_time(&parsed);
     } else {
         // If a spider has crashed, for example due to a network
         // problem or unexpected content on the website, we get an
@@ -136,6 +144,10 @@ fn process_geojson<T: Read>(reader: T, channel: Option<SyncSender<Place>>) -> Re
         // conflation pipeline.
         return Ok(());
     }
+
+    let Some(collection_time) = collection_time else {
+        anyhow::bail!("missing spider:collection_time in {}", path);
+    };
 
     for line in lines {
         let line = line?;
@@ -153,7 +165,7 @@ fn process_geojson<T: Read>(reader: T, channel: Option<SyncSender<Place>>) -> Re
         };
 
         // Handle individual features.
-        let Some(place) = make_place(trimmed) else {
+        let Some(place) = make_place(trimmed, collection_time) else {
             continue;
         };
         if let Some(ref channel) = channel {
@@ -161,6 +173,30 @@ fn process_geojson<T: Read>(reader: T, channel: Option<SyncSender<Place>>) -> Re
         };
     }
     Ok(())
+}
+
+fn parse_spider_collection_time(fc: &geojson::FeatureCollection) -> Option<UtcDateTime> {
+    if let Some(members) = &fc.foreign_members
+        && let Some(attrs) = members.get("dataset_attributes")
+        && let Some(s) = attrs.get("spider:collection_time")?.as_str()
+    {
+        // First, handle timestamps that have an explicit timezone indication.
+        if let std::result::Result::Ok(parsed) = OffsetDateTime::parse(s, &Iso8601::PARSING) {
+            return Some(parsed.to_utc());
+        };
+
+        // Second, handle timestamps without timeyone, by appendinga 'Z' suffix.
+        // As of July 2026, AllThePlaces does not emit a timezone designator,
+        // but we happen to know that these timestamps are in UTC time.
+        let mut with_suffix = String::from(s);
+        with_suffix.push('Z');
+        if let std::result::Result::Ok(parsed) =
+            OffsetDateTime::parse(&with_suffix, &Iso8601::PARSING)
+        {
+            return Some(parsed.to_utc());
+        };
+    };
+    None
 }
 
 fn is_usable_for_osm(fc: &geojson::FeatureCollection) -> bool {
@@ -218,7 +254,7 @@ fn is_usable_for_osm(fc: &geojson::FeatureCollection) -> bool {
     }
 }
 
-fn make_place(geojson: &str) -> Option<Place> {
+fn make_place(geojson: &str, _timestamp: time::UtcDateTime) -> Option<Place> {
     let parsed = geojson.parse::<GeoJson>().ok()?;
     let coord = find_point(&parsed)?.0;
     let GeoJson::Feature(feature) = parsed else {
@@ -299,6 +335,7 @@ mod tests {
     use super::*;
     use indicatif::ProgressDrawTarget;
     use std::collections::HashMap;
+    use time::format_description::well_known::Rfc3339;
 
     // A point feature for testing.
     const PLAYGROUND: &str = r#"{
@@ -392,7 +429,9 @@ mod tests {
 
     #[test]
     fn test_make_place() {
-        let place = super::make_place(PLAYGROUND).unwrap();
+        let timestamp =
+            UtcDateTime::parse("2026-07-01T13:14:14Z", &Iso8601::PARSING).expect("timestamp");
+        let place = super::make_place(PLAYGROUND, timestamp).expect("place");
         assert_eq!(place.source, "atp/winterthur_ch");
         assert_eq!(
             tags(&place),
@@ -408,7 +447,7 @@ mod tests {
 
     #[test]
     fn test_make_place_for_road() {
-        assert!(super::make_place(BICYCLE_ROAD).is_none());
+        assert!(super::make_place(BICYCLE_ROAD, UtcDateTime::now()).is_none());
     }
 
     #[test]
@@ -426,6 +465,42 @@ mod tests {
         assert_eq!(counts["atp/tchibo"], 1);
         assert_eq!(counts["atp/winterthur_ch"], 4);
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_spider_collection_time() {
+        let parse = |key, value| {
+            let dataset = make_dataset(&[(key, value)]);
+            if let Some(t) = parse_spider_collection_time(&dataset) {
+                t.format(&Rfc3339).ok()
+            } else {
+                None
+            }
+        };
+
+        assert_eq!(parse("spider:collection_time", ""), None);
+        assert_eq!(parse("spider:collection_time", "foo bar"), None);
+        assert_eq!(parse("some:other:key", "2026-06-29T23:11:41Z"), None);
+
+        // Z = UTC timezone
+        assert_eq!(
+            parse("spider:collection_time", "2026-06-29T23:11:41Z"),
+            Some("2026-06-29T23:11:41Z".to_string())
+        );
+        assert_eq!(
+            parse("spider:collection_time", "2026-06-29T11:20:01.579995Z"),
+            Some("2026-06-29T11:20:01.579995Z".to_string())
+        );
+
+        // No timezone given, should assume UTC.
+        assert_eq!(
+            parse("spider:collection_time", "2026-06-29T23:11:41"),
+            Some("2026-06-29T23:11:41Z".to_string())
+        );
+        assert_eq!(
+            parse("spider:collection_time", "2026-06-29T11:20:01.579995"),
+            Some("2026-06-29T11:20:01.579995Z".to_string())
+        );
     }
 
     #[test]
@@ -504,7 +579,7 @@ pub mod fuzz {
     use std::io::Cursor;
 
     pub fn fuzz_process_geojson(data: &[u8]) {
-        _ = process_geojson(Cursor::new(data), None);
+        _ = process_geojson(Cursor::new(data), "test.json", None);
     }
 
     #[test]
