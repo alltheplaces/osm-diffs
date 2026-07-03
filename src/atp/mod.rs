@@ -117,22 +117,28 @@ fn process_zip(path: &Path, progress: &MultiProgress, channel: SyncSender<Place>
 
 fn process_geojson<T: Read>(reader: T, channel: Option<SyncSender<Place>>) -> Result<()> {
     let buffer = BufReader::new(reader);
-    for line in buffer.lines() {
-        let line = line?;
+    let mut lines = buffer.lines();
 
-        // Handle start of FeatureCollection, first line in file.
-        if line.starts_with("{\"type\":\"FeatureCollection\"") {
-            let mut json = line;
-            json.push_str("]}");
-            let parsed = json.parse::<geojson::FeatureCollection>()?;
-            if is_usable_for_osm(&parsed) {
-                continue;
-            } else {
-                // Ignore FeatureCollections that can't be conflated with OSM
-                // according to the AllThePlaces metadata.
-                return Ok(());
-            }
+    if let Some(first_line) = lines.next() {
+        let mut json = first_line?;
+        json.push_str("]}");
+        let parsed = json.parse::<geojson::FeatureCollection>()?;
+        if !is_usable_for_osm(&parsed) {
+            // Ignore FeatureCollections that can't be conflated with OSM
+            // according to the AllThePlaces metadata.
+            return Ok(());
         }
+    } else {
+        // If a spider has crashed, for example due to a network
+        // problem or unexpected content on the website, we get an
+        // empty file in alltheplaces.zip. We intentionally ignore
+        // this; a crashing spider is not a reason to stop the entire
+        // conflation pipeline.
+        return Ok(());
+    }
+
+    for line in lines {
+        let line = line?;
 
         // Handle end of FeatureCollection, last line in file.
         if line == "]}" {
