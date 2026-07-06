@@ -6,13 +6,10 @@ use crate::{
     s2_util::MergedCellRanges,
 };
 use anyhow::{Ok, Result};
-use deepsize::DeepSizeOf;
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::{
-    num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     sync::{
         Arc,
@@ -21,6 +18,9 @@ use std::{
     },
     thread,
 };
+
+mod writer;
+use writer::{ParquetRow, ParquetWriter};
 
 pub fn conflate(
     atp: &Path,
@@ -39,94 +39,39 @@ pub fn conflate(
     let num_atp_features = atp_index.total_rows() as u64;
     let producer_progress =
         make_progress_bar(progress, "conflate.match", num_atp_features, "ATP features");
+    let writer_progress = make_progress_bar(progress, "conflate.write", 0, "parquet rows");
     let osm_index = PlaceIndex::open(osm, 32)?;
 
     let mut producer_result = Ok(());
-    let mut consumer_result = Ok(());
+    let mut writer_result = Ok(());
     thread::scope(|s| {
-        let (tx, rx) = sync_channel::<Row>(8192);
+        let (tx, rx) = sync_channel::<ParquetRow>(8192);
         s.spawn(|| {
             producer_result =
                 produce_rows(atp_index.clone(), osm_index.clone(), producer_progress, tx);
         });
         s.spawn(|| {
-            consumer_result = consume_rows(rx, progress, workdir);
+            writer_result = write_conflated(rx, writer_progress, workdir, &out_path);
         });
     });
-    consumer_result?;
+    writer_result?;
     producer_result?;
 
     Ok(out_path)
 }
 
-// A single row in the conflated parquet file.
-#[derive(Debug, DeepSizeOf, Deserialize, Serialize)]
-struct Row {
-    /// Internal sort key. Intentionally not written to our output
-    /// parquet file because we don’t want to expose S2 cells to
-    /// external clients. For point geometries, this would not be a
-    /// big issue, but the algorithm to compute a single S2 cell for
-    /// polylines and polygons may change in the future. (At the
-    /// moment, we take the centroid, but we should rather leave this
-    /// to the S2 library; but the Rust version of S2 does not
-    /// implement this yet). We still sort the output by S2 because
-    /// spatial sorting gives better compression and higher query
-    /// performance with geographic Parquet files.
-    s2_cell_id: u64,
-
-    osm_id: Option<NonZeroU64>,
-    osm_changeset: Option<NonZeroU64>,
-    osm_version: Option<NonZeroU32>,
-    osm_tags: Vec<(String, String)>,
-
-    atp_spider: Option<String>,
-    atp_tags: Vec<(String, String)>,
+#[allow(unused)]
+struct ConflatedFeature {
+    atp: Option<Place>,
+    osm: Option<Place>,
+    // TODO: Signals for ranking.
 }
-
-impl Row {
-    fn from_atp_feature(atp: &Place) -> Row {
-        Row {
-            s2_cell_id: atp.s2_cell_id,
-            osm_id: None,
-            osm_changeset: None,
-            osm_version: None,
-            osm_tags: Vec::with_capacity(0),
-            atp_spider: Some(atp.source.clone()),
-            atp_tags: atp.tags.clone(),
-        }
-    }
-}
-
-impl Ord for Row {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // We do not need to look at osm_tags since OSM IDs are unique.
-        self.s2_cell_id
-            .cmp(&other.s2_cell_id)
-            .then(self.osm_id.cmp(&other.osm_id))
-            .then(self.atp_spider.cmp(&other.atp_spider))
-            .then(self.atp_tags.cmp(&other.atp_tags))
-    }
-}
-
-impl PartialOrd for Row {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl PartialEq for Row {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-impl Eq for Row {}
 
 fn produce_rows(
     atp_index: Arc<PlaceIndex>,
     osm_index: Arc<PlaceIndex>,
     progress_bar: ProgressBar,
-    out: SyncSender<Row>,
+    out: SyncSender<ParquetRow>,
 ) -> Result<()> {
     let coverer = s2::region::RegionCoverer {
         max_cells: 16,
@@ -145,7 +90,10 @@ fn produce_rows(
                 return Ok(());
             };
 
-            let mut row = Row::from_atp_feature(atp);
+            let mut conflated = ConflatedFeature {
+                atp: Some(atp.deep_clone()),
+                osm: None,
+            };
             let mut best_score: f64 = 0.0;
             let covering = {
                 let s2_cell = s2::cell::Cell::from(s2::cellid::CellID(atp.s2_cell_id));
@@ -166,18 +114,15 @@ fn produce_rows(
                     }
                 }
                 if let Some(osm) = best_candidate {
-                    row.s2_cell_id = osm.s2_cell_id;
-                    row.osm_id = osm.osm_id;
-                    row.osm_changeset = osm.osm_changeset;
-                    row.osm_version = osm.osm_version;
-                    row.osm_tags = osm.tags.clone();
+                    conflated.osm = Some(osm.deep_clone());
                 }
             }
 
             // TODO: Once we support relations, always send rows,
             // even if we could not find a matching feature in OSM.
             // https://github.com/alltheplaces/osm-diffs/issues/187
-            if row.osm_id.is_some() {
+            if conflated.osm.is_some() {
+                let row = ParquetRow::try_from(conflated)?;
                 out.send(row)?;
             }
 
@@ -189,24 +134,28 @@ fn produce_rows(
     Ok(())
 }
 
-fn consume_rows(rows: Receiver<Row>, progress: &MultiProgress, workdir: &Path) -> Result<()> {
+fn write_conflated(
+    cf: Receiver<ParquetRow>,
+    progress: ProgressBar,
+    workdir: &Path,
+    out: &Path,
+) -> Result<()> {
     let row_count = AtomicU64::new(0);
-    let sorter: ExternalSorter<Row, std::io::Error, MemoryLimitedBufferBuilder> =
+    let sorter: ExternalSorter<ParquetRow, std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)
             .with_buffer(MemoryLimitedBufferBuilder::new(150_000_000))
             .build()?;
-    let sorted = sorter.sort(rows.iter().map(|x| {
+    let sorted = sorter.sort(cf.iter().map(|row| {
         row_count.fetch_add(1, Ordering::SeqCst);
-        std::io::Result::Ok(x)
+        std::io::Result::Ok(row)
     }))?;
-    let row_count = row_count.load(Ordering::SeqCst);
-    let progress_bar = make_progress_bar(progress, "conflate.write", row_count, "parquet rows");
+    progress.set_length(row_count.load(Ordering::SeqCst));
+    let mut writer = ParquetWriter::create(out)?;
     for row in sorted {
-        let _row = row?;
-        progress_bar.inc(1);
-        // println!("*** GIRAFFE {:?}", row?);
+        writer.write(row?)?;
+        progress.inc(1);
     }
-    progress_bar.finish();
+    writer.close()?;
     Ok(())
 }
