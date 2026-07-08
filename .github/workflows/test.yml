@@ -1,6 +1,7 @@
 name: Tests
 
 on:
+  merge_group:
   push:
     branches: [ "main" ]
   pull_request:
@@ -33,7 +34,7 @@ jobs:
     - name: Install Rust LLVM tools preview
       run: rustup component add llvm-tools-preview
     - name: Install Rust coverage tool
-      uses: taiki-e/install-action@16b05812d776ae1dfaabc8277e421fb6d2506419 # v2.82.7
+      uses: taiki-e/install-action@50414676f9f5d50a65992c6dd2ed02641263226c # v2.82.10
       with:
         tool: cargo-llvm-cov
     - name: Fetch Rust dependencies
