@@ -118,13 +118,8 @@ fn produce_rows(
                 }
             }
 
-            // TODO: Once we support relations, always send rows,
-            // even if we could not find a matching feature in OSM.
-            // https://github.com/alltheplaces/osm-diffs/issues/187
-            if conflated.osm.is_some() {
-                let row = ParquetRow::try_from(conflated)?;
-                out.send(row)?;
-            }
+            let row = ParquetRow::try_from(conflated)?;
+            out.send(row)?;
 
             Ok(())
         })?;
@@ -151,7 +146,7 @@ fn write_conflated(
         std::io::Result::Ok(row)
     }))?;
     progress.set_length(row_count.load(Ordering::SeqCst));
-    let mut writer = ParquetWriter::create(out, /* max_rows_per_group */ 100_000)?;
+    let mut writer = ParquetWriter::create(out, /* max_rows_per_group */ 200_000)?;
     for row in sorted {
         writer.write(row?)?;
         progress.inc(1);
