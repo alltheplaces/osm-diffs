@@ -2618,6 +2618,8 @@ version = "0.5.0"
 dependencies = [
  "anyhow",
  "arrow",
+ "arrow-buffer",
+ "arrow-schema",
  "assert_cmd",
  "aws-lc-rs",
  "clap",

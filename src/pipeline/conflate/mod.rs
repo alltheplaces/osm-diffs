@@ -147,15 +147,16 @@ fn write_conflated(
             .with_buffer(MemoryLimitedBufferBuilder::new(150_000_000))
             .build()?;
     let sorted = sorter.sort(cf.iter().map(|row| {
-        row_count.fetch_add(1, Ordering::SeqCst);
+        progress.set_length(row_count.fetch_add(1, Ordering::SeqCst));
         std::io::Result::Ok(row)
     }))?;
     progress.set_length(row_count.load(Ordering::SeqCst));
-    let mut writer = ParquetWriter::create(out)?;
+    let mut writer = ParquetWriter::create(out, /* max_rows_per_group */ 100_000)?;
     for row in sorted {
         writer.write(row?)?;
         progress.inc(1);
     }
     writer.close()?;
+    progress.finish();
     Ok(())
 }
