@@ -286,12 +286,11 @@ fn make_place(geojson: &str, _timestamp: time::UtcDateTime) -> Option<Place> {
             serde_json::Value::Number(v) => Some(v.to_string()),
             _ => None,
         };
-        let Some(mut value) = value else {
+        let Some(value) = value else {
             continue;
         };
 
         if key == "@spider" {
-            value.insert_str(0, "atp/");
             source = Some(value);
             continue;
         }
@@ -432,7 +431,7 @@ mod tests {
         let timestamp =
             UtcDateTime::parse("2026-07-01T13:14:14Z", &Iso8601::PARSING).expect("timestamp");
         let place = super::make_place(PLAYGROUND, timestamp).expect("place");
-        assert_eq!(place.source, "atp/winterthur_ch");
+        assert_eq!(place.source, "winterthur_ch");
         assert_eq!(
             tags(&place),
             [
@@ -461,9 +460,9 @@ mod tests {
         for place in rx {
             *counts.entry(place.source).or_insert(0) += 1;
         }
-        assert_eq!(counts["atp/misenso_ch"], 3);
-        assert_eq!(counts["atp/tchibo"], 1);
-        assert_eq!(counts["atp/winterthur_ch"], 4);
+        assert_eq!(counts["misenso_ch"], 3);
+        assert_eq!(counts["tchibo"], 1);
+        assert_eq!(counts["winterthur_ch"], 4);
         Ok(())
     }
 
