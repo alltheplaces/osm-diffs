@@ -57,6 +57,14 @@ impl Place {
         }
     }
 
+    pub fn shape(&self) -> geo::Geometry<f64> {
+        let s2_cell_id = s2::cellid::CellID(self.s2_cell_id);
+        let lat_lon = s2::latlng::LatLng::from(s2_cell_id);
+        let rounded_lon = (lat_lon.lng.deg() * 1e7).round() / 1e7;
+        let rounded_lat = (lat_lon.lat.deg() * 1e7).round() / 1e7;
+        geo::Geometry::from(geo::Point::<f64>::new(rounded_lon, rounded_lat))
+    }
+
     pub fn to_geojson(&self) -> geojson::Feature {
         let s2_cell_id = s2::cellid::CellID(self.s2_cell_id);
         let lat_lon = s2::latlng::LatLng::from(s2_cell_id);
@@ -190,5 +198,26 @@ mod tests {
         assert_eq!(a.eq(&a), true);
         assert_eq!(a.cmp(&b), a.s2_cell_id.cmp(&b.s2_cell_id));
         assert_eq!(a.partial_cmp(&b), a.s2_cell_id.partial_cmp(&b.s2_cell_id));
+    }
+
+    #[test]
+    fn test_shape() {
+        let place = Place::new(
+            &Coord {
+                x: 7.4478123,
+                y: 46.9479801,
+            },
+            "test/source".to_string(),
+            MatchMask::SHOP,
+            vec![],
+        )
+        .unwrap();
+        let shape = place.shape();
+        if let geo::Geometry::Point(p) = shape {
+            assert_eq!(p.x(), 7.4478123);
+            assert_eq!(p.y(), 46.9479801);
+        } else {
+            assert!(false, "expected a point, got {:?}", shape);
+        };
     }
 }

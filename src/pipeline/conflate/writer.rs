@@ -1,7 +1,9 @@
 use anyhow::{Ok, Result};
 use arrow::array::{
     ArrayRef, RecordBatch, StructArray,
-    builder::{MapBuilder, MapFieldNames, StringBuilder, UInt32Builder, UInt64Builder},
+    builder::{
+        BinaryBuilder, MapBuilder, MapFieldNames, StringBuilder, UInt32Builder, UInt64Builder,
+    },
 };
 use arrow_buffer::builder::NullBufferBuilder;
 use arrow_schema::{DataType, SchemaRef};
@@ -33,6 +35,7 @@ pub struct ParquetWriter {
     atp_present: NullBufferBuilder,
     atp_tags: MapBuilder<StringBuilder, StringBuilder>,
     atp_spiders: StringBuilder,
+    atp_geometries: BinaryBuilder,
 
     osm_present: NullBufferBuilder,
     osm_types: StringBuilder,
@@ -40,6 +43,9 @@ pub struct ParquetWriter {
     osm_tags: MapBuilder<StringBuilder, StringBuilder>,
     osm_changesets: UInt64Builder,
     osm_versions: UInt32Builder,
+    osm_geometries: BinaryBuilder,
+
+    geometries: BinaryBuilder,
 }
 
 /// A single row in the conflated parquet file.
@@ -61,8 +67,11 @@ pub struct ParquetRow {
     osm_changeset: Option<NonZeroU64>,
     osm_version: Option<NonZeroU32>,
     osm_tags: Vec<(String, String)>,
+    osm_shape_wkb: Vec<u8>,
+
     atp_spider: Option<String>,
     atp_tags: Vec<(String, String)>,
+    atp_shape_wkb: Vec<u8>,
 }
 
 impl ParquetWriter {
@@ -73,7 +82,8 @@ impl ParquetWriter {
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::try_new(22)?))
             .set_max_row_group_row_count(Some(max_rows_per_group))
-            .build(); // TODO: metadata
+            .set_bloom_filter_enabled(true)
+            .build();
         let options = ArrowWriterOptions::new().with_properties(properties);
         let file = File::create(&tmp_path)?;
         let writer = ArrowWriter::try_new_with_options(file, schema.clone(), options)?;
@@ -93,6 +103,12 @@ impl ParquetWriter {
                 /* data_capacity */ 16 * 1024,
             ),
 
+            // Most ATP geometries are points, which need 21 bytes in WKB encoding.
+            atp_geometries: BinaryBuilder::with_capacity(
+                /* item_capacity */ max_rows_per_group,
+                /* data_capacity */ max_rows_per_group * 21,
+            ),
+
             osm_present: NullBufferBuilder::new(max_rows_per_group),
             // TODO: Use dictionary instead of string for osm_types?
             osm_types: StringBuilder::with_capacity(
@@ -104,6 +120,18 @@ impl ParquetWriter {
             osm_tags: Self::new_key_value_map_builder(max_rows_per_group),
             osm_changesets: UInt64Builder::with_capacity(max_rows_per_group),
             osm_versions: UInt32Builder::with_capacity(max_rows_per_group),
+
+            // Many OSM geometries are points, which need 21 bytes in WKB encoding.
+            osm_geometries: BinaryBuilder::with_capacity(
+                /* item_capacity */ max_rows_per_group,
+                /* data_capacity */ max_rows_per_group * 21,
+            ),
+
+            // Most geometries are points, which need 21 bytes in WKB encoding.
+            geometries: BinaryBuilder::with_capacity(
+                /* item_capacity */ max_rows_per_group,
+                /* data_capacity */ max_rows_per_group * 21,
+            ),
         })
     }
 
@@ -140,10 +168,12 @@ impl ParquetWriter {
             }
             self.atp_tags.append(true)?;
             self.atp_spiders.append_value(atp_spider);
+            self.atp_geometries.append_value(&row.atp_shape_wkb);
         } else {
             self.atp_present.append_null();
             self.atp_tags.append(false)?;
             self.atp_spiders.append_value("");
+            self.atp_geometries.append_null();
         }
 
         if let Some(osm_id) = row.osm_id {
@@ -155,6 +185,7 @@ impl ParquetWriter {
                 _ => panic!("osm_id {} with unexpected last digit", osm_id.get()),
             });
             self.osm_ids.append_value(osm_id.get() / 10);
+
             for (key, value) in row.osm_tags.iter() {
                 self.osm_tags.keys().append_value(key);
                 self.osm_tags.values().append_value(value);
@@ -165,6 +196,7 @@ impl ParquetWriter {
                 .append_value(row.osm_changeset.expect("osm_changeset").get());
             self.osm_versions
                 .append_value(row.osm_version.expect("osm_version").get());
+            self.osm_geometries.append_value(&row.osm_shape_wkb);
         } else {
             self.osm_present.append_null();
             self.osm_types.append_value("");
@@ -172,7 +204,17 @@ impl ParquetWriter {
             self.osm_tags.append(false)?;
             self.osm_changesets.append_value(0);
             self.osm_versions.append_value(0);
+            self.osm_geometries.append_null();
         }
+
+        if !row.osm_shape_wkb.is_empty() {
+            self.geometries.append_value(&row.osm_shape_wkb);
+        } else if !row.atp_shape_wkb.is_empty() {
+            self.geometries.append_value(&row.atp_shape_wkb);
+        } else {
+            self.geometries.append_null();
+        }
+
         self.rows_in_group += 1;
         Ok(())
     }
@@ -197,6 +239,7 @@ impl ParquetWriter {
             vec![
                 Arc::new(self.atp_tags.finish()) as ArrayRef,
                 Arc::new(self.atp_spiders.finish()) as ArrayRef,
+                Arc::new(self.atp_geometries.finish()) as ArrayRef,
             ],
             self.atp_present.finish(),
         )?;
@@ -214,6 +257,7 @@ impl ParquetWriter {
                 Arc::new(self.osm_tags.finish()) as ArrayRef,
                 Arc::new(self.osm_changesets.finish()) as ArrayRef,
                 Arc::new(self.osm_versions.finish()) as ArrayRef,
+                Arc::new(self.osm_geometries.finish()) as ArrayRef,
             ],
             self.osm_present.finish(),
         )?;
@@ -223,6 +267,7 @@ impl ParquetWriter {
             vec![
                 Arc::new(atp_struct) as ArrayRef,
                 Arc::new(osm_struct) as ArrayRef,
+                Arc::new(self.geometries.finish()) as ArrayRef,
             ],
         )?;
 
@@ -234,6 +279,7 @@ impl ParquetWriter {
 
 impl TryFrom<ConflatedFeature> for ParquetRow {
     type Error = anyhow::Error;
+
     fn try_from(cf: ConflatedFeature) -> Result<Self, Self::Error> {
         let atp = cf.atp;
         let osm = cf.osm;
@@ -249,11 +295,14 @@ impl TryFrom<ConflatedFeature> for ParquetRow {
         };
 
         let atp_spider;
+        let atp_shape_wkb;
         let atp_tags;
         if let Some(atp) = atp {
+            atp_shape_wkb = wkb(&atp.shape());
             atp_spider = Some(atp.source);
             atp_tags = atp.tags;
         } else {
+            atp_shape_wkb = Vec::with_capacity(0);
             atp_spider = None;
             atp_tags = Vec::with_capacity(0);
         };
@@ -261,16 +310,19 @@ impl TryFrom<ConflatedFeature> for ParquetRow {
         let osm_id;
         let osm_changeset;
         let osm_version;
+        let osm_shape_wkb;
         let osm_tags;
         if let Some(osm) = osm {
             osm_id = osm.osm_id;
             osm_changeset = osm.osm_changeset;
             osm_version = osm.osm_version;
+            osm_shape_wkb = wkb(&osm.shape());
             osm_tags = osm.tags;
         } else {
             osm_id = None;
             osm_changeset = None;
             osm_version = None;
+            osm_shape_wkb = Vec::with_capacity(0);
             osm_tags = Vec::with_capacity(0);
         };
 
@@ -278,10 +330,12 @@ impl TryFrom<ConflatedFeature> for ParquetRow {
             s2_cell_id,
             atp_spider,
             atp_tags,
+            atp_shape_wkb,
             osm_id,
             osm_changeset,
             osm_version,
             osm_tags,
+            osm_shape_wkb,
         })
     }
 }
@@ -311,8 +365,19 @@ impl PartialEq for ParquetRow {
 
 impl Eq for ParquetRow {}
 
+fn wkb(shape: &geo::Geometry<f64>) -> Vec<u8> {
+    // Most of our features have point geometry, which uses 21 bytes in WKB encoding.
+    let mut buf = Vec::<u8>::with_capacity(21);
+    let opts = wkb::writer::WriteOptions {
+        endianness: wkb::Endianness::LittleEndian,
+    };
+    wkb::writer::write_geometry(&mut buf, shape, &opts).expect("wkb encoding failed");
+    buf
+}
+
 mod schema {
     use arrow_schema::{DataType, Field, Schema};
+    use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType};
 
     const NOT_NULLABLE: bool = false;
     const NULLABLE: bool = true;
@@ -324,9 +389,11 @@ mod schema {
             vec![
                 new_key_value_field("tags"),
                 Field::new("spider", DataType::Utf8, NOT_NULLABLE),
+                new_geo_field("geometry", NOT_NULLABLE),
             ],
             NULLABLE,
         );
+
         let osm = Field::new_struct(
             "osm",
             vec![
@@ -335,10 +402,13 @@ mod schema {
                 new_key_value_field("tags"),
                 Field::new("changeset", DataType::UInt64, NOT_NULLABLE),
                 Field::new("version", DataType::UInt32, NOT_NULLABLE),
+                new_geo_field("geometry", NOT_NULLABLE),
             ],
             NULLABLE,
         );
-        Schema::new(vec![atp, osm])
+
+        let geometry = new_geo_field("geometry", NOT_NULLABLE);
+        Schema::new(vec![atp, osm, geometry])
     }
 
     fn new_key_value_field(name: &str) -> Field {
@@ -350,5 +420,11 @@ mod schema {
             UNSORTED,
             NOT_NULLABLE,
         )
+    }
+
+    fn new_geo_field(name: &str, nullable: bool) -> Field {
+        let metadata = WkbMetadata::new(Some("EPSG:4326"), Some(WkbEdges::Spherical));
+        Field::new(name, DataType::Binary, nullable)
+            .with_extension_type(WkbType::new(Some(metadata)))
     }
 }

@@ -3,6 +3,7 @@ use std::{path::Path, time::SystemTime};
 
 mod conflate;
 mod edits;
+mod geostats;
 mod tiles;
 mod upload;
 
@@ -11,6 +12,7 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
         std::fs::create_dir(workdir)?;
     }
 
+    geostats::init()?;
     let progress = indicatif::MultiProgress::new();
     let atp = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
