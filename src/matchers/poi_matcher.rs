@@ -121,7 +121,7 @@ mod tests {
         osm_id: None,
         osm_changeset: None,
         osm_version: None,
-        source: String::from("atp/newyorker"),
+        source: String::from("newyorker"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("addr:city", "Rapperswil"),
@@ -162,7 +162,7 @@ mod tests {
         osm_id: None,
         osm_changeset: None,
         osm_version: None,
-        source: String::from("atp/valora"),
+        source: String::from("valora"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("addr:city", "Rapperswil"),
