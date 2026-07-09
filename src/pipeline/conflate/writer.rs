@@ -8,6 +8,7 @@ use arrow_schema::{DataType, SchemaRef};
 use deepsize::DeepSizeOf;
 use parquet::{
     arrow::{ArrowWriter, arrow_writer::ArrowWriterOptions},
+    basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
 };
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,7 @@ impl ParquetWriter {
         tmp_path.add_extension("tmp");
         let schema = SchemaRef::new(schema::build_schema());
         let properties = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(ZstdLevel::try_new(22)?))
             .set_max_row_group_row_count(Some(max_rows_per_group))
             .build(); // TODO: metadata
         let options = ArrowWriterOptions::new().with_properties(properties);
