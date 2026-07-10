@@ -12,6 +12,7 @@ use parquet::{
     arrow::{ArrowWriter, arrow_writer::ArrowWriterOptions},
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,
+    schema::types::ColumnPath,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -82,7 +83,14 @@ impl ParquetWriter {
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::try_new(22)?))
             .set_max_row_group_row_count(Some(max_rows_per_group))
-            .set_bloom_filter_enabled(true)
+            .set_column_bloom_filter_enabled(Self::column_path("atp.spider"), true)
+            .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.key"), true)
+            .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.value"), true)
+            .set_column_bloom_filter_enabled(Self::column_path("osm.changeset"), true)
+            .set_column_bloom_filter_enabled(Self::column_path("osm.id"), true)
+            .set_column_bloom_filter_enabled(Self::column_path("osm.tags.key_value.key"), true)
+            .set_column_bloom_filter_enabled(Self::column_path("osm.tags.key_value.value"), true)
+            .set_column_bloom_filter_enabled(Self::column_path("osm.type"), true)
             .build();
         let options = ArrowWriterOptions::new().with_properties(properties);
         let file = File::create(&tmp_path)?;
@@ -133,6 +141,11 @@ impl ParquetWriter {
                 /* data_capacity */ max_rows_per_group * 21,
             ),
         })
+    }
+
+    fn column_path(name: &str) -> ColumnPath {
+        let parts: Vec<String> = name.split('.').map(String::from).collect();
+        ColumnPath::from(parts)
     }
 
     fn new_key_value_map_builder(capacity: usize) -> MapBuilder<StringBuilder, StringBuilder> {
