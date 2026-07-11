@@ -1191,7 +1191,7 @@ pub mod filtered_file {
 
         #[test]
         fn test_round_coords() {
-            use crate::osm::filter::round_coords;
+            use crate::pipeline::osm::filter::round_coords;
             assert_eq!(round_coords(8.2, 47.5), Some((82000000, 475000000)));
             assert_eq!(round_coords(-8.2, -47.5), Some((-82000000, -475000000)));
             assert_eq!(round_coords(8.2, 90.5), None);

@@ -4,6 +4,7 @@ use std::{path::Path, time::SystemTime};
 mod conflate;
 mod edits;
 mod geostats;
+mod osm;
 mod tiles;
 mod upload;
 
@@ -19,7 +20,7 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
         .build()?
         .block_on(crate::atp::import_atp(http_client, &progress, workdir))?;
     let coverage = crate::coverage::build_coverage(&atp, &progress, workdir)?;
-    let osm = crate::osm::import_osm(&coverage, &progress, workdir)?;
+    let osm = osm::import_osm(&coverage, &progress, workdir)?;
     let _conflated = conflate::conflate(&atp, &coverage, &osm, &progress, workdir)?;
     let edits = edits::suggest_edits(&coverage, &atp, &osm, &progress, workdir)?;
     let tiles = tiles::render_tiles(&edits, &progress, workdir)?;
