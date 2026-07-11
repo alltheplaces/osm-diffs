@@ -4,7 +4,6 @@ use std::path::PathBuf;
 mod atp;
 mod coverage;
 mod matchers;
-mod osm;
 mod pipeline;
 mod places;
 mod s2_util;

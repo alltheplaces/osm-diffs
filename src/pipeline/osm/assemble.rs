@@ -174,7 +174,7 @@ fn write_places(
 mod tests {
     use super::{assemble_nodes, assemble_ways};
     use crate::matchers::MatchMask;
-    use crate::osm::{Node, Way, tests::MockFeatureStore};
+    use crate::pipeline::osm::{Node, Way, tests::MockFeatureStore};
     use crate::places::Place;
     use anyhow::{Ok, Result};
     use indicatif::{ProgressBar, ProgressDrawTarget};
