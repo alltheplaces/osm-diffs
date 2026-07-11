@@ -45,8 +45,6 @@ pub struct ParquetWriter {
     osm_changesets: UInt64Builder,
     osm_versions: UInt32Builder,
     osm_geometries: BinaryBuilder,
-
-    geometries: BinaryBuilder,
 }
 
 /// A single row in the conflated parquet file.
@@ -134,12 +132,6 @@ impl ParquetWriter {
                 /* item_capacity */ max_rows_per_group,
                 /* data_capacity */ max_rows_per_group * 21,
             ),
-
-            // Most geometries are points, which need 21 bytes in WKB encoding.
-            geometries: BinaryBuilder::with_capacity(
-                /* item_capacity */ max_rows_per_group,
-                /* data_capacity */ max_rows_per_group * 21,
-            ),
         })
     }
 
@@ -220,14 +212,6 @@ impl ParquetWriter {
             self.osm_geometries.append_null();
         }
 
-        if !row.osm_shape_wkb.is_empty() {
-            self.geometries.append_value(&row.osm_shape_wkb);
-        } else if !row.atp_shape_wkb.is_empty() {
-            self.geometries.append_value(&row.atp_shape_wkb);
-        } else {
-            self.geometries.append_null();
-        }
-
         self.rows_in_group += 1;
         Ok(())
     }
@@ -280,7 +264,6 @@ impl ParquetWriter {
             vec![
                 Arc::new(atp_struct) as ArrayRef,
                 Arc::new(osm_struct) as ArrayRef,
-                Arc::new(self.geometries.finish()) as ArrayRef,
             ],
         )?;
 
@@ -420,8 +403,7 @@ mod schema {
             NULLABLE,
         );
 
-        let geometry = new_geo_field("geometry", NOT_NULLABLE);
-        Schema::new(vec![atp, osm, geometry])
+        Schema::new(vec![atp, osm])
     }
 
     fn new_key_value_field(name: &str) -> Field {
