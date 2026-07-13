@@ -158,6 +158,10 @@ enum RelationMember {
 /// Abstracts OSM feature retrieval, so the geometry logic is independent of the storage.
 /// Implemented by MockFeatureStore for testing, and FilteredFeatureStore in production.
 pub trait FeatureStore: Send + Sync {
+    fn get_node(&self, id: u64) -> Option<Node>;
+    fn get_way(&self, id: u64) -> Option<Way>;
+    fn get_relation(&self, id: u64) -> Option<Relation>;
+
     fn node_count(&self) -> u64;
     fn way_count(&self) -> u64;
     fn relation_count(&self) -> u64;
@@ -170,10 +174,6 @@ pub trait FeatureStore: Send + Sync {
     // https://github.com/alltheplaces/osm-diffs/issues/187
     #[allow(unused)]
     fn get_nth_relation(&self, n: u64) -> Option<Relation>;
-
-    //fn get_node(&self, id: u64) -> Option<Node>;
-    //fn get_way(&self, id: u64) -> Option<Way>;
-    //fn get_relation(&self, id: u64) -> Option<Relation>;
 }
 
 fn read_blobs<R: Read + Seek + Send>(
@@ -486,6 +486,30 @@ mod tests {
     }
 
     impl FeatureStore for MockFeatureStore {
+        fn get_node(&self, id: u64) -> Option<Node> {
+            if let Some(node) = self.nodes.get(&id) {
+                Some(node.clone())
+            } else {
+                None
+            }
+        }
+
+        fn get_way(&self, id: u64) -> Option<Way> {
+            if let Some(way) = self.ways.get(&id) {
+                Some(way.clone())
+            } else {
+                None
+            }
+        }
+
+        fn get_relation(&self, id: u64) -> Option<Relation> {
+            if let Some(relation) = self.relations.get(&id) {
+                Some(relation.clone())
+            } else {
+                None
+            }
+        }
+
         fn node_count(&self) -> u64 {
             self.nodes.len() as u64
         }

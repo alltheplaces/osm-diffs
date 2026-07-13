@@ -134,11 +134,13 @@ fn produce_rows(
             if let Some(row_osm_id) = row.osm_id {
                 let osm_id = row_osm_id.get() / 10;
                 let osm_type = row_osm_id.get() % 10;
-                // TODO: Implement FeatureStore::get_node/get_way, call it.
                 match osm_type {
-                    1 => if let Some(_node) = osm_store.get_nth_node(osm_id) {},
-                    2 => if let Some(_way) = osm_store.get_nth_way(osm_id) {},
-                    // 3 => if let Some(_way) = osm_store.get_relation(osm_id) {},
+                    // TODO: Currently, we only get some result for ways.
+                    // Change the osm.filter step of the pipeline to construct
+                    // feature_index also for nodes and relations.
+                    1 => if let Some(_node) = osm_store.get_node(osm_id) {},
+                    2 => if let Some(_way) = osm_store.get_way(osm_id) {},
+                    3 => if let Some(_relation) = osm_store.get_relation(osm_id) {},
                     _ => {}
                 };
             };
