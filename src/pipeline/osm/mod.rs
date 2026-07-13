@@ -20,13 +20,19 @@ mod coords;
 mod cover;
 mod fetch;
 mod filter;
+use filter::FilteredFeatureStore;
 
-pub fn import_osm(coverage: &Path, progress: &MultiProgress, workdir: &Path) -> Result<PathBuf> {
+pub fn import_osm(
+    coverage: &Path,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<(PathBuf, Box<dyn FeatureStore>)> {
     assert!(workdir.exists());
 
     let out_path = workdir.join("osm.parquet");
-    if out_path.exists() {
-        return Ok(out_path);
+    if out_path.exists() && FilteredFeatureStore::exists(workdir) {
+        let store = FilteredFeatureStore::open(workdir)?;
+        return Ok((out_path, Box::new(store)));
     }
 
     let pbf = fetch::fetch_planet(progress, workdir)?;
@@ -90,14 +96,14 @@ pub fn import_osm(coverage: &Path, progress: &MultiProgress, workdir: &Path) -> 
         workdir,
     )?;
 
-    let feature_store = filter::FilteredFeatureStore::new(&nodes, &ways, &relations);
+    let feature_store = filter::FilteredFeatureStore::new(nodes, ways, relations);
     assemble::assemble(&feature_store, progress, workdir, &out_path)?;
 
-    Ok(out_path)
+    Ok((out_path, Box::new(feature_store)))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Node {
+pub struct Node {
     id: u64,
     changeset: Option<NonZeroU64>,
     version: Option<NonZeroU32>,
@@ -107,7 +113,7 @@ struct Node {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Way {
+pub struct Way {
     id: u64,
     changeset: Option<NonZeroU64>,
     version: Option<NonZeroU32>,
@@ -116,7 +122,7 @@ struct Way {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-struct Relation {
+pub struct Relation {
     id: u64,
     changeset: Option<NonZeroU64>,
     version: Option<NonZeroU32>,
@@ -151,7 +157,7 @@ enum RelationMember {
 
 /// Abstracts OSM feature retrieval, so the geometry logic is independent of the storage.
 /// Implemented by MockFeatureStore for testing, and FilteredFeatureStore in production.
-trait FeatureStore: Send + Sync {
+pub trait FeatureStore: Send + Sync {
     fn node_count(&self) -> u64;
     fn way_count(&self) -> u64;
     fn relation_count(&self) -> u64;

@@ -18,22 +18,35 @@ use std::thread;
 use filtered_file::FilteredFile;
 
 pub struct FilteredFeatureStore<'a> {
-    nodes: &'a FilteredFile<'a>,
-    ways: &'a FilteredFile<'a>,
-    relations: &'a FilteredFile<'a>,
+    nodes: FilteredFile<'a>,
+    ways: FilteredFile<'a>,
+    relations: FilteredFile<'a>,
 }
 
 impl<'a> FilteredFeatureStore<'a> {
     pub fn new(
-        nodes: &'a FilteredFile<'a>,
-        ways: &'a FilteredFile<'a>,
-        relations: &'a FilteredFile<'a>,
+        nodes: FilteredFile<'a>,
+        ways: FilteredFile<'a>,
+        relations: FilteredFile<'a>,
     ) -> FilteredFeatureStore<'a> {
         FilteredFeatureStore {
             nodes,
             ways,
             relations,
         }
+    }
+
+    pub fn exists(workdir: &Path) -> bool {
+        workdir.join("osm-filtered-nodes").exists()
+            && workdir.join("osm-filtered-ways").exists()
+            && workdir.join("osm-filtered-relations").exists()
+    }
+
+    pub fn open(workdir: &Path) -> Result<FilteredFeatureStore<'a>> {
+        let nodes = FilteredFile::open(&workdir.join("osm-filtered-nodes"))?;
+        let ways = FilteredFile::open(&workdir.join("osm-filtered-ways"))?;
+        let relations = FilteredFile::open(&workdir.join("osm-filtered-relations"))?;
+        Ok(Self::new(nodes, ways, relations))
     }
 }
 

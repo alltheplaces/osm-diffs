@@ -2,6 +2,7 @@ use super::last_modified;
 use crate::{
     make_progress_bar,
     matchers::{create_matcher, match_distance},
+    pipeline::osm::FeatureStore,
     places::{Place, PlaceIndex},
     s2_util::MergedCellRanges,
 };
@@ -26,6 +27,7 @@ pub fn conflate(
     atp: &Path,
     coverage: &Path,
     osm: &Path,
+    osm_store: &dyn FeatureStore,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<PathBuf> {
@@ -47,8 +49,13 @@ pub fn conflate(
     thread::scope(|s| {
         let (tx, rx) = sync_channel::<ParquetRow>(8192);
         s.spawn(|| {
-            producer_result =
-                produce_rows(atp_index.clone(), osm_index.clone(), producer_progress, tx);
+            producer_result = produce_rows(
+                atp_index.clone(),
+                osm_index.clone(),
+                osm_store,
+                producer_progress,
+                tx,
+            );
         });
         s.spawn(|| {
             writer_result = write_conflated(rx, writer_progress, workdir, &out_path);
@@ -70,6 +77,7 @@ struct ConflatedFeature {
 fn produce_rows(
     atp_index: Arc<PlaceIndex>,
     osm_index: Arc<PlaceIndex>,
+    osm_store: &dyn FeatureStore,
     progress_bar: ProgressBar,
     out: SyncSender<ParquetRow>,
 ) -> Result<()> {
@@ -118,7 +126,22 @@ fn produce_rows(
                 }
             }
 
+            // TODO: Use a custom function instead of try_from, so we
+            // can pass a reference to FeatureStore to extract the
+            // geometry (and any other attributes not needed for
+            // matching).
             let row = ParquetRow::try_from(conflated)?;
+            if let Some(row_osm_id) = row.osm_id {
+                let osm_id = row_osm_id.get() / 10;
+                let osm_type = row_osm_id.get() % 10;
+                // TODO: Implement FeatureStore::get_node/get_way, call it.
+                match osm_type {
+                    1 => if let Some(_node) = osm_store.get_nth_node(osm_id) {},
+                    2 => if let Some(_way) = osm_store.get_nth_way(osm_id) {},
+                    // 3 => if let Some(_way) = osm_store.get_relation(osm_id) {},
+                    _ => {}
+                };
+            };
             out.send(row)?;
 
             Ok(())
