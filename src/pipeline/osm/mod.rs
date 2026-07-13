@@ -165,7 +165,11 @@ pub trait FeatureStore: Send + Sync {
     fn get_coord(&self, node_id: u64) -> Option<geo::Coord>;
     fn get_nth_node(&self, n: u64) -> Option<Node>;
     fn get_nth_way(&self, n: u64) -> Option<Way>;
-    //fn get_nth_relation(&self, n: u64) -> Option<Relation>;
+
+    // TODO: Handle relations.
+    // https://github.com/alltheplaces/osm-diffs/issues/187
+    #[allow(unused)]
+    fn get_nth_relation(&self, n: u64) -> Option<Relation>;
 
     //fn get_node(&self, id: u64) -> Option<Node>;
     //fn get_way(&self, id: u64) -> Option<Way>;
@@ -515,6 +519,15 @@ mod tests {
             let n = usize::try_from(n).ok()?;
             if n < self.way_ids.len() {
                 Some(self.ways.get(&self.way_ids[n])?.clone())
+            } else {
+                None
+            }
+        }
+
+        fn get_nth_relation(&self, n: u64) -> Option<Relation> {
+            let n = usize::try_from(n).ok()?;
+            if n < self.relation_ids.len() {
+                Some(self.relations.get(&self.relation_ids[n])?.clone())
             } else {
                 None
             }
