@@ -86,6 +86,16 @@ impl<'a> FeatureStore for FilteredFeatureStore<'a> {
         }
         None
     }
+
+    fn get_nth_relation(&self, n: u64) -> Option<Relation> {
+        if let Some(data) = self.relations.feature_data(usize::try_from(n).ok()?) {
+            let mut d = rmp_serde::Deserializer::new(Cursor::new(data));
+            if let std::result::Result::Ok(relation) = Relation::deserialize(&mut d) {
+                return Some(relation);
+            }
+        }
+        None
+    }
 }
 
 // TODO: Handle recursive relations.
