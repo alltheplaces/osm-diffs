@@ -62,7 +62,7 @@ pub struct ParquetRow {
     /// performance with geographic Parquet files.
     s2_cell_id: NonZeroU64,
 
-    osm_id: Option<NonZeroU64>,
+    pub osm_id: Option<NonZeroU64>,
     osm_changeset: Option<NonZeroU64>,
     osm_version: Option<NonZeroU32>,
     osm_tags: Vec<(String, String)>,
