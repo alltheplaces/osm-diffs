@@ -51,6 +51,18 @@ impl<'a> FilteredFeatureStore<'a> {
 }
 
 impl<'a> FeatureStore for FilteredFeatureStore<'a> {
+    fn get_node(&self, id: u64) -> Option<Node> {
+        self.get_nth_node(self.nodes.feature_index(id)?)
+    }
+
+    fn get_way(&self, id: u64) -> Option<Way> {
+        self.get_nth_way(self.ways.feature_index(id)?)
+    }
+
+    fn get_relation(&self, id: u64) -> Option<Relation> {
+        self.get_nth_relation(self.relations.feature_index(id)?)
+    }
+
     fn node_count(&self) -> u64 {
         self.nodes.feature_count() as u64
     }
@@ -850,7 +862,6 @@ pub mod filtered_file {
             Some(&self.feature_data[start..limit])
         }
 
-        #[allow(unused)] // TODO: Remove attribute once we use this in production code.
         pub fn feature_index(&self, id: u64) -> Option<u64> {
             let index = if cfg!(target_endian = "little") {
                 self.feature_index_keys.binary_search(&id)
