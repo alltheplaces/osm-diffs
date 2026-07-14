@@ -1,5 +1,5 @@
 use anyhow::{Context, Ok, Result, anyhow};
-use indicatif::{MultiProgress, ProgressBar};
+use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use protobuf_iter::MessageIter;
 use rayon::prelude::*;
@@ -179,13 +179,11 @@ pub trait FeatureStore: Send + Sync {
 fn read_blobs<R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
     blobs: (usize, usize),
-    progress_bar: &ProgressBar,
     out: SyncSender<Blob>,
 ) -> Result<()> {
     for i in blobs.0..blobs.1 {
         let blob = reader.read_blob(i)?;
         out.send(blob)?;
-        progress_bar.inc(1);
     }
 
     Ok(())
@@ -200,9 +198,10 @@ fn build_relation_parents<R: Read + Seek + Send>(
     let progress_bar = make_progress_bar(progress, "osm.prt.r", num_blobs, "blobs");
     let mut result = HashMap::<u64, u64>::new();
     thread::scope(|s| {
+        let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let producer = s.spawn(|| read_blobs(reader, blobs, &progress_bar, blob_tx));
+        let producer = s.spawn(|| read_blobs(reader, blobs, blob_tx));
         let consumer = s.spawn(|| {
             result = blob_rx
                 .into_iter()
@@ -221,6 +220,7 @@ fn build_relation_parents<R: Read + Seek + Send>(
                                 }
                             }
                         }
+                        progress_bar.inc(1);
                         Ok(map)
                     },
                 )

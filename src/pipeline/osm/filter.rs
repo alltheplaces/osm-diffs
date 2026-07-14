@@ -137,13 +137,14 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
     let progress_bar =
         super::make_progress_bar(progress, "osm.filter.r", num_blobs, "blobs → relations");
     thread::scope(|s| {
+        let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (rel_tx, rel_rx) = sync_channel::<Relation>(1024);
         let (node_ref_tx, node_ref_rx) = sync_channel::<u64>(8192);
         let (way_ref_tx, way_ref_rx) = sync_channel::<u64>(8192);
 
-        let producer = s.spawn(|| super::read_blobs(reader, blobs, &progress_bar, blob_tx));
+        let producer = s.spawn(|| super::read_blobs(reader, blobs, blob_tx));
 
         let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -195,6 +196,7 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
                         })?;
                     }
                 }
+                progress_bar.inc(1);
                 Ok(())
             })
         });
@@ -303,11 +305,12 @@ pub fn filter_ways<'a, R: Read + Seek + Send>(
     let progress_bar =
         super::make_progress_bar(progress, "osm.filter.w", num_blobs, "blobs → ways");
     thread::scope(|s| {
+        let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (way_tx, way_rx) = sync_channel::<Way>(4096);
         let (node_ref_tx, node_ref_rx) = sync_channel::<u64>(8192);
-        let producer = s.spawn(|| super::read_blobs(reader, blobs, &progress_bar, blob_tx));
+        let producer = s.spawn(|| super::read_blobs(reader, blobs, blob_tx));
 
         let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -354,6 +357,7 @@ pub fn filter_ways<'a, R: Read + Seek + Send>(
                         }
                     }
                 }
+                progress_bar.inc(1);
                 Ok(())
             })
         });
@@ -473,11 +477,12 @@ pub fn filter_nodes<'a, R: Read + Seek + Send>(
     let progress_bar =
         super::make_progress_bar(progress, "osm.filter.n", num_blobs, "blobs → nodes");
     thread::scope(|s| {
+        let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (node_tx, node_rx) = sync_channel::<Node>(8192);
         let (coords_tx, coords_rx) = sync_channel::<Coords>(8192);
-        let producer = s.spawn(|| super::read_blobs(reader, blobs, &progress_bar, blob_tx));
+        let producer = s.spawn(|| super::read_blobs(reader, blobs, blob_tx));
         let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let coords_tx = coords_tx.clone();
@@ -521,6 +526,7 @@ pub fn filter_nodes<'a, R: Read + Seek + Send>(
                         }
                     }
                 }
+                progress_bar.inc(1);
                 Ok(())
             })
         });
