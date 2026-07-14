@@ -38,7 +38,7 @@ pub fn import_osm(
     let pbf = fetch::fetch_planet(progress, workdir)?;
     let pbf_error = || format!("could not open file `{:?}`", pbf);
     let mut file = File::open(&pbf).with_context(pbf_error)?;
-    let mut reader = BlobReader::try_new(&mut file).with_context(pbf_error)?;
+    let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
 
     // Partition the PBF file into blobs with nodes, ways and relations.
     // Ranges may overlap by one blob, see BlobReader::partition().
@@ -257,7 +257,7 @@ struct BlobReader<'a, R: Read + Seek + Send> {
 unsafe impl<'a, R: Read + Seek + Send> Send for BlobReader<'a, R> {}
 
 impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
-    pub fn try_new(reader: &'a mut R) -> Result<BlobReader<'a, R>> {
+    pub fn open(reader: &'a mut R) -> Result<BlobReader<'a, R>> {
         reader.seek(SeekFrom::End(0))?;
         let file_size = reader.stream_position()?;
         if file_size == 0 {
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn test_blob_reader() -> Result<()> {
         let mut file = File::open(test_data_path("zugerland.osm.pbf"))?;
-        let mut reader = BlobReader::try_new(&mut file)?;
+        let mut reader = BlobReader::open(&mut file)?;
         assert_eq!(reader.blobs, &[(119, 16681), (16816, 15278), (32110, 8616)]);
         assert_eq!(reader.num_blobs(), 3);
         assert_eq!(reader.partition()?, (1, 2));
@@ -590,10 +590,10 @@ mod tests {
 
     #[test]
     fn test_blob_reader_bad_data() {
-        assert!(BlobReader::try_new(&mut Cursor::new(b"")).is_err());
-        assert!(BlobReader::try_new(&mut Cursor::new(b"\0\0\0")).is_err());
-        assert!(BlobReader::try_new(&mut Cursor::new(b"\0\0\0\0")).is_err());
-        assert!(BlobReader::try_new(&mut Cursor::new(b"test file with junk data")).is_err());
+        assert!(BlobReader::open(&mut Cursor::new(b"")).is_err());
+        assert!(BlobReader::open(&mut Cursor::new(b"\0\0\0")).is_err());
+        assert!(BlobReader::open(&mut Cursor::new(b"\0\0\0\0")).is_err());
+        assert!(BlobReader::open(&mut Cursor::new(b"test file with junk data")).is_err());
     }
 
     fn test_data_path(filename: &str) -> PathBuf {
