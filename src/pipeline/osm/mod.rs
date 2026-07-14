@@ -8,6 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::num::{NonZeroU32, NonZeroU64};
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread;
@@ -40,12 +41,10 @@ pub fn import_osm(
     let mut file = File::open(&pbf).with_context(pbf_error)?;
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
 
-    // Partition the PBF file into blobs with nodes, ways and relations.
-    // Ranges may overlap by one blob, see BlobReader::partition().
-    let (nodes_end, ways_end) = reader.partition()?;
-    let node_blobs = (0, nodes_end);
-    let way_blobs = (nodes_end.saturating_sub(1), ways_end);
-    let rel_blobs = (ways_end.saturating_sub(1), reader.num_blobs());
+    // TODO: Simplify the BlobReader API, then remove these variables.
+    let node_blobs = (reader.node_blobs.start, reader.node_blobs.end);
+    let way_blobs = (reader.way_blobs.start, reader.way_blobs.end);
+    let rel_blobs = (reader.relation_blobs.start, reader.relation_blobs.end);
 
     let coverage = Coverage::load(coverage)
         .with_context(|| format!("could not open coverage file `{:?}`", coverage))?;
@@ -249,6 +248,9 @@ struct BlobReader<'a, R: Read + Seek + Send> {
 
     /// Offset and size of each data blob.
     blobs: Vec<(u64, usize)>,
+    node_blobs: Range<usize>,
+    way_blobs: Range<usize>,
+    relation_blobs: Range<usize>,
 }
 
 // SAFETY: Can be safely sent across threads, if the underlying reader
@@ -281,22 +283,30 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
             pos += 4_u64 + (blob_header.len() as u64) + (data_size as u64);
         }
 
-        Ok(BlobReader { reader, blobs })
-    }
-
-    pub fn num_blobs(&self) -> usize {
-        self.blobs.len()
+        let (nodes_end, ways_end) = Self::partition(reader, &blobs)?;
+        let relations_end = blobs.len();
+        Ok(BlobReader {
+            reader,
+            blobs,
+            node_blobs: 0..nodes_end,
+            way_blobs: nodes_end.saturating_sub(1)..ways_end,
+            relation_blobs: ways_end.saturating_sub(1)..relations_end,
+        })
     }
 
     pub fn read_blob(&mut self, blob: usize) -> Result<Blob> {
         let (offset, len) = self.blobs[blob];
+        Self::read_blob_internal(self.reader, offset, len)
+    }
+
+    fn read_blob_internal(reader: &mut R, offset: u64, len: usize) -> Result<Blob> {
         let mut buf = Vec::with_capacity(len);
-        self.reader.seek(SeekFrom::Start(offset))?;
+        reader.seek(SeekFrom::Start(offset))?;
 
         // SAFETY: After read_exact(), all bytes in buffer have a defined value.
         unsafe {
             buf.set_len(len);
-            self.reader.read_exact(&mut buf)?;
+            reader.read_exact(&mut buf)?;
         }
         Self::decode_blob(&buf)
     }
@@ -327,13 +337,13 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
     /// a single blog may contain repeated PrimitiveGroups. While all primitives
     /// in the same must be of the same type (node, way or relation), the format
     /// makes no such guarantee on the blob level.
-    pub fn partition(&mut self) -> Result<(usize, usize)> {
+    fn partition(reader: &mut R, blobs: &[(u64, usize)]) -> Result<(usize, usize)> {
         let ways = {
             let mut left = 0;
-            let mut right = self.blobs.len();
+            let mut right = blobs.len();
             while left < right {
                 let mid = left + (right - left) / 2;
-                let blob = self.read_blob(mid)?;
+                let blob = Self::read_blob_internal(reader, blobs[mid].0, blobs[mid].1)?;
                 if Self::classify(blob)? < 2 {
                     left = mid + 1;
                 } else {
@@ -345,10 +355,10 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
 
         let relations = {
             let mut left = ways;
-            let mut right = self.blobs.len();
+            let mut right = blobs.len();
             while left < right {
                 let mid = left + (right - left) / 2;
-                let blob = self.read_blob(mid)?;
+                let blob = Self::read_blob_internal(reader, blobs[mid].0, blobs[mid].1)?;
                 if Self::classify(blob)? < 3 {
                     left = mid + 1;
                 } else {
@@ -563,8 +573,9 @@ mod tests {
         let mut file = File::open(test_data_path("zugerland.osm.pbf"))?;
         let mut reader = BlobReader::open(&mut file)?;
         assert_eq!(reader.blobs, &[(119, 16681), (16816, 15278), (32110, 8616)]);
-        assert_eq!(reader.num_blobs(), 3);
-        assert_eq!(reader.partition()?, (1, 2));
+        assert_eq!(reader.node_blobs, 0..1);
+        assert_eq!(reader.way_blobs, 0..2);
+        assert_eq!(reader.relation_blobs, 1..3);
         if let Blob::Zlib(_) = reader.read_blob(2)? {
         } else {
             return Err(anyhow!("failed to read blob"));
