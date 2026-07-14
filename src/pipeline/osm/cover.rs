@@ -19,7 +19,7 @@ pub fn cover_nodes<R: Read + Seek + Send>(
     workdir: &Path,
 ) -> Result<U64Table> {
     let num_blobs = (blobs.1 - blobs.0) as u64;
-    let progress_bar = make_progress_bar(progress, "osm.cov.n", num_blobs, "blobs → nodes");
+    let progress_bar = make_progress_bar(progress, "osm.cover.nodes ", num_blobs, "blobs → nodes");
     let out = workdir.join("covered-nodes");
     if out.exists() {
         return Ok(U64Table::open(&out)?);
@@ -30,11 +30,12 @@ pub fn cover_nodes<R: Read + Seek + Send>(
 
     let mut num_covered_nodes = 0;
     thread::scope(|s| {
+        let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (node_tx, node_rx) = sync_channel::<u64>(num_workers * 1024);
 
-        let producer_thread = s.spawn(|| read_blobs(reader, blobs, &progress_bar, blob_tx));
+        let producer_thread = s.spawn(|| read_blobs(reader, blobs, blob_tx));
 
         let handler_thread = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -50,6 +51,7 @@ pub fn cover_nodes<R: Read + Seek + Send>(
                         }
                     }
                 }
+                progress_bar.inc(1);
                 Ok(())
             })
         });
@@ -88,13 +90,14 @@ pub fn cover_ways<R: Read + Seek + Send>(
     }
 
     let mut num_covered_ways = 0;
-    let progress_bar = make_progress_bar(progress, "osm.cov.w", num_blobs, "blobs → ways");
+    let progress_bar = make_progress_bar(progress, "osm.cover.ways  ", num_blobs, "blobs → ways");
     thread::scope(|s| {
+        let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (way_tx, way_rx) = sync_channel::<u64>(num_workers * 1024);
 
-        let producer_thread = s.spawn(|| read_blobs(reader, blobs, &progress_bar, blob_tx));
+        let producer_thread = s.spawn(|| read_blobs(reader, blobs, blob_tx));
 
         let handler_thread = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -114,6 +117,7 @@ pub fn cover_ways<R: Read + Seek + Send>(
                         }
                     }
                 }
+                progress_bar.inc(1);
                 Ok(())
             })
         });
@@ -155,14 +159,16 @@ pub fn cover_relations<R: Read + Seek + Send>(
     }
 
     let num_blobs = (blobs.1 - blobs.0) as u64;
-    let progress_bar = make_progress_bar(progress, "osm.cov.r", num_blobs, "blobs → relations");
+    let progress_bar =
+        make_progress_bar(progress, "osm.cover.rels  ", num_blobs, "blobs → relations");
     let mut num_relations = 0;
     thread::scope(|s| {
+        let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (rel_tx, rel_rx) = sync_channel::<u64>(num_workers * 1024);
 
-        let producer_thread = s.spawn(|| read_blobs(reader, blobs, &progress_bar, blob_tx));
+        let producer_thread = s.spawn(|| read_blobs(reader, blobs, blob_tx));
 
         let handler_thread = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -206,6 +212,7 @@ pub fn cover_relations<R: Read + Seek + Send>(
                         }
                     }
                 }
+                progress_bar.inc(1);
                 Ok(())
             })
         });
