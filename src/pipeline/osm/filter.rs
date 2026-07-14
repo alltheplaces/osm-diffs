@@ -134,7 +134,7 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
     let mut num_way_refs = 0;
     let progress_bar = super::make_progress_bar(
         progress,
-        "osm.filter.rels",
+        "osm.filter.rels ",
         reader.count_relation_blobs() as u64,
         "blobs → relations",
     );
