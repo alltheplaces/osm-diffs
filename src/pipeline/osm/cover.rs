@@ -1,4 +1,4 @@
-use super::{BlobReader, ParentChainExt, make_progress_bar, read_blobs};
+use super::{BlobReader, ParentChainExt, make_progress_bar};
 use crate::{coverage::Coverage, u64_table, u64_table::U64Table};
 use anyhow::{Ok, Result};
 use indicatif::MultiProgress;
@@ -13,13 +13,16 @@ use std::thread;
 
 pub fn cover_nodes<R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
     coverage: &Coverage,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<U64Table> {
-    let num_blobs = (blobs.1 - blobs.0) as u64;
-    let progress_bar = make_progress_bar(progress, "osm.cover.nodes ", num_blobs, "blobs → nodes");
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.cover.nodes ",
+        reader.count_node_blobs() as u64,
+        "blobs → nodes",
+    );
     let out = workdir.join("covered-nodes");
     if out.exists() {
         return Ok(U64Table::open(&out)?);
@@ -35,9 +38,9 @@ pub fn cover_nodes<R: Read + Seek + Send>(
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (node_tx, node_rx) = sync_channel::<u64>(num_workers * 1024);
 
-        let producer_thread = s.spawn(|| read_blobs(reader, blobs, blob_tx));
+        let producer = s.spawn(|| reader.send_node_blobs(blob_tx));
 
-        let handler_thread = s.spawn(move || {
+        let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let node_tx = node_tx.clone();
                 let data = blob.into_data(); // decompress
@@ -56,16 +59,15 @@ pub fn cover_nodes<R: Read + Seek + Send>(
             })
         });
 
-        let writer_thread = s.spawn(|| {
+        let writer = s.spawn(|| {
             num_covered_nodes = u64_table::create(node_rx, workdir, &tmp)?;
             Ok(())
         });
 
-        producer_thread
-            .join()
-            .expect("producer panic")
-            .and(handler_thread.join().expect("handler panic"))
-            .and(writer_thread.join().expect("writer panic"))
+        writer.join().expect("writer panic")?;
+        handler.join().expect("handler panic")?;
+        producer.join().expect("producer panic")?;
+        Ok(())
     })?;
 
     rename(&tmp, &out)?;
@@ -76,12 +78,10 @@ pub fn cover_nodes<R: Read + Seek + Send>(
 
 pub fn cover_ways<R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
     covered_nodes: &U64Table,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<U64Table> {
-    let num_blobs = (blobs.1 - blobs.0) as u64;
     let out = workdir.join("covered-ways");
     let mut tmp = out.clone();
     tmp.add_extension("tmp");
@@ -90,16 +90,21 @@ pub fn cover_ways<R: Read + Seek + Send>(
     }
 
     let mut num_covered_ways = 0;
-    let progress_bar = make_progress_bar(progress, "osm.cover.ways  ", num_blobs, "blobs → ways");
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.cover.ways  ",
+        reader.count_way_blobs() as u64,
+        "blobs → ways",
+    );
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (way_tx, way_rx) = sync_channel::<u64>(num_workers * 1024);
 
-        let producer_thread = s.spawn(|| read_blobs(reader, blobs, blob_tx));
+        let producer = s.spawn(|| reader.send_way_blobs(blob_tx));
 
-        let handler_thread = s.spawn(move || {
+        let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
@@ -123,16 +128,15 @@ pub fn cover_ways<R: Read + Seek + Send>(
         });
 
         // Thread to sort way ids and write the resulting table to the working directory.
-        let writer_thread = s.spawn(|| {
+        let writer = s.spawn(|| {
             num_covered_ways = crate::u64_table::create(way_rx, workdir, &tmp)?;
             Ok(())
         });
 
-        producer_thread
-            .join()
-            .expect("producer panic")
-            .and(handler_thread.join().expect("handler panic"))
-            .and(writer_thread.join().expect("writer panic"))
+        handler.join().expect("handler panic")?;
+        writer.join().expect("writer panic")?;
+        producer.join().expect("producer panic")?;
+        Ok(())
     })?;
 
     rename(&tmp, &out)?;
@@ -144,7 +148,6 @@ pub fn cover_ways<R: Read + Seek + Send>(
 // https://github.com/diffed-places/pipeline/issues/141
 pub fn cover_relations<R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
     covered_nodes: &U64Table,
     covered_ways: &U64Table,
     relation_parents: &HashMap<u64, u64>,
@@ -158,9 +161,12 @@ pub fn cover_relations<R: Read + Seek + Send>(
         return Ok(U64Table::open(&out)?);
     }
 
-    let num_blobs = (blobs.1 - blobs.0) as u64;
-    let progress_bar =
-        make_progress_bar(progress, "osm.cover.rels  ", num_blobs, "blobs → relations");
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.cover.rels  ",
+        reader.count_relation_blobs() as u64,
+        "blobs → relations",
+    );
     let mut num_relations = 0;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
@@ -168,9 +174,9 @@ pub fn cover_relations<R: Read + Seek + Send>(
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (rel_tx, rel_rx) = sync_channel::<u64>(num_workers * 1024);
 
-        let producer_thread = s.spawn(|| read_blobs(reader, blobs, blob_tx));
+        let producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
 
-        let handler_thread = s.spawn(move || {
+        let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
@@ -218,16 +224,15 @@ pub fn cover_relations<R: Read + Seek + Send>(
         });
 
         // Thread to sort way ids and write the resulting table to the working directory.
-        let writer_thread = s.spawn(|| {
+        let writer = s.spawn(|| {
             num_relations = crate::u64_table::create(rel_rx, workdir, &tmp)?;
             Ok(())
         });
 
-        producer_thread
-            .join()
-            .expect("producer panic")
-            .and(handler_thread.join().expect("handler panic"))
-            .and(writer_thread.join().expect("writer panic"))
+        handler.join().expect("handler panic")?;
+        writer.join().expect("writer panic")?;
+        producer.join().expect("producer panic")?;
+        Ok(())
     })?;
 
     rename(&tmp, &out)?;

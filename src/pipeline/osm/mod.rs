@@ -41,23 +41,16 @@ pub fn import_osm(
     let mut file = File::open(&pbf).with_context(pbf_error)?;
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
 
-    // TODO: Simplify the BlobReader API, then remove these variables.
-    let node_blobs = (reader.node_blobs.start, reader.node_blobs.end);
-    let way_blobs = (reader.way_blobs.start, reader.way_blobs.end);
-    let rel_blobs = (reader.relation_blobs.start, reader.relation_blobs.end);
-
     let coverage = Coverage::load(coverage)
         .with_context(|| format!("could not open coverage file `{:?}`", coverage))?;
 
-    let relation_parents = build_relation_parents(&mut reader, rel_blobs, progress)?;
+    let relation_parents = build_relation_parents(&mut reader, progress)?;
 
     // Find which nodes, ways and relations lie within the coverage.
-    let covered_nodes = cover::cover_nodes(&mut reader, node_blobs, &coverage, progress, workdir)?;
-    let covered_ways =
-        cover::cover_ways(&mut reader, way_blobs, &covered_nodes, progress, workdir)?;
+    let covered_nodes = cover::cover_nodes(&mut reader, &coverage, progress, workdir)?;
+    let covered_ways = cover::cover_ways(&mut reader, &covered_nodes, progress, workdir)?;
     let covered_relations = cover::cover_relations(
         &mut reader,
-        rel_blobs,
         &covered_nodes,
         &covered_ways,
         &relation_parents,
@@ -67,7 +60,6 @@ pub fn import_osm(
 
     let relations = filter::filter_relations(
         &mut reader,
-        rel_blobs,
         &coverage,
         &covered_relations,
         progress,
@@ -76,7 +68,6 @@ pub fn import_osm(
 
     let ways = filter::filter_ways(
         &mut reader,
-        way_blobs,
         &coverage,
         &covered_ways,
         &relations,
@@ -86,7 +77,6 @@ pub fn import_osm(
 
     let nodes = filter::filter_nodes(
         &mut reader,
-        node_blobs,
         &coverage,
         &covered_nodes,
         &ways,
@@ -175,32 +165,22 @@ pub trait FeatureStore: Send + Sync {
     fn get_nth_relation(&self, n: u64) -> Option<Relation>;
 }
 
-fn read_blobs<R: Read + Seek + Send>(
-    reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
-    out: SyncSender<Blob>,
-) -> Result<()> {
-    for i in blobs.0..blobs.1 {
-        let blob = reader.read_blob(i)?;
-        out.send(blob)?;
-    }
-
-    Ok(())
-}
-
 fn build_relation_parents<R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
     progress: &MultiProgress,
 ) -> Result<HashMap<u64, u64>> {
-    let num_blobs = (blobs.1 - blobs.0) as u64;
-    let progress_bar = make_progress_bar(progress, "osm.prt.r", num_blobs, "blobs");
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.prt.r",
+        reader.count_relation_blobs() as u64,
+        "blobs",
+    );
     let mut result = HashMap::<u64, u64>::new();
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let producer = s.spawn(|| read_blobs(reader, blobs, blob_tx));
+        let producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
         let consumer = s.spawn(|| {
             result = blob_rx
                 .into_iter()
@@ -232,10 +212,9 @@ fn build_relation_parents<R: Read + Seek + Send>(
                 )?;
             Ok(())
         });
-        producer
-            .join()
-            .expect("panic in producer thread")
-            .and(consumer.join().expect("panic in consumer thread"))
+        consumer.join().expect("panic in consumer")?;
+        producer.join().expect("panic in producer")?;
+        Ok(())
     })?;
 
     progress_bar.finish_with_message(format!("blobs → {} relation parents", result.len()));
@@ -294,12 +273,43 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
         })
     }
 
-    pub fn read_blob(&mut self, blob: usize) -> Result<Blob> {
-        let (offset, len) = self.blobs[blob];
-        Self::read_blob_internal(self.reader, offset, len)
+    pub fn count_node_blobs(&self) -> usize {
+        self.node_blobs.len()
     }
 
-    fn read_blob_internal(reader: &mut R, offset: u64, len: usize) -> Result<Blob> {
+    pub fn count_way_blobs(&self) -> usize {
+        self.way_blobs.len()
+    }
+
+    pub fn count_relation_blobs(&self) -> usize {
+        self.relation_blobs.len()
+    }
+
+    pub fn send_node_blobs(&mut self, tx: SyncSender<Blob>) -> Result<()> {
+        for i in self.node_blobs.clone() {
+            let (offset, len) = self.blobs[i];
+            tx.send(Self::read_blob(self.reader, offset, len)?)?;
+        }
+        Ok(())
+    }
+
+    pub fn send_way_blobs(&mut self, tx: SyncSender<Blob>) -> Result<()> {
+        for i in self.way_blobs.clone() {
+            let (offset, len) = self.blobs[i];
+            tx.send(Self::read_blob(self.reader, offset, len)?)?;
+        }
+        Ok(())
+    }
+
+    pub fn send_relation_blobs(&mut self, tx: SyncSender<Blob>) -> Result<()> {
+        for i in self.relation_blobs.clone() {
+            let (offset, len) = self.blobs[i];
+            tx.send(Self::read_blob(self.reader, offset, len)?)?;
+        }
+        Ok(())
+    }
+
+    fn read_blob(reader: &mut R, offset: u64, len: usize) -> Result<Blob> {
         let mut buf = Vec::with_capacity(len);
         reader.seek(SeekFrom::Start(offset))?;
 
@@ -343,7 +353,7 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
             let mut right = blobs.len();
             while left < right {
                 let mid = left + (right - left) / 2;
-                let blob = Self::read_blob_internal(reader, blobs[mid].0, blobs[mid].1)?;
+                let blob = Self::read_blob(reader, blobs[mid].0, blobs[mid].1)?;
                 if Self::classify(blob)? < 2 {
                     left = mid + 1;
                 } else {
@@ -358,7 +368,7 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
             let mut right = blobs.len();
             while left < right {
                 let mid = left + (right - left) / 2;
-                let blob = Self::read_blob_internal(reader, blobs[mid].0, blobs[mid].1)?;
+                let blob = Self::read_blob(reader, blobs[mid].0, blobs[mid].1)?;
                 if Self::classify(blob)? < 3 {
                     left = mid + 1;
                 } else {
@@ -576,7 +586,9 @@ mod tests {
         assert_eq!(reader.node_blobs, 0..1);
         assert_eq!(reader.way_blobs, 0..2);
         assert_eq!(reader.relation_blobs, 1..3);
-        if let Blob::Zlib(_) = reader.read_blob(2)? {
+        let (tx, rx) = sync_channel::<Blob>(5);
+        reader.send_node_blobs(tx)?;
+        if let Blob::Zlib(_) = rx.recv()? {
         } else {
             return Err(anyhow!("failed to read blob"));
         }

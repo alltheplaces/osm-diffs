@@ -114,7 +114,6 @@ impl<'a> FeatureStore for FilteredFeatureStore<'a> {
 // https://github.com/diffed-places/pipeline/issues/141
 pub fn filter_relations<'a, R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
     coverage: &Coverage,
     covered_relations: &U64Table,
     progress: &MultiProgress,
@@ -130,12 +129,15 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
     let node_refs_path = workdir.join("osm-filtered-relations.node-refs.tmp");
     let way_refs_path = workdir.join("osm-filtered-relations.way-refs.tmp");
 
-    let num_blobs = (blobs.1 - blobs.0) as u64;
     let mut num_relations = 0;
     let mut num_node_refs = 0;
     let mut num_way_refs = 0;
-    let progress_bar =
-        super::make_progress_bar(progress, "osm.filter.r", num_blobs, "blobs → relations");
+    let progress_bar = super::make_progress_bar(
+        progress,
+        "osm.filter.rels",
+        reader.count_relation_blobs() as u64,
+        "blobs → relations",
+    );
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -144,7 +146,7 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
         let (node_ref_tx, node_ref_rx) = sync_channel::<u64>(8192);
         let (way_ref_tx, way_ref_rx) = sync_channel::<u64>(8192);
 
-        let producer = s.spawn(|| super::read_blobs(reader, blobs, blob_tx));
+        let producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
 
         let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -230,25 +232,20 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
             Ok(())
         });
 
+        rel_writer
+            .join()
+            .expect("panic in filter_relations rel_writer")?;
+        node_ref_writer
+            .join()
+            .expect("panic in filter_relations node_ref_writer")?;
+        way_ref_writer
+            .join()
+            .expect("panic in filter_relations way_ref_writer")?;
+        handler.join().expect("panic in filter_relations handler")?;
         producer
             .join()
-            .expect("panic in filter_relations producer")
-            .and(handler.join().expect("panic in filter_relations handler"))
-            .and(
-                rel_writer
-                    .join()
-                    .expect("panic in filter_relations rel_writer"),
-            )
-            .and(
-                node_ref_writer
-                    .join()
-                    .expect("panic in filter_ways node_ref_writer"),
-            )
-            .and(
-                way_ref_writer
-                    .join()
-                    .expect("panic in filter_ways way_ref_writer"),
-            )
+            .expect("panic in filter_relations producer")?;
+        Ok(())
     })?;
 
     // Assemble out output file "osm-filtered-relations" and clean up temporary intermediates.
@@ -277,7 +274,6 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
 
 pub fn filter_ways<'a, R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
     coverage: &Coverage,
     covered_ways: &U64Table,
     filtered_relations: &FilteredFile,
@@ -299,18 +295,21 @@ pub fn filter_ways<'a, R: Read + Seek + Send>(
     let index_keys_path = workdir.join("osm-filtered-ways.index.keys.tmp");
     let index_data_path = workdir.join("osm-filtered-ways.index.data.tmp");
 
-    let num_blobs = (blobs.1 - blobs.0) as u64;
     let mut num_ways = 0;
     let mut num_node_refs = 0;
-    let progress_bar =
-        super::make_progress_bar(progress, "osm.filter.w", num_blobs, "blobs → ways");
+    let progress_bar = super::make_progress_bar(
+        progress,
+        "osm.filter.ways ",
+        reader.count_way_blobs() as u64,
+        "blobs → ways",
+    );
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (way_tx, way_rx) = sync_channel::<Way>(4096);
         let (node_ref_tx, node_ref_rx) = sync_channel::<u64>(8192);
-        let producer = s.spawn(|| super::read_blobs(reader, blobs, blob_tx));
+        let producer = s.spawn(|| reader.send_way_blobs(blob_tx));
 
         let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -452,7 +451,6 @@ fn collect_way_nodes(way: &osm_pbf_iter::Way) -> Vec<u64> {
 #[allow(clippy::too_many_arguments)]
 pub fn filter_nodes<'a, R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    blobs: (usize, usize),
     coverage: &Coverage,
     covered_nodes: &U64Table,
     filtered_ways: &FilteredFile,
@@ -470,19 +468,22 @@ pub fn filter_nodes<'a, R: Read + Seek + Send>(
     let filtered_nodes_data_path = workdir.join("osm-filtered-nodes.data.tmp");
     let filtered_nodes_offsets_path = workdir.join("osm-filtered-nodes.offsets.tmp");
 
-    let num_blobs = (blobs.1 - blobs.0) as u64;
     let mut num_coords = 0;
     let mut num_nodes = 0;
 
-    let progress_bar =
-        super::make_progress_bar(progress, "osm.filter.n", num_blobs, "blobs → nodes");
+    let progress_bar = super::make_progress_bar(
+        progress,
+        "osm.filter.nodes",
+        reader.count_node_blobs() as u64,
+        "blobs → nodes",
+    );
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (node_tx, node_rx) = sync_channel::<Node>(8192);
         let (coords_tx, coords_rx) = sync_channel::<Coords>(8192);
-        let producer = s.spawn(|| super::read_blobs(reader, blobs, blob_tx));
+        let producer = s.spawn(|| reader.send_node_blobs(blob_tx));
         let handler = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let coords_tx = coords_tx.clone();
