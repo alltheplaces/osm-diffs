@@ -1,14 +1,15 @@
 use super::BlobReader;
-use crate::make_progress_bar;
+use crate::{make_progress_bar, matchers::MatchMask, u64_table, u64_table::U64Table};
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
-use indicatif::MultiProgress;
+use indicatif::{MultiProgress, ProgressBar};
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use rayon::prelude::*;
 use std::{
     fs::File,
     path::{Path, PathBuf},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
         mpsc::{Receiver, sync_channel},
     },
@@ -19,20 +20,66 @@ pub fn prune_relations(
     reader: &mut BlobReader<File>,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<()> {
+) -> Result<U64Table> {
+    let out_path = PathBuf::from(workdir).join("osm-pruned-relations");
+    if out_path.exists() {
+        return U64Table::open(&out_path);
+    }
+
     let progress_bar = make_progress_bar(
         progress,
         "osm.prune.rels  ",
-        reader.count_relation_blobs() as u64,
+        (reader.count_relation_blobs() as u64) * 3, // three passes
         "blobs",
     );
 
-    let mut relations_graph: Option<PathBuf> = None;
+    // First pass.
+    let keep_1_path = PathBuf::from(workdir).join("osm-pruned-relations.1.keep");
+    let graph_1_path = PathBuf::from(workdir).join("osm-pruned-relations.1.graph");
+    prune_relations_pass_1(reader, &progress_bar, workdir, &keep_1_path, &graph_1_path)?;
+    let keep_1 = U64Table::open(&keep_1_path)?;
+    let graph = graph::Graph::open(&graph_1_path)?;
+
+    // Second pass.
+    let keep_2_path = PathBuf::from(workdir).join("osm-pruned-relations.2.keep");
+    prune_relations_pass_2(
+        reader,
+        &keep_1,
+        &graph,
+        &progress_bar,
+        workdir,
+        &keep_2_path,
+    )?;
+    drop(keep_1);
+    drop(graph);
+    let keep_2 = U64Table::open(&keep_2_path)?;
+
+    // Third pass.
+    let tmp_path = PathBuf::from(workdir).join("osm-pruned-relations.tmp");
+    let stats = prune_relations_pass_3(reader, &keep_2, &progress_bar, workdir, &tmp_path)?;
+    std::fs::rename(&tmp_path, &out_path)?;
+
+    progress_bar.finish_with_message(format!(
+        "blobs → {} nodes, {} ways, {} relations",
+        stats.node_count, stats.way_count, stats.relation_count,
+    ));
+
+    U64Table::open(&out_path)
+}
+
+fn prune_relations_pass_1(
+    reader: &mut BlobReader<File>,
+    progress_bar: &ProgressBar,
+    workdir: &Path,
+    out_keep_path: &Path,
+    out_graph_path: &Path,
+) -> Result<()> {
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let (edge_tx, edge_rx) = sync_channel::<graph::Edge>(32768);
+        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
+        let (edge_tx, edge_rx) = sync_channel::<graph::Edge>(64 * 1024);
         let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
         let blob_consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -40,6 +87,16 @@ pub fn prune_relations(
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Relation(rel) = primitive {
+                        // Build table of relations worth keeping.
+                        let mut mask = MatchMask::default();
+                        for (key, value) in rel.tags() {
+                            mask.add_tag(key, value);
+                        }
+                        if !mask.is_empty() {
+                            keep_tx.send(rel.id)?;
+                        }
+
+                        // Build relations graph.
                         for (_, member_id, member_type) in rel.members() {
                             if member_type == RelationMemberType::Relation {
                                 edge_tx.send(graph::Edge {
@@ -54,25 +111,126 @@ pub fn prune_relations(
                 Ok(())
             })
         });
-        let graph_writer = s.spawn(|| {
-            relations_graph = Some(write_relations_graph(edge_rx, workdir)?);
-            Ok(())
-        });
-        graph_writer.join().expect("panic in edge_writer")?;
+        let keep_writer = s.spawn(|| u64_table::create(keep_rx, workdir, out_keep_path));
+        let graph_writer = s.spawn(|| write_relations_graph(edge_rx, workdir, out_graph_path));
+        keep_writer.join().expect("panic in keep_writer")?;
+        graph_writer.join().expect("panic in graph_writer")?;
         blob_consumer.join().expect("panic in consumer")?;
         blob_producer.join().expect("panic in producer")?;
         Ok(())
-    })?;
-    let _g = graph::Graph::open(&relations_graph.expect("relations_graph"))?;
-
-    progress_bar.finish();
-
-    Ok(())
+    })
 }
 
-fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path) -> Result<PathBuf> {
-    let out_path = workdir.join("osm-pruned-relations-graph");
-    let mut writer = graph::Writer::create(&out_path)?;
+fn prune_relations_pass_2(
+    reader: &mut BlobReader<File>,
+    keep_1: &U64Table,
+    graph: &graph::Graph<'_>,
+    progress_bar: &ProgressBar,
+    workdir: &Path,
+    out: &Path,
+) -> Result<()> {
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let num_workers = usize::from(thread::available_parallelism()?);
+        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
+        let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
+        let blob_consumer = s.spawn(move || {
+            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
+                let data = blob.into_data(); // decompress
+                let block = PrimitiveBlock::parse(&data);
+                for primitive in block.primitives() {
+                    if let Primitive::Relation(rel) = primitive
+                        && graph.ancestors(rel.id).any(|id| keep_1.contains(id))
+                    {
+                        for id in graph.ancestors(rel.id) {
+                            keep_tx.send(id)?;
+                        }
+                    }
+                }
+                progress_bar.inc(1);
+                Ok(())
+            })
+        });
+        let pruned_writer = s.spawn(|| u64_table::create(keep_rx, workdir, out));
+        pruned_writer.join().expect("panic in pruned_writer")?;
+        blob_consumer.join().expect("panic in blob_consumer")?;
+        blob_producer.join().expect("panic in blob_producer")?;
+        Ok(())
+    })
+}
+
+#[derive(Clone, Default)]
+struct PruneRelationsPass3Stats {
+    node_count: u64,
+    way_count: u64,
+    relation_count: u64,
+}
+
+fn prune_relations_pass_3(
+    reader: &mut BlobReader<File>,
+    keep_2: &U64Table,
+    progress_bar: &ProgressBar,
+    workdir: &Path,
+    out: &Path,
+) -> Result<PruneRelationsPass3Stats> {
+    let stats = Arc::new(Mutex::new(PruneRelationsPass3Stats::default()));
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let num_workers = usize::from(thread::available_parallelism()?);
+        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
+        let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
+        let blob_consumer_stats = stats.clone();
+        let blob_consumer = s.spawn(move || {
+            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
+                let mut node_count = 0;
+                let mut way_count = 0;
+                let mut relation_count = 0;
+                let data = blob.into_data(); // decompress
+                let block = PrimitiveBlock::parse(&data);
+                for primitive in block.primitives() {
+                    if let Primitive::Relation(rel) = primitive
+                        && keep_2.contains(rel.id)
+                    {
+                        keep_tx.send(rel.id * 10 + 3)?;
+                        for (_role_name, member_id, member_type) in rel.members() {
+                            match member_type {
+                                RelationMemberType::Node => {
+                                    node_count += 1;
+                                    keep_tx.send(member_id * 10 + 1)?
+                                }
+                                RelationMemberType::Way => {
+                                    way_count += 1;
+                                    keep_tx.send(member_id * 10 + 2)?
+                                }
+                                RelationMemberType::Relation => {
+                                    relation_count += 1;
+                                    keep_tx.send(member_id * 10 + 3)?
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut s = blob_consumer_stats.lock().unwrap();
+                s.node_count += node_count;
+                s.way_count += way_count;
+                s.relation_count += relation_count;
+                progress_bar.inc(1);
+                Ok(())
+            })
+        });
+        let pruned_writer = s.spawn(|| u64_table::create(keep_rx, workdir, out));
+        pruned_writer.join().expect("panic in pruned_writer")?;
+        blob_consumer.join().expect("panic in blob_consumer")?;
+        blob_producer.join().expect("panic in blob_producer")?;
+        Ok(())
+    })?;
+    Ok(stats.lock().expect("lock").clone())
+}
+
+fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path, out: &Path) -> Result<()> {
+    let mut writer = graph::Writer::create(out)?;
     let num_edges = AtomicU64::new(0);
     let sorter: ExternalSorter<graph::Edge, std::io::Error, LimitedBufferBuilder> =
         ExternalSorterBuilder::new()
@@ -90,7 +248,7 @@ fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path) -> Result
         writer.write(edge?)?;
     }
     writer.close()?;
-    Ok(out_path)
+    Ok(())
 }
 
 mod graph {
@@ -153,7 +311,6 @@ mod graph {
         /// Returns an iterator over the reflexive transitive closure of the
         /// child-parent relation, starting at `start`. Each node is yielded at
         /// most once, so the iterator terminates even if the graph is cyclic.
-        #[allow(unused)]
         pub fn ancestors(&'a self, start: u64) -> impl Iterator<Item = u64> + 'a {
             let mut visited = HashSet::with_capacity(5);
             visited.insert(start);
