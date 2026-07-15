@@ -24,15 +24,16 @@ use std::{
 ///
 /// ## Outputs
 ///
-/// * A table with OpenStreetMap feature IDs, indicating which
-///   OSM features (nodes, ways and relations) are necessary
-///   for conflating relations.
+/// * `osm-prune-relations.keep`, a table that tells which OpenStreetMap
+///   nodes, ways and relations need to be indexed for conflating OSM relations
+///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
+///   to access their members (which can be nodes, ways or relations).
 pub fn prune_relations(
     reader: &mut BlobReader<File>,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<U64Table> {
-    let out_path = PathBuf::from(workdir).join("osm-pruned-relations");
+    let out_path = PathBuf::from(workdir).join("osm-prune-relations.keep");
     if out_path.exists() {
         return U64Table::open(&out_path);
     }
@@ -45,14 +46,14 @@ pub fn prune_relations(
     );
 
     // First pass.
-    let keep_1_path = PathBuf::from(workdir).join("osm-pruned-relations-pass-1.keep");
-    let graph_path = PathBuf::from(workdir).join("osm-pruned-relations-pass-1.graph");
+    let keep_1_path = PathBuf::from(workdir).join("osm-prune-relations-pass-1.keep");
+    let graph_path = PathBuf::from(workdir).join("osm-prune-relations-pass-1.graph");
     prune_relations_pass_1(reader, &progress_bar, workdir, &keep_1_path, &graph_path)?;
     let keep_1 = U64Table::open(&keep_1_path)?;
     let graph = graph::Graph::open(&graph_path)?;
 
     // Second pass.
-    let tmp_path = PathBuf::from(workdir).join("osm-pruned-relations.tmp");
+    let tmp_path = PathBuf::from(workdir).join("osm-prune-relations.tmp");
     let stats = prune_relations_pass_2(reader, &keep_1, &graph, &progress_bar, workdir, &tmp_path)?;
     std::fs::rename(&tmp_path, &out_path)?;
 
@@ -74,7 +75,7 @@ pub fn prune_relations(
 ///
 /// * A `keep` table, indicating which OSM relations carry tags that
 ///   indicate potential conflation candidates. For most relations in
-///   OpenStreetMap, such as city boundaries or river networks, we don’t
+///   OpenStreetMap (such as city boundaries or river networks) we don’t
 ///   have any matchers in our conflation pipeline, so we can drop them
 ///   early.
 ///
@@ -157,9 +158,10 @@ struct PruneRelationsPass3Stats {
 ///
 /// ## Outputs
 ///
-/// * A table with OpenStreetMap feature IDs, indicating which
-///   OSM features (nodes, ways and relations) are necessary
-///   for conflating relations.
+/// * `osm-prune-relations.keep`, a table that tells which OpenStreetMap
+///   nodes, ways and relations need to be indexed for conflating OSM relations
+///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
+///   to access their members (which can be nodes, ways or relations).
 fn prune_relations_pass_2(
     reader: &mut BlobReader<File>,
     keep_1: &U64Table,
