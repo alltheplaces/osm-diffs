@@ -138,8 +138,9 @@ fn prune_relations_pass_1(
     })
 }
 
+/// High-level statistics for pruning steps.
 #[derive(Clone, Default)]
-struct PruneRelationsPass3Stats {
+struct PruneStats {
     node_count: u64,
     way_count: u64,
     relation_count: u64,
@@ -169,8 +170,8 @@ fn prune_relations_pass_2(
     progress_bar: &ProgressBar,
     workdir: &Path,
     out: &Path,
-) -> Result<PruneRelationsPass3Stats> {
-    let stats = Arc::new(Mutex::new(PruneRelationsPass3Stats::default()));
+) -> Result<PruneStats> {
+    let stats = Arc::new(Mutex::new(PruneStats::default()));
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
