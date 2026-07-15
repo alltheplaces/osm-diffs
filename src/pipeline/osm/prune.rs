@@ -16,6 +16,17 @@ use std::{
     thread,
 };
 
+/// Pipeline step `osm.prune.rels`.
+///
+/// ## Inputs
+///
+/// * OpenStreetMap relations.
+///
+/// ## Outputs
+///
+/// * A table with OpenStreetMap feature IDs, indicating which
+///   OSM features (nodes, ways and relations) are necessary
+///   for conflating relations.
 pub fn prune_relations(
     reader: &mut BlobReader<File>,
     progress: &MultiProgress,
@@ -29,34 +40,20 @@ pub fn prune_relations(
     let progress_bar = make_progress_bar(
         progress,
         "osm.prune.rels  ",
-        (reader.count_relation_blobs() as u64) * 3, // three passes
+        (reader.count_relation_blobs() as u64) * 2, // two passes
         "blobs",
     );
 
     // First pass.
-    let keep_1_path = PathBuf::from(workdir).join("osm-pruned-relations.1.keep");
-    let graph_1_path = PathBuf::from(workdir).join("osm-pruned-relations.1.graph");
-    prune_relations_pass_1(reader, &progress_bar, workdir, &keep_1_path, &graph_1_path)?;
+    let keep_1_path = PathBuf::from(workdir).join("osm-pruned-relations-pass-1.keep");
+    let graph_path = PathBuf::from(workdir).join("osm-pruned-relations-pass-1.graph");
+    prune_relations_pass_1(reader, &progress_bar, workdir, &keep_1_path, &graph_path)?;
     let keep_1 = U64Table::open(&keep_1_path)?;
-    let graph = graph::Graph::open(&graph_1_path)?;
+    let graph = graph::Graph::open(&graph_path)?;
 
     // Second pass.
-    let keep_2_path = PathBuf::from(workdir).join("osm-pruned-relations.2.keep");
-    prune_relations_pass_2(
-        reader,
-        &keep_1,
-        &graph,
-        &progress_bar,
-        workdir,
-        &keep_2_path,
-    )?;
-    drop(keep_1);
-    drop(graph);
-    let keep_2 = U64Table::open(&keep_2_path)?;
-
-    // Third pass.
     let tmp_path = PathBuf::from(workdir).join("osm-pruned-relations.tmp");
-    let stats = prune_relations_pass_3(reader, &keep_2, &progress_bar, workdir, &tmp_path)?;
+    let stats = prune_relations_pass_2(reader, &keep_1, &graph, &progress_bar, workdir, &tmp_path)?;
     std::fs::rename(&tmp_path, &out_path)?;
 
     progress_bar.finish_with_message(format!(
@@ -67,6 +64,25 @@ pub fn prune_relations(
     U64Table::open(&out_path)
 }
 
+/// Pipeline step `osm.prune.rels`, pass 1 of 2.
+///
+/// ## Inputs
+///
+/// * OpenStreetMap relations.
+///
+/// ## Outputs
+///
+/// * A `keep` table, indicating which OSM relations carry tags that
+///   indicate potential conflation candidates. For most relations in
+///   OpenStreetMap, such as city boundaries or river networks, we don’t
+///   have any matchers in our conflation pipeline, so we can drop them
+///   early.
+///
+/// * A `graph` table with the containment hierarchy of relations. In the
+///   OpenStreetMap schema, relations may point to other relations as their
+///   members, forming a containment graph. (Theoretically, this graph is
+///   supposed to be acyclic, but in practice this is not always the case;
+///   we guard against cycles when traversing the graph).
 fn prune_relations_pass_1(
     reader: &mut BlobReader<File>,
     progress_bar: &ProgressBar,
@@ -121,45 +137,6 @@ fn prune_relations_pass_1(
     })
 }
 
-fn prune_relations_pass_2(
-    reader: &mut BlobReader<File>,
-    keep_1: &U64Table,
-    graph: &graph::Graph<'_>,
-    progress_bar: &ProgressBar,
-    workdir: &Path,
-    out: &Path,
-) -> Result<()> {
-    thread::scope(|s| {
-        let progress_bar = &progress_bar;
-        let num_workers = usize::from(thread::available_parallelism()?);
-        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
-        let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
-        let blob_consumer = s.spawn(move || {
-            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
-                let data = blob.into_data(); // decompress
-                let block = PrimitiveBlock::parse(&data);
-                for primitive in block.primitives() {
-                    if let Primitive::Relation(rel) = primitive
-                        && graph.ancestors(rel.id).any(|id| keep_1.contains(id))
-                    {
-                        for id in graph.ancestors(rel.id) {
-                            keep_tx.send(id)?;
-                        }
-                    }
-                }
-                progress_bar.inc(1);
-                Ok(())
-            })
-        });
-        let pruned_writer = s.spawn(|| u64_table::create(keep_rx, workdir, out));
-        pruned_writer.join().expect("panic in pruned_writer")?;
-        blob_consumer.join().expect("panic in blob_consumer")?;
-        blob_producer.join().expect("panic in blob_producer")?;
-        Ok(())
-    })
-}
-
 #[derive(Clone, Default)]
 struct PruneRelationsPass3Stats {
     node_count: u64,
@@ -167,9 +144,26 @@ struct PruneRelationsPass3Stats {
     relation_count: u64,
 }
 
-fn prune_relations_pass_3(
+/// Pipeline step `osm.prune.rels`, pass 2 of 2.
+///
+/// ## Inputs
+///
+/// * OpenStreetMap relations.
+///
+/// * The `keep` table produced by [prune_relations_pass_1].
+///
+/// * The `graph` with the OpenStreetMap relation hierarchy,
+///   also produced by [prune_relations_pass_1].
+///
+/// ## Outputs
+///
+/// * A table with OpenStreetMap feature IDs, indicating which
+///   OSM features (nodes, ways and relations) are necessary
+///   for conflating relations.
+fn prune_relations_pass_2(
     reader: &mut BlobReader<File>,
-    keep_2: &U64Table,
+    keep_1: &U64Table,
+    graph: &graph::Graph<'_>,
     progress_bar: &ProgressBar,
     workdir: &Path,
     out: &Path,
@@ -191,7 +185,7 @@ fn prune_relations_pass_3(
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Relation(rel) = primitive
-                        && keep_2.contains(rel.id)
+                        && graph.ancestors(rel.id).any(|id| keep_1.contains(id))
                     {
                         keep_tx.send(rel.id * 10 + 3)?;
                         for (_role_name, member_id, member_type) in rel.members() {
