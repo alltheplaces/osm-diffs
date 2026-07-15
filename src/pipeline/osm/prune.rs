@@ -18,22 +18,49 @@ use std::{
 
 /// Pipeline step `osm.prune.rels`.
 ///
-/// ## Inputs
+/// # Inputs
 ///
 /// * OpenStreetMap relations.
 ///
-/// ## Outputs
+/// # Outputs
 ///
-/// * `osm-prune-relations.keep`, a table that tells which OpenStreetMap
+/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
-pub fn prune_relations(
+///
+/// * `osm-prune.way-members`, a table that tells which OpenStreetMap nodes
+///   and ways need to be indexed for conflating OSM ways with AllThePlaces.
+///   To evaluate an OSM way as a match candidate, we need to access not only
+///   the way itself, but also its member nodes.
+pub fn prune(
+    reader: &mut BlobReader<File>,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<()> {
+    let relation_members = prune_relations(reader, progress, workdir)?;
+    let _way_members = prune_ways(reader, &relation_members, progress, workdir)?;
+    Ok(())
+}
+
+/// Pipeline step `osm.prune.rels`.
+///
+/// # Inputs
+///
+/// * OpenStreetMap relations.
+///
+/// # Outputs
+///
+/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+///   nodes, ways and relations need to be indexed for conflating OSM relations
+///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
+///   to access their members (which can be nodes, ways or relations).
+fn prune_relations(
     reader: &mut BlobReader<File>,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<U64Table> {
-    let out_path = PathBuf::from(workdir).join("osm-prune-relations.keep");
+    let out_path = PathBuf::from(workdir).join("osm-prune.relation-members");
     if out_path.exists() {
         return U64Table::open(&out_path);
     }
@@ -46,8 +73,8 @@ pub fn prune_relations(
     );
 
     // First pass.
-    let keep_1_path = PathBuf::from(workdir).join("osm-prune-relations-pass-1.keep");
-    let graph_path = PathBuf::from(workdir).join("osm-prune-relations-pass-1.graph");
+    let keep_1_path = PathBuf::from(workdir).join("osm-prune.relation-members-pass-1");
+    let graph_path = PathBuf::from(workdir).join("osm-prune.relation-graph");
     prune_relations_pass_1(reader, &progress_bar, workdir, &keep_1_path, &graph_path)?;
     let keep_1 = U64Table::open(&keep_1_path)?;
     let graph = graph::Graph::open(&graph_path)?;
@@ -67,23 +94,24 @@ pub fn prune_relations(
 
 /// Pipeline step `osm.prune.rels`, pass 1 of 2.
 ///
-/// ## Inputs
+/// # Inputs
 ///
 /// * OpenStreetMap relations.
 ///
-/// ## Outputs
+/// # Outputs
 ///
-/// * A `keep` table, indicating which OSM relations carry tags that
-///   indicate potential conflation candidates. For most relations in
-///   OpenStreetMap (such as city boundaries or river networks) we don’t
-///   have any matchers in our conflation pipeline, so we can drop them
-///   early.
+/// * `osm-prune.relation-members-pass-1`, a table indicating which
+///   OSM relations carry tags that indicate potential conflation
+///   candidates. For most relations in OpenStreetMap (such as city
+///   boundaries or river networks) we don’t have any matchers in our
+///   conflation pipeline, so we can drop them early.
 ///
-/// * A `graph` table with the containment hierarchy of relations. In the
-///   OpenStreetMap schema, relations may point to other relations as their
-///   members, forming a containment graph. (Theoretically, this graph is
-///   supposed to be acyclic, but in practice this is not always the case;
-///   we guard against cycles when traversing the graph).
+/// * `osm-prune.relation-graph`, a table with the containment
+///   hierarchy of relations. In the OpenStreetMap schema, relations
+///   may point to other relations as their members, forming a
+///   containment graph. (Theoretically, this graph is supposed to be
+///   acyclic, but in practice this is not always the case; we guard
+///   against cycles when traversing the graph).
 fn prune_relations_pass_1(
     reader: &mut BlobReader<File>,
     progress_bar: &ProgressBar,
@@ -148,18 +176,28 @@ struct PruneStats {
 
 /// Pipeline step `osm.prune.rels`, pass 2 of 2.
 ///
-/// ## Inputs
+/// # Inputs
 ///
 /// * OpenStreetMap relations.
 ///
-/// * The `keep` table produced by [prune_relations_pass_1].
+/// * `osm-prune.relation-members-pass-1`, a table indicating which
+///   OSM relations carry tags that indicate potential conflation
+///   candidates. For most relations in OpenStreetMap (such as city
+///   boundaries or river networks) we don’t have any matchers in our
+///   conflation pipeline, so we can drop them early. This input gets
+///   produced by [prune_relations_pass_1].
 ///
-/// * The `graph` with the OpenStreetMap relation hierarchy,
-///   also produced by [prune_relations_pass_1].
+/// * `osm-prune.relations-graph`, a table with the containment
+///   hierarchy of relations. In the OpenStreetMap schema, relations
+///   may point to other relations as their members, forming a
+///   containment graph. (Theoretically, this graph is supposed to be
+///   acyclic, but in practice this is not always the case; we guard
+///   against cycles when traversing the graph). Again, this thinput
+///   gets produces by [prune_relations_pass_1].
 ///
-/// ## Outputs
+/// # Outputs
 ///
-/// * `osm-prune-relations.keep`, a table that tells which OpenStreetMap
+/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
@@ -246,6 +284,104 @@ fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path, out: &Pat
     }
     writer.close()?;
     Ok(())
+}
+
+/// Pipeline step `osm.prune.ways`.
+///
+/// # Inputs
+///
+/// * OpenStreetMap ways.
+///
+/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+///   nodes, ways and relations need to be indexed for conflating OSM relations
+///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
+///   to access their members (which can be nodes, ways or relations).
+///   This input gets produced by [prune_relations].
+///
+/// # Outputs
+///
+/// * `osm-prune.way-members`, a table that tells which OpenStreetMap nodes
+///   and ways need to be indexed for conflating OSM ways with AllThePlaces.
+///   To evaluate an OSM way as a match candidate, we need to access not only
+///   the way itself, but also its member nodes.
+fn prune_ways(
+    reader: &mut BlobReader<File>,
+    relation_members: &U64Table,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<U64Table> {
+    let out_path = PathBuf::from(workdir).join("osm-prune.way-members");
+    if out_path.exists() {
+        return U64Table::open(&out_path);
+    }
+
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.prune.ways  ",
+        reader.count_way_blobs() as u64,
+        "blobs",
+    );
+
+    let mut tmp_path = out_path.clone();
+    tmp_path.add_extension("tmp");
+
+    let stats = Arc::new(Mutex::new(PruneStats::default()));
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let num_workers = usize::from(thread::available_parallelism()?);
+        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
+        let blob_producer = s.spawn(|| reader.send_way_blobs(blob_tx));
+        let blob_consumer_stats = stats.clone();
+        let blob_consumer = s.spawn(move || {
+            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
+                let mut node_count = 0;
+                let mut way_count = 0;
+                let data = blob.into_data(); // decompress
+                let block = PrimitiveBlock::parse(&data);
+                for primitive in block.primitives() {
+                    if let Primitive::Way(way) = primitive {
+                        let mut mask = MatchMask::default();
+                        for (key, value) in way.tags() {
+                            mask.add_tag(key, value);
+                        }
+
+                        let way_feature_id = way.id * 10 + 2;
+                        if !mask.is_empty() || relation_members.contains(way_feature_id) {
+                            keep_tx.send(way_feature_id)?;
+                            way_count += 1;
+                            for node_id in way.refs() {
+                                if node_id > 0 {
+                                    keep_tx.send(node_id as u64 * 10 + 1)?;
+                                    node_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+                let mut stats = blob_consumer_stats.lock().unwrap();
+                stats.node_count += node_count;
+                stats.way_count += way_count;
+                progress_bar.inc(1);
+                Ok(())
+            })
+        });
+        let pruned_writer = s.spawn(|| u64_table::create(keep_rx, workdir, &tmp_path));
+        pruned_writer.join().expect("panic in pruned_writer")?;
+        blob_consumer.join().expect("panic in blob_consumer")?;
+        blob_producer.join().expect("panic in blob_producer")?;
+        Ok(())
+    })?;
+    let stats = stats.lock().expect("lock").clone();
+    std::fs::rename(&tmp_path, &out_path)?;
+
+    // OSM ways don’t have relation members, so we don’t emit any relations.
+    progress_bar.finish_with_message(format!(
+        "blobs → {} nodes, {} ways",
+        stats.node_count, stats.way_count,
+    ));
+
+    U64Table::open(&out_path)
 }
 
 mod graph {
