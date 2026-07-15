@@ -1,5 +1,11 @@
-use super::BlobReader;
-use crate::{make_progress_bar, matchers::MatchMask, u64_table, u64_table::U64Table};
+use super::{BlobReader, Node};
+use crate::{
+    coverage::{Coverage, is_wikidata_key, parse_wikidata_ids},
+    make_progress_bar,
+    matchers::MatchMask,
+    u64_table,
+    u64_table::U64Table,
+};
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use indicatif::{MultiProgress, ProgressBar};
@@ -24,22 +30,31 @@ use std::{
 ///
 /// # Outputs
 ///
-/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+/// * `osm-prune.relations-and-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
 ///
-/// * `osm-prune.way-members`, a table that tells which OpenStreetMap nodes
+/// * `osm-prune.ways-and-members`, a table that tells which OpenStreetMap nodes
 ///   and ways need to be indexed for conflating OSM ways with AllThePlaces.
 ///   To evaluate an OSM way as a match candidate, we need to access not only
 ///   the way itself, but also its member nodes.
 pub fn prune(
     reader: &mut BlobReader<File>,
+    roi: &Coverage,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<()> {
-    let relation_members = prune_relations(reader, progress, workdir)?;
-    let _way_members = prune_ways(reader, &relation_members, progress, workdir)?;
+    let relations_and_members = prune_relations(reader, progress, workdir)?;
+    let ways_and_members = prune_ways(reader, &relations_and_members, progress, workdir)?;
+    prune_nodes(
+        reader,
+        &relations_and_members,
+        &ways_and_members,
+        roi,
+        progress,
+        workdir,
+    )?;
     Ok(())
 }
 
@@ -51,7 +66,7 @@ pub fn prune(
 ///
 /// # Outputs
 ///
-/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+/// * `osm-prune.relations-and-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
@@ -60,7 +75,7 @@ fn prune_relations(
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<U64Table> {
-    let out_path = PathBuf::from(workdir).join("osm-prune.relation-members");
+    let out_path = PathBuf::from(workdir).join("osm-prune.relations-and-members");
     if out_path.exists() {
         return U64Table::open(&out_path);
     }
@@ -73,7 +88,7 @@ fn prune_relations(
     );
 
     // First pass.
-    let keep_1_path = PathBuf::from(workdir).join("osm-prune.relation-members-pass-1");
+    let keep_1_path = PathBuf::from(workdir).join("osm-prune.relations-and-members-pass-1");
     let graph_path = PathBuf::from(workdir).join("osm-prune.relation-graph");
     prune_relations_pass_1(reader, &progress_bar, workdir, &keep_1_path, &graph_path)?;
     let keep_1 = U64Table::open(&keep_1_path)?;
@@ -100,7 +115,7 @@ fn prune_relations(
 ///
 /// # Outputs
 ///
-/// * `osm-prune.relation-members-pass-1`, a table indicating which
+/// * `osm-prune.relations-and-members-pass-1`, a table indicating which
 ///   OSM relations carry tags that indicate potential conflation
 ///   candidates. For most relations in OpenStreetMap (such as city
 ///   boundaries or river networks) we don’t have any matchers in our
@@ -170,6 +185,7 @@ fn prune_relations_pass_1(
 #[derive(Clone, Default)]
 struct PruneStats {
     node_count: u64,
+    coord_count: u64,
     way_count: u64,
     relation_count: u64,
 }
@@ -180,7 +196,7 @@ struct PruneStats {
 ///
 /// * OpenStreetMap relations.
 ///
-/// * `osm-prune.relation-members-pass-1`, a table indicating which
+/// * `osm-prune.relations-and-members-pass-1`, a table indicating which
 ///   OSM relations carry tags that indicate potential conflation
 ///   candidates. For most relations in OpenStreetMap (such as city
 ///   boundaries or river networks) we don’t have any matchers in our
@@ -197,7 +213,7 @@ struct PruneStats {
 ///
 /// # Outputs
 ///
-/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+/// * `osm-prune.relations-and-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
@@ -292,7 +308,7 @@ fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path, out: &Pat
 ///
 /// * OpenStreetMap ways.
 ///
-/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+/// * `osm-prune.relations-and-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
@@ -300,17 +316,17 @@ fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path, out: &Pat
 ///
 /// # Outputs
 ///
-/// * `osm-prune.way-members`, a table that tells which OpenStreetMap nodes
+/// * `osm-prune.ways-and-members`, a table that tells which OpenStreetMap nodes
 ///   and ways need to be indexed for conflating OSM ways with AllThePlaces.
 ///   To evaluate an OSM way as a match candidate, we need to access not only
 ///   the way itself, but also its member nodes.
 fn prune_ways(
     reader: &mut BlobReader<File>,
-    relation_members: &U64Table,
+    relations_and_members: &U64Table,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<U64Table> {
-    let out_path = PathBuf::from(workdir).join("osm-prune.way-members");
+    let out_path = PathBuf::from(workdir).join("osm-prune.ways-and-members");
     if out_path.exists() {
         return U64Table::open(&out_path);
     }
@@ -347,7 +363,7 @@ fn prune_ways(
                         }
 
                         let way_feature_id = way.id * 10 + 2;
-                        if !mask.is_empty() || relation_members.contains(way_feature_id) {
+                        if !mask.is_empty() || relations_and_members.contains(way_feature_id) {
                             keep_tx.send(way_feature_id)?;
                             way_count += 1;
                             for node_id in way.refs() {
@@ -382,6 +398,104 @@ fn prune_ways(
     ));
 
     U64Table::open(&out_path)
+}
+
+fn prune_nodes(
+    reader: &mut BlobReader<File>,
+    relations_and_members: &U64Table,
+    ways_and_members: &U64Table,
+    roi: &Coverage,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<()> {
+    let nodes_path = PathBuf::from(workdir).join("osm-prune.nodes");
+    let coords_path = PathBuf::from(workdir).join("osm-prune.coords");
+    if nodes_path.exists() && coords_path.exists() {
+        return Ok(());
+    }
+
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.prune.nodes ",
+        reader.count_node_blobs() as u64,
+        "blobs",
+    );
+
+    let stats = Arc::new(Mutex::new(PruneStats::default()));
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let num_workers = usize::from(thread::available_parallelism()?);
+        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (_node_tx, node_rx) = sync_channel::<Node>(32 * 1024);
+        // TODO: coord_tx, coord_tx
+        let blob_producer = s.spawn(|| reader.send_node_blobs(blob_tx));
+        let blob_consumer_stats = stats.clone();
+        let blob_consumer = s.spawn(move || {
+            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
+                let mut node_count = 0;
+                let mut coord_count = 0;
+                let data = blob.into_data(); // decompress
+                let block = PrimitiveBlock::parse(&data);
+                for primitive in block.primitives() {
+                    if let Primitive::Node(node) = primitive {
+                        let node_feature_id = node.id * 10 + 1;
+                        if keep_node(&node, roi) {
+                            // TODO: Build node, send to node_tx.
+                            node_count += 1;
+                        }
+
+                        if ways_and_members.contains(node_feature_id)
+                            || relations_and_members.contains(node_feature_id)
+                        {
+                            coord_count += 1;
+                        }
+                    }
+                }
+                let mut stats = blob_consumer_stats.lock().unwrap();
+                stats.node_count += node_count;
+                stats.coord_count += coord_count;
+                progress_bar.inc(1);
+                Ok(())
+            })
+        });
+        let coord_writer = s.spawn(|| Ok(())); // TODO
+        let node_writer = s.spawn(|| write_nodes(node_rx, &nodes_path));
+        coord_writer.join().expect("panic in coord_writer")?;
+        node_writer.join().expect("panic in node_writer")?;
+        blob_consumer.join().expect("panic in blob_consumer")?;
+        blob_producer.join().expect("panic in blob_producer")?;
+        Ok(())
+    })?;
+    let stats = stats.lock().expect("lock").clone();
+
+    progress_bar.finish_with_message(format!(
+        "blobs → {} nodes, {} coordinates",
+        stats.node_count, stats.coord_count,
+    ));
+
+    Ok(())
+}
+
+/// Determine whether an OpenStreetMap node is relevant for our pipeline.
+///
+/// Returns `true` if the node should be kept; `false` if it can be dropped.
+fn keep_node(node: &osm_pbf_iter::Node<'_>, roi: &Coverage) -> bool {
+    let mut mask = MatchMask::default();
+    let mut has_interesting_wikidata = false;
+    for (key, value) in &node.tags {
+        mask.add_tag(key, value);
+        if !has_interesting_wikidata && is_wikidata_key(key) {
+            has_interesting_wikidata =
+                parse_wikidata_ids(value).any(|qid| roi.contains_wikidata_item(qid));
+        }
+    }
+    !mask.is_empty() && (has_interesting_wikidata || roi.contains_lon_lat(node.lon, node.lat))
+}
+
+fn write_nodes(nodes: Receiver<Node>, _path: &Path) -> Result<()> {
+    // TODO
+    for _ in nodes {}
+    Ok(())
 }
 
 mod graph {

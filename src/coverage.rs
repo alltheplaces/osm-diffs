@@ -59,7 +59,7 @@ mod reader {
     use super::S2_CELL_ID_SHIFT;
     use anyhow::{Ok, Result, anyhow};
     use memmap2::Mmap;
-    use s2::cellid::CellID;
+    use s2::{cellid::CellID, latlng::LatLng};
     use std::fs::File;
     use std::path::Path;
 
@@ -93,6 +93,10 @@ mod reader {
             } else {
                 false
             }
+        }
+
+        pub fn contains_lon_lat(&self, lon: f64, lat: f64) -> bool {
+            self.contains_s2_cell(&CellID::from(LatLng::from_degrees(lat, lon)))
         }
 
         pub fn contains_wikidata_item(&self, id: u64) -> bool {
