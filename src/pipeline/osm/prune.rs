@@ -1,5 +1,6 @@
 use super::BlobReader;
 use crate::{
+    coverage::Coverage,
     make_progress_bar,
     matchers::MatchMask,
     tables::{Edge, GraphTable},
@@ -18,24 +19,25 @@ use std::{
 };
 
 /// Decides which parts of OpenStreetMap we need for conflation.
-pub struct Pruner {
-    // coverage: &Coverage,
+pub struct Pruner<'a> {
+    _coverage: &'a Coverage<'a>,
     keep_way_members: U64Table,
     keep_relations: U64Table,
     keep_relation_members: U64Table,
 }
 
-impl Pruner {
+impl<'a> Pruner<'a> {
     pub fn create(
         osm_reader: &mut BlobReader<File>,
-        // coverage: &Coverage,
+        coverage: &'a Coverage<'a>,
         progress: &MultiProgress,
         workdir: &Path,
-    ) -> Result<Pruner> {
+    ) -> Result<Pruner<'a>> {
         let (keep_relations, keep_relation_members) =
             prune_relations(osm_reader, progress, workdir)?;
         let keep_way_members = prune_ways(osm_reader, &keep_relation_members, progress, workdir)?;
         Ok(Pruner {
+            _coverage: coverage,
             keep_way_members,
             keep_relations,
             keep_relation_members,
