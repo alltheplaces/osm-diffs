@@ -6,5 +6,7 @@
 //! process the entire OpenStreetMap planet on cheap worker machine.
 
 mod coords_map;
+mod graph;
 
 pub use coords_map::CoordsMap;
+pub use graph::{Edge, GraphTable};
