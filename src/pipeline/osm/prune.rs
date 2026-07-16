@@ -16,31 +16,48 @@ use std::{
     thread,
 };
 
-/// Pipeline step `osm.prune.rels`.
-///
-/// # Inputs
-///
-/// * OpenStreetMap relations.
-///
-/// # Outputs
-///
-/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
-///   nodes, ways and relations need to be indexed for conflating OSM relations
-///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
-///   to access their members (which can be nodes, ways or relations).
-///
-/// * `osm-prune.way-members`, a table that tells which OpenStreetMap nodes
-///   and ways need to be indexed for conflating OSM ways with AllThePlaces.
-///   To evaluate an OSM way as a match candidate, we need to access not only
-///   the way itself, but also its member nodes.
-pub fn prune(
-    reader: &mut BlobReader<File>,
-    progress: &MultiProgress,
-    workdir: &Path,
-) -> Result<()> {
-    let relation_members = prune_relations(reader, progress, workdir)?;
-    let _way_members = prune_ways(reader, &relation_members, progress, workdir)?;
-    Ok(())
+/// Decides which parts of OpenStreetMap we need for conflation.
+pub struct Pruner {
+    // coverage: &Coverage,
+    keep_way_members: U64Table,
+    keep_relations: U64Table,
+    keep_relation_members: U64Table,
+}
+
+impl Pruner {
+    pub fn create(
+        osm_reader: &mut BlobReader<File>,
+        // coverage: &Coverage,
+        progress: &MultiProgress,
+        workdir: &Path,
+    ) -> Result<Pruner> {
+        let (keep_relations, keep_relation_members) =
+            prune_relations(osm_reader, progress, workdir)?;
+        let keep_way_members = prune_ways(osm_reader, &keep_relation_members, progress, workdir)?;
+        Ok(Pruner {
+            keep_way_members,
+            keep_relations,
+            keep_relation_members,
+        })
+    }
+
+    #[allow(unused)]
+    pub fn keep_node_coords(&self, id: u64) -> bool {
+        let feature_id = id * 10 + 1;
+        self.keep_way_members.contains(feature_id)
+            || self.keep_relation_members.contains(feature_id)
+    }
+
+    #[allow(unused)]
+    pub fn keep_way(&self, id: u64) -> bool {
+        // TODO: Also test self.keep_ways.contains(id)
+        self.keep_relation_members.contains(id * 10 + 3)
+    }
+
+    #[allow(unused)]
+    pub fn keep_relation(&self, id: u64) -> bool {
+        self.keep_relations.contains(id) || self.keep_relation_members.contains(id * 10 + 3)
+    }
 }
 
 /// Pipeline step `osm.prune.rels`.
@@ -59,10 +76,13 @@ fn prune_relations(
     reader: &mut BlobReader<File>,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<U64Table> {
-    let out_path = PathBuf::from(workdir).join("osm-prune.relation-members");
-    if out_path.exists() {
-        return U64Table::open(&out_path);
+) -> Result<(U64Table, U64Table)> {
+    let keep_relations_path = PathBuf::from(workdir).join("osm-prune.keep-relations");
+    let keep_relation_members_path = PathBuf::from(workdir).join("osm-prune.keep-relation-members");
+    if keep_relations_path.exists() && keep_relation_members_path.exists() {
+        let keep_relations = U64Table::open(&keep_relations_path)?;
+        let keep_relation_members = U64Table::open(&keep_relation_members_path)?;
+        return Ok((keep_relations, keep_relation_members));
     }
 
     let progress_bar = make_progress_bar(
@@ -73,23 +93,37 @@ fn prune_relations(
     );
 
     // First pass.
-    let keep_1_path = PathBuf::from(workdir).join("osm-prune.relation-members-pass-1");
     let graph_path = PathBuf::from(workdir).join("osm-prune.relation-graph");
-    prune_relations_pass_1(reader, &progress_bar, workdir, &keep_1_path, &graph_path)?;
-    let keep_1 = U64Table::open(&keep_1_path)?;
+    prune_relations_pass_1(
+        reader,
+        &progress_bar,
+        workdir,
+        &keep_relations_path,
+        &graph_path,
+    )?;
+    let keep_relations = U64Table::open(&keep_relations_path)?;
     let graph = graph::Graph::open(&graph_path)?;
 
     // Second pass.
     let tmp_path = PathBuf::from(workdir).join("osm-prune-relations.tmp");
-    let stats = prune_relations_pass_2(reader, &keep_1, &graph, &progress_bar, workdir, &tmp_path)?;
-    std::fs::rename(&tmp_path, &out_path)?;
+    let stats = prune_relations_pass_2(
+        reader,
+        &keep_relations,
+        &graph,
+        &progress_bar,
+        workdir,
+        &tmp_path,
+    )?;
+    std::fs::rename(&tmp_path, &keep_relation_members_path)?;
 
     progress_bar.finish_with_message(format!(
         "blobs → {} nodes, {} ways, {} relations",
         stats.node_count, stats.way_count, stats.relation_count,
     ));
 
-    U64Table::open(&out_path)
+    let keep_relations = U64Table::open(&keep_relations_path)?;
+    let keep_relation_members = U64Table::open(&keep_relation_members_path)?;
+    Ok((keep_relations, keep_relation_members))
 }
 
 /// Pipeline step `osm.prune.rels`, pass 1 of 2.
@@ -100,7 +134,7 @@ fn prune_relations(
 ///
 /// # Outputs
 ///
-/// * `osm-prune.relation-members-pass-1`, a table indicating which
+/// * `osm-prune.keep-relations`, a table indicating which
 ///   OSM relations carry tags that indicate potential conflation
 ///   candidates. For most relations in OpenStreetMap (such as city
 ///   boundaries or river networks) we don’t have any matchers in our
@@ -180,7 +214,7 @@ struct PruneStats {
 ///
 /// * OpenStreetMap relations.
 ///
-/// * `osm-prune.relation-members-pass-1`, a table indicating which
+/// * `osm-prune.keep-relations`, a table indicating which
 ///   OSM relations carry tags that indicate potential conflation
 ///   candidates. For most relations in OpenStreetMap (such as city
 ///   boundaries or river networks) we don’t have any matchers in our
@@ -197,7 +231,7 @@ struct PruneStats {
 ///
 /// # Outputs
 ///
-/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+/// * `osm-prune.keep-relation-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
@@ -292,7 +326,7 @@ fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path, out: &Pat
 ///
 /// * OpenStreetMap ways.
 ///
-/// * `osm-prune.relation-members`, a table that tells which OpenStreetMap
+/// * `osm-prune.keep-relation-members`, a table that tells which OpenStreetMap
 ///   nodes, ways and relations need to be indexed for conflating OSM relations
 ///   with AllThePlaces. To evaluate OSM relations as match candidates, we need
 ///   to access their members (which can be nodes, ways or relations).
@@ -300,17 +334,18 @@ fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path, out: &Pat
 ///
 /// # Outputs
 ///
-/// * `osm-prune.way-members`, a table that tells which OpenStreetMap nodes
+/// * `osm-prune.keep-way-members`, a table that tells which OpenStreetMap nodes
 ///   and ways need to be indexed for conflating OSM ways with AllThePlaces.
 ///   To evaluate an OSM way as a match candidate, we need to access not only
 ///   the way itself, but also its member nodes.
 fn prune_ways(
     reader: &mut BlobReader<File>,
-    relation_members: &U64Table,
+    keep_relation_members: &U64Table,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<U64Table> {
-    let out_path = PathBuf::from(workdir).join("osm-prune.way-members");
+    // TODO: Also build a table osm-prune.keep-ways, separate from keep-way-members.
+    let out_path = PathBuf::from(workdir).join("osm-prune.keep-way-members");
     if out_path.exists() {
         return U64Table::open(&out_path);
     }
@@ -347,7 +382,7 @@ fn prune_ways(
                         }
 
                         let way_feature_id = way.id * 10 + 2;
-                        if !mask.is_empty() || relation_members.contains(way_feature_id) {
+                        if !mask.is_empty() || keep_relation_members.contains(way_feature_id) {
                             keep_tx.send(way_feature_id)?;
                             way_count += 1;
                             for node_id in way.refs() {
