@@ -1,20 +1,17 @@
 use super::BlobReader;
 use crate::{make_progress_bar, matchers::MatchMask, u64_table, u64_table::U64Table};
 use anyhow::{Ok, Result};
-use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use indicatif::{MultiProgress, ProgressBar};
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use rayon::prelude::*;
 use std::{
     fs::File,
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-        mpsc::{Receiver, sync_channel},
-    },
+    sync::{Arc, Mutex, mpsc::sync_channel},
     thread,
 };
+
+use graph::{Edge, Graph};
 
 /// Decides which parts of OpenStreetMap we need for conflation.
 pub struct Pruner {
@@ -93,16 +90,8 @@ fn prune_relations(
     );
 
     // First pass.
-    let graph_path = PathBuf::from(workdir).join("osm-prune.relation-graph");
-    prune_relations_pass_1(
-        reader,
-        &progress_bar,
-        workdir,
-        &keep_relations_path,
-        &graph_path,
-    )?;
-    let keep_relations = U64Table::open(&keep_relations_path)?;
-    let graph = graph::Graph::open(&graph_path)?;
+    let (keep_relations, graph) =
+        prune_relations_pass_1(reader, &progress_bar, workdir, &keep_relations_path)?;
 
     // Second pass.
     let tmp_path = PathBuf::from(workdir).join("osm-prune-relations.tmp");
@@ -146,19 +135,26 @@ fn prune_relations(
 ///   containment graph. (Theoretically, this graph is supposed to be
 ///   acyclic, but in practice this is not always the case; we guard
 ///   against cycles when traversing the graph).
-fn prune_relations_pass_1(
+fn prune_relations_pass_1<'a>(
     reader: &mut BlobReader<File>,
     progress_bar: &ProgressBar,
     workdir: &Path,
-    out_keep_path: &Path,
-    out_graph_path: &Path,
-) -> Result<()> {
+    keep_relations_path: &Path,
+) -> Result<(U64Table, Graph<'a>)> {
+    let relation_graph_path = PathBuf::from(workdir).join("osm-prune.relation-graph");
+    if keep_relations_path.exists() && relation_graph_path.exists() {
+        let keep_relations = U64Table::open(keep_relations_path)?;
+        let relations_graph = Graph::open(&relation_graph_path)?;
+        return Ok((keep_relations, relations_graph));
+    }
+
+    let mut relations_graph: Option<Graph<'_>> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
-        let (edge_tx, edge_rx) = sync_channel::<graph::Edge>(64 * 1024);
+        let (edge_tx, edge_rx) = sync_channel::<Edge>(64 * 1024);
         let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
         let blob_consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -178,7 +174,7 @@ fn prune_relations_pass_1(
                         // Build relations graph.
                         for (_, member_id, member_type) in rel.members() {
                             if member_type == RelationMemberType::Relation {
-                                edge_tx.send(graph::Edge {
+                                edge_tx.send(Edge {
                                     child: member_id,
                                     parent: rel.id,
                                 })?;
@@ -190,14 +186,24 @@ fn prune_relations_pass_1(
                 Ok(())
             })
         });
-        let keep_writer = s.spawn(|| u64_table::create(keep_rx, workdir, out_keep_path));
-        let graph_writer = s.spawn(|| write_relations_graph(edge_rx, workdir, out_graph_path));
+        let keep_writer = s.spawn(|| u64_table::create(keep_rx, workdir, keep_relations_path));
+        let graph_writer = s.spawn(|| {
+            relations_graph = Some(Graph::create(
+                edge_rx.into_iter(),
+                workdir,
+                &relation_graph_path,
+            )?);
+            Ok(())
+        });
         keep_writer.join().expect("panic in keep_writer")?;
         graph_writer.join().expect("panic in graph_writer")?;
         blob_consumer.join().expect("panic in consumer")?;
         blob_producer.join().expect("panic in producer")?;
         Ok(())
-    })
+    })?;
+
+    let keep_relations = U64Table::open(keep_relations_path)?;
+    Ok((keep_relations, relations_graph.expect("graph")))
 }
 
 /// High-level statistics for pruning steps.
@@ -238,7 +244,7 @@ struct PruneStats {
 fn prune_relations_pass_2(
     reader: &mut BlobReader<File>,
     keep_1: &U64Table,
-    graph: &graph::Graph<'_>,
+    graph: &Graph<'_>,
     progress_bar: &ProgressBar,
     workdir: &Path,
     out: &Path,
@@ -296,28 +302,6 @@ fn prune_relations_pass_2(
         Ok(())
     })?;
     Ok(stats.lock().expect("lock").clone())
-}
-
-fn write_relations_graph(edges: Receiver<graph::Edge>, workdir: &Path, out: &Path) -> Result<()> {
-    let mut writer = graph::Writer::create(out)?;
-    let num_edges = AtomicU64::new(0);
-    let sorter: ExternalSorter<graph::Edge, std::io::Error, LimitedBufferBuilder> =
-        ExternalSorterBuilder::new()
-            .with_tmp_dir(workdir)
-            .with_buffer(LimitedBufferBuilder::new(
-                16 * 1024 * 1024,
-                /* preallocate */ true,
-            ))
-            .build()?;
-    let sorted = sorter.sort(edges.iter().map(|x| {
-        num_edges.fetch_add(1, Ordering::SeqCst);
-        std::io::Result::Ok(x)
-    }))?;
-    for edge in sorted {
-        writer.write(edge?)?;
-    }
-    writer.close()?;
-    Ok(())
 }
 
 /// Pipeline step `osm.prune.ways`.
@@ -421,6 +405,7 @@ fn prune_ways(
 
 mod graph {
     use anyhow::{Ok, Result};
+    use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
     use memmap2::Mmap;
     use serde::{Deserialize, Serialize};
     use std::{
@@ -429,16 +414,44 @@ mod graph {
         io::{BufReader, BufWriter, Seek, SeekFrom, Write},
         ops::Range,
         path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
+        time::SystemTime,
     };
 
     pub struct Graph<'a> {
-        _file: File,
+        file: File,
         _mmap: Mmap,
         children: &'a [u64],
         parents: &'a [u64],
     }
 
     impl<'a> Graph<'a> {
+        pub fn create(
+            edges: impl Iterator<Item = Edge>,
+            workdir: &Path,
+            out: &Path,
+        ) -> Result<Graph<'a>> {
+            let mut writer = Writer::create(out)?;
+            let num_edges = AtomicU64::new(0);
+            let sorter: ExternalSorter<Edge, std::io::Error, LimitedBufferBuilder> =
+                ExternalSorterBuilder::new()
+                    .with_tmp_dir(workdir)
+                    .with_buffer(LimitedBufferBuilder::new(
+                        16 * 1024 * 1024,
+                        /* preallocate */ true,
+                    ))
+                    .build()?;
+            let sorted = sorter.sort(edges.map(|x| {
+                num_edges.fetch_add(1, Ordering::SeqCst);
+                std::io::Result::Ok(x)
+            }))?;
+            for edge in sorted {
+                writer.write(edge?)?;
+            }
+            writer.close()?;
+            Self::open(out)
+        }
+
         #[cfg(target_pointer_width = "64")]
         pub fn open(path: &Path) -> Result<Graph<'a>> {
             let file = File::open(path)?;
@@ -469,11 +482,16 @@ mod graph {
             };
 
             Ok(Graph {
-                _file: file,
+                file,
                 _mmap: mmap,
                 children,
                 parents,
             })
+        }
+
+        #[allow(unused)]
+        pub fn modified(&'a self) -> Result<SystemTime> {
+            Ok(self.file.metadata()?.modified()?)
         }
 
         /// Returns an iterator over the reflexive transitive closure of the
@@ -610,46 +628,28 @@ mod graph {
     #[cfg(test)]
     mod tests {
         use super::*;
-        use tempfile::NamedTempFile;
+        use tempfile::TempDir;
 
         #[test]
         fn test_graph() -> Result<()> {
-            let temp = NamedTempFile::new()?;
-            let mut writer = Writer::create(temp.path())?;
-            writer.write(Edge {
-                child: 1,
-                parent: 2,
-            })?;
-            writer.write(Edge {
-                child: 2,
-                parent: 3,
-            })?;
-            writer.write(Edge {
-                child: 2,
-                parent: 4,
-            })?;
-            writer.write(Edge {
-                child: 4,
-                parent: 5,
-            })?;
-            writer.write(Edge {
-                child: 4,
-                parent: 6,
-            })?;
-            writer.write(Edge {
-                child: 21,
-                parent: 22,
-            })?;
-            writer.write(Edge {
-                child: 22,
-                parent: 23,
-            })?;
-            writer.write(Edge {
-                child: 23,
-                parent: 21,
-            })?;
-            writer.close()?;
-            let graph = Graph::open(temp.path())?;
+            let edges: Vec<(u64, u64)> = vec![
+                (1, 2),
+                (2, 3),
+                (2, 4),
+                (4, 5),
+                (4, 6),
+                // Cycle: 21 -> 22 -> 23 -> 21.
+                (21, 22),
+                (22, 23),
+                (23, 21),
+            ];
+            let edges_iter = edges
+                .into_iter()
+                .map(|(child, parent)| Edge { child, parent });
+            let workdir = TempDir::new()?;
+            let path = workdir.path().join("testgraph");
+            let graph = Graph::create(edges_iter, &workdir.path(), &path)?;
+            assert_eq!(graph.modified()?, std::fs::metadata(&path)?.modified()?);
             assert_eq!(
                 graph.ancestors(1).collect::<Vec<u64>>(),
                 &[1, 2, 3, 4, 5, 6]
