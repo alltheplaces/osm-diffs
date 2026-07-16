@@ -100,16 +100,14 @@ fn prune_relations(
         prune_relations_pass_1(reader, &progress_bar, workdir, &keep_relations_path)?;
 
     // Second pass.
-    let tmp_path = PathBuf::from(workdir).join("osm-prune-relations.tmp");
     let stats = prune_relations_pass_2(
         reader,
         &keep_relations,
         &graph,
         &progress_bar,
         workdir,
-        &tmp_path,
+        &keep_relation_members_path,
     )?;
-    std::fs::rename(&tmp_path, &keep_relation_members_path)?;
 
     progress_bar.finish_with_message(format!(
         "blobs → {} relations (with {} nodes, {} ways, {} relations as members)",
@@ -338,9 +336,9 @@ fn prune_ways(
     workdir: &Path,
 ) -> Result<U64Table> {
     // TODO: Also build a table osm-prune.keep-ways, separate from keep-way-members.
-    let out_path = PathBuf::from(workdir).join("osm-prune.keep-way-members");
-    if out_path.exists() {
-        return U64Table::open(&out_path);
+    let keep_way_members_path = PathBuf::from(workdir).join("osm-prune.keep-way-members");
+    if keep_way_members_path.exists() {
+        return U64Table::open(&keep_way_members_path);
     }
 
     let progress_bar = make_progress_bar(
@@ -349,9 +347,6 @@ fn prune_ways(
         reader.count_way_blobs() as u64,
         "blobs",
     );
-
-    let mut tmp_path = out_path.clone();
-    tmp_path.add_extension("tmp");
 
     let stats = Arc::new(Mutex::new(PruneStats::default()));
     thread::scope(|s| {
@@ -394,20 +389,19 @@ fn prune_ways(
                 Ok(())
             })
         });
-        let pruned_writer = s.spawn(|| u64_table::create(keep_rx, workdir, &tmp_path));
+        let pruned_writer = s.spawn(|| u64_table::create(keep_rx, workdir, &keep_way_members_path));
         pruned_writer.join().expect("panic in pruned_writer")?;
         blob_consumer.join().expect("panic in blob_consumer")?;
         blob_producer.join().expect("panic in blob_producer")?;
         Ok(())
     })?;
     let stats = stats.lock().expect("lock").clone();
-    std::fs::rename(&tmp_path, &out_path)?;
 
     // OSM ways don’t have relation members, so we don’t emit any relations.
     progress_bar.finish_with_message(format!(
-        "blobs → {} nodes, {} ways",
-        stats.node_count, stats.way_count,
+        "blobs → {} ways (with {} nodes as members)",
+        stats.way_count, stats.node_count,
     ));
 
-    U64Table::open(&out_path)
+    U64Table::open(&keep_way_members_path)
 }
