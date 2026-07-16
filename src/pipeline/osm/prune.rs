@@ -110,8 +110,11 @@ fn prune_relations(
     std::fs::rename(&tmp_path, &keep_relation_members_path)?;
 
     progress_bar.finish_with_message(format!(
-        "blobs → {} nodes, {} ways, {} relations",
-        stats.node_count, stats.way_count, stats.relation_count,
+        "blobs → {} relations (with {} nodes, {} ways, {} relations as members)",
+        keep_relations.len(),
+        stats.node_count,
+        stats.way_count,
+        stats.relation_count,
     ));
 
     let keep_relations = U64Table::open(&keep_relations_path)?;

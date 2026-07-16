@@ -1,7 +1,6 @@
 use anyhow::{Ok, Result, anyhow};
 use memmap2::Mmap;
-use std::fs::File;
-use std::path::Path;
+use std::{fs::File, path::Path, time::SystemTime};
 
 pub use writer::create;
 
@@ -15,7 +14,7 @@ pub use writer::create;
 /// If performance ever becomes an issue, consider Cache-Sensitive Skip Lines,
 /// but this would make the file format slightly more complicated.
 pub struct U64Table {
-    _file: File, // The file that backs mmap.
+    file: File, // The file that backs mmap.
     mmap: Mmap,
 }
 
@@ -30,7 +29,7 @@ impl U64Table {
 
         // SAFETY: We don’t truncate the file while it is mapped into memory.
         let mmap = unsafe { Mmap::map(&file)? };
-        Ok(U64Table { _file: file, mmap })
+        Ok(U64Table { file, mmap })
     }
 
     pub fn contains(&self, n: u64) -> bool {
@@ -48,6 +47,16 @@ impl U64Table {
         } else {
             slice.binary_search_by(|x| x.swap_bytes().cmp(&n)).is_ok()
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.mmap.len() / 8
+    }
+
+    /// Returns the modification time of the underlying file.
+    #[allow(unused)]
+    pub fn modified(&self) -> Result<SystemTime> {
+        Ok(self.file.metadata()?.modified()?)
     }
 }
 
@@ -82,13 +91,18 @@ mod tests {
     }
 
     #[test]
-    fn test_contains() -> Result<()> {
+    fn test_u64_map() -> Result<()> {
         let mut file = NamedTempFile::new()?;
         for i in [7_u64, 23_u64, 42_u64] {
             file.write_all(&i.to_le_bytes())?;
         }
 
         let table = U64Table::open(file.path())?;
+        assert_eq!(table.len(), 3);
+        assert_eq!(
+            table.modified()?,
+            std::fs::metadata(&file.path())?.modified()?
+        );
         assert_eq!(table.contains(7), true);
         assert_eq!(table.contains(23), true);
         assert_eq!(table.contains(42), true);
