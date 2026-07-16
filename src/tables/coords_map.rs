@@ -1,6 +1,7 @@
 //! Disk-based, potentially very large map with `u64` keys and [geo::Coord] values.
 
 use anyhow::{Ok, Result};
+use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use geo::Coord;
 use memmap2::Mmap;
 use std::{
@@ -23,6 +24,23 @@ pub struct CoordsMap<'a> {
 }
 
 impl CoordsMap<'_> {
+    pub fn create<'a>(
+        entries: impl Iterator<Item = (u64, Coord)>,
+        workdir: &Path,
+        out: &'a Path,
+    ) -> Result<CoordsMap<'a>> {
+        let mut writer = Writer::create(out)?;
+        let sorter: ExternalSorter<(u64, Coord), std::io::Error, LimitedBufferBuilder> =
+            ExternalSorterBuilder::new()
+                .with_tmp_dir(workdir)
+                .with_buffer(LimitedBufferBuilder::new(
+                    16 * 1024 * 1024,
+                    /* preallocate */ true,
+                ))
+                .build()?;
+        Self::open(out)
+    }
+
     pub fn open(path: &Path) -> Result<CoordsMap<'_>> {
         let file = File::open(path)?;
 
