@@ -5,7 +5,6 @@ use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::fs::rename;
 use std::io::{Read, Seek};
 use std::path::Path;
 use std::sync::mpsc::sync_channel;
@@ -27,9 +26,6 @@ pub fn cover_nodes<R: Read + Seek + Send>(
     if out.exists() {
         return Ok(U64Table::open(&out)?);
     }
-
-    let mut tmp = out.clone();
-    tmp.add_extension("tmp");
 
     let mut num_covered_nodes = 0;
     thread::scope(|s| {
@@ -60,7 +56,7 @@ pub fn cover_nodes<R: Read + Seek + Send>(
         });
 
         let writer = s.spawn(|| {
-            num_covered_nodes = u64_table::create(node_rx, workdir, &tmp)?;
+            num_covered_nodes = u64_table::create(node_rx, workdir, &out)?;
             Ok(())
         });
 
@@ -70,7 +66,6 @@ pub fn cover_nodes<R: Read + Seek + Send>(
         Ok(())
     })?;
 
-    rename(&tmp, &out)?;
     progress_bar.finish_with_message(format!("blobs → {} nodes", num_covered_nodes));
 
     Ok(U64Table::open(&out)?)
@@ -83,8 +78,6 @@ pub fn cover_ways<R: Read + Seek + Send>(
     workdir: &Path,
 ) -> Result<U64Table> {
     let out = workdir.join("covered-ways");
-    let mut tmp = out.clone();
-    tmp.add_extension("tmp");
     if out.exists() {
         return Ok(U64Table::open(&out)?);
     }
@@ -129,7 +122,7 @@ pub fn cover_ways<R: Read + Seek + Send>(
 
         // Thread to sort way ids and write the resulting table to the working directory.
         let writer = s.spawn(|| {
-            num_covered_ways = crate::u64_table::create(way_rx, workdir, &tmp)?;
+            num_covered_ways = crate::u64_table::create(way_rx, workdir, &out)?;
             Ok(())
         });
 
@@ -139,7 +132,6 @@ pub fn cover_ways<R: Read + Seek + Send>(
         Ok(())
     })?;
 
-    rename(&tmp, &out)?;
     progress_bar.finish_with_message(format!("blobs → {} ways", num_covered_ways));
     Ok(U64Table::open(&out)?)
 }
@@ -155,8 +147,6 @@ pub fn cover_relations<R: Read + Seek + Send>(
     workdir: &Path,
 ) -> Result<U64Table> {
     let out = workdir.join("covered-relations");
-    let mut tmp = out.clone();
-    tmp.add_extension("tmp");
     if out.exists() {
         return Ok(U64Table::open(&out)?);
     }
@@ -225,7 +215,7 @@ pub fn cover_relations<R: Read + Seek + Send>(
 
         // Thread to sort way ids and write the resulting table to the working directory.
         let writer = s.spawn(|| {
-            num_relations = crate::u64_table::create(rel_rx, workdir, &tmp)?;
+            num_relations = crate::u64_table::create(rel_rx, workdir, &out)?;
             Ok(())
         });
 
@@ -235,7 +225,6 @@ pub fn cover_relations<R: Read + Seek + Send>(
         Ok(())
     })?;
 
-    rename(&tmp, &out)?;
     progress_bar.finish_with_message(format!("blobs → {} relations", num_relations));
     Ok(U64Table::open(&out)?)
 }

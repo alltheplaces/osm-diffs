@@ -120,10 +120,12 @@ mod writer {
     use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
     use std::fs::File;
     use std::io::{BufWriter, Write};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::mpsc::Receiver;
 
     pub fn create(stream: Receiver<u64>, workdir: &Path, out: &Path) -> Result<u64> {
+        let mut tmp_out = PathBuf::from(out);
+        tmp_out.add_extension("tmp");
         let sorter: ExternalSorter<u64, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
@@ -132,7 +134,7 @@ mod writer {
                 ))
                 .build()?;
         let sorted = sorter.sort(stream.into_iter().map(std::io::Result::Ok))?;
-        let file = File::create(out)?;
+        let file = File::create(&tmp_out)?;
         let mut writer = BufWriter::with_capacity(32768, file);
         let mut num_unique_values = 0;
         let mut last: Option<u64> = None;
@@ -152,6 +154,8 @@ mod writer {
         }
 
         writer.flush()?;
+        writer.into_inner()?.sync_all()?;
+        std::fs::rename(&tmp_out, out)?;
         Ok(num_unique_values)
     }
 
