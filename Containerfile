@@ -18,7 +18,7 @@
 #  Stage 1.1: Setup
 # ----------------------------------------------------------------------------
 
-FROM rust:1.96.0-alpine3.23 AS builder
+FROM rust:1.97.0-alpine3.23 AS builder
 
 ARG BUILD_TIMESTAMP
 ARG TIPPECANOE_VERSION=2.79.0
