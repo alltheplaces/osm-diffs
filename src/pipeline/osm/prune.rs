@@ -27,6 +27,57 @@ pub struct Pruner<'a> {
     keep_relation_members: U64Table,
 }
 
+/// Output of [prune_relations], the first  step of pruning.
+struct PruneRelationsOutput {
+    /// The OpenStreetMap relations we want to keep.
+    ///
+    /// For example, a
+    /// [multipolygon](https://wiki.openstreetmap.org/wiki/Relation:multipolygon)
+    /// tagged with `amenity=restaurant` becomes an element of this set,
+    /// wherease a relation tagged with `boundary=administrative` gets omitted.
+    ///
+    /// As of July 2026, this set contains 0.9 million elements, which is
+    /// 6.2% of the 14.6 million relations in OpenStreetMap.
+    keep_relations: U64Table,
+
+    /// The OpenStreetMap features that are members of any relation we want to keep,
+    /// either directly or [indirectly](https://wiki.openstreetmap.org/wiki/Super-relation).
+    ///
+    /// For example, when a
+    /// [multipolygon](https://wiki.openstreetmap.org/wiki/Relation:multipolygon)
+    /// is tagged with `amenity=restaurant`, the various ways forming its interior holes
+    /// and exterior boundary all become be part of this set.
+    ///
+    /// As of July 2026, this set contains 5.8 million elements, which is
+    /// 0.05% of the 11.9 billion features in OpenStreetMap.
+    keep_relation_members: U64Table, // 2413085 nodes, 3368795 ways, 47213 relations
+}
+
+/// Output of [prune_ways], the second step of pruning.
+struct PruneWaysOutput {
+    /// The OpenStreetMap ways we want to keep.
+    ///
+    /// For example, when a way is tagged with `tourism=hotel`, it becomes part
+    /// of this set, whereas a way tagged as `highway=residential` gets omitted.
+    ///
+    /// As of July 2026, this set contains 40.3 M elements, which is
+    /// 3.3% of the 1.2 B ways in OpenStreetMap.
+    keep_ways: U64Table,
+
+    /// The OpenStreetMap nodes whose coordinates we want to keep.
+    ///
+    /// For example, when a way is tagged with `tourism=hotel`,
+    /// its member nodes become part of this set. Likewise,
+    /// when a relation or [super-relation](https://wiki.openstreetmap.org/wiki/Super-relation)
+    /// is tagged as hotel, all its supporting nodes get included.
+    ///
+    /// As of July 2026, this set contains TODO nodes, which is
+    /// TODO% of the 10.7 billion nodes in OpenStreetMap.
+    //
+    // TODO: Include keep_relation_members from phase 1 (also in code, not just in docs).
+    keep_way_members: U64Table,
+}
+
 impl<'a> Pruner<'a> {
     pub fn create(
         osm_reader: &mut BlobReader<File>,
@@ -64,20 +115,6 @@ impl<'a> Pruner<'a> {
     pub fn keep_relation(&self, id: u64) -> bool {
         self.keep_relations.contains(id) || self.keep_relation_members.contains(id * 10 + 3)
     }
-}
-
-/// Output of [prune_relations].
-struct PruneRelationsOutput {
-    /// The set of OpenStreetMap relations to keep in our pipeline.
-    /// For example, a relation tagged as `amenity=restaurant` would be
-    /// a member of this set.
-    keep_relations: U64Table,
-
-    /// A table that tells which OpenStreetMap nodes, ways and relations
-    /// are members (either direct or indirect, in case of recursive relations)
-    /// of a relation we decided to keep. We need those members to construct
-    /// a geometry for relations in `keep_relations`.
-    keep_relation_members: U64Table,
 }
 
 /// Runs the pipeline step `osm.prune.rels`.
@@ -317,19 +354,6 @@ fn prune_relations_pass_2(
         Ok(())
     })?;
     Ok(stats.lock().expect("lock").clone())
-}
-
-/// Output of [prune_ways].
-struct PruneWaysOutput {
-    /// The set of OpenStreetMap ways to keep in our pipeline.
-    /// For example, a way tagged as `tourism=hotel` would be
-    /// a member of this set.
-    keep_ways: U64Table,
-
-    /// A table that tells which OpenStreetMap nodes are members
-    /// are members of a way we decided to keep. We need their coordinates
-    /// to construct the geometry for the ways in `keep_ways`.
-    keep_way_members: U64Table,
 }
 
 /// Runs the pipeline step `osm.prune.rels`.

@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
+# SPDX-License-Identifier: MIT
+
+name: Test if we can build a container image
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'Containerfile'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'Containerfile'
+
+permissions: {}
+
+jobs:
+  build:
+    name: Build container image
+    runs-on: ubuntu-latest
+    permissions: {}
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+    - name: Install podman
+      run: |
+        sudo apt-get install -y podman
+        podman --version
+    - name: Build container
+      run: |
+          mkdir artifacts
+          podman build -t test-container  \
+              --build-arg BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  \
+              --volume $(pwd)/artifacts:/artifacts                          \
+              -f Containerfile .
