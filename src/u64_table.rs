@@ -53,7 +53,6 @@ impl U64Table {
         self.mmap.len() / 8
     }
 
-    #[allow(unused)]
     pub fn iter(&self) -> impl Iterator<Item = u64> + '_ {
         // SAFETY: We check in `open()` that the file size is a multiple of eight.
         // Alignment to page size, which is typically 4K or larger and
