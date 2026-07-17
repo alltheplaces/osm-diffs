@@ -53,6 +53,19 @@ impl U64Table {
         self.mmap.len() / 8
     }
 
+    #[allow(unused)]
+    pub fn iter(&self) -> impl Iterator<Item = u64> + '_ {
+        // SAFETY: We check in `open()` that the file size is a multiple of eight.
+        // Alignment to page size, which is typically 4K or larger and
+        // always than eight bytes, is guaranteed by the mmap system
+        // call.
+        let slice = unsafe {
+            let ptr = self.mmap.as_ptr() as *const u64;
+            std::slice::from_raw_parts(ptr, self.mmap.len() / 8)
+        };
+        (0..self.len()).map(move |i| u64::from_le(slice[i]))
+    }
+
     /// Returns the modification time of the underlying file.
     #[allow(unused)]
     pub fn modified(&self) -> Result<SystemTime> {
@@ -63,8 +76,48 @@ impl U64Table {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::{io::Write, sync::LazyLock};
     use tempfile::NamedTempFile;
+
+    const TEST_TABLE: LazyLock<U64Table> = LazyLock::new(|| {
+        let mut file = NamedTempFile::new().expect("NamedTempFile");
+        for i in [7_u64, 23, 42] {
+            file.write_all(&i.to_le_bytes()).expect("File::write");
+        }
+        U64Table::open(&file.path()).expect("U64Table::open")
+    });
+
+    #[test]
+    fn test_contains() {
+        assert_eq!(TEST_TABLE.contains(u64::MIN), false);
+        assert_eq!(TEST_TABLE.contains(7), true);
+        assert_eq!(TEST_TABLE.contains(23), true);
+        assert_eq!(TEST_TABLE.contains(41), false);
+        assert_eq!(TEST_TABLE.contains(42), true);
+        assert_eq!(TEST_TABLE.contains(43), false);
+        assert_eq!(TEST_TABLE.contains(u64::MAX), false);
+    }
+
+    #[test]
+    fn test_iter() {
+        assert_eq!(TEST_TABLE.iter().collect::<Vec<u64>>(), &[7, 23, 42]);
+    }
+
+    #[test]
+    fn test_len() {
+        assert_eq!(TEST_TABLE.len(), 3);
+    }
+
+    #[test]
+    fn test_modified() -> Result<()> {
+        let mut file = NamedTempFile::new()?;
+        file.write_all(&42_u64.to_le_bytes())?;
+
+        let table = U64Table::open(file.path())?;
+        let file_metadata = std::fs::metadata(&file.path())?;
+        assert_eq!(table.modified()?, file_metadata.modified()?);
+        Ok(())
+    }
 
     #[test]
     fn test_open() -> Result<()> {
@@ -85,33 +138,9 @@ mod tests {
     }
 
     #[test]
-    fn test_open_file_does_not_exist() {
+    fn test_open_inexistent_file() {
         let path = Path::new("file/does/not/exist");
         assert!(U64Table::open(&path).is_err());
-    }
-
-    #[test]
-    fn test_u64_map() -> Result<()> {
-        let mut file = NamedTempFile::new()?;
-        for i in [7_u64, 23_u64, 42_u64] {
-            file.write_all(&i.to_le_bytes())?;
-        }
-
-        let table = U64Table::open(file.path())?;
-        assert_eq!(table.len(), 3);
-        assert_eq!(
-            table.modified()?,
-            std::fs::metadata(&file.path())?.modified()?
-        );
-        assert_eq!(table.contains(7), true);
-        assert_eq!(table.contains(23), true);
-        assert_eq!(table.contains(42), true);
-
-        assert_eq!(table.contains(u64::MIN), false);
-        assert_eq!(table.contains(u64::MAX), false);
-        assert_eq!(table.contains(19), false);
-
-        Ok(())
     }
 }
 
