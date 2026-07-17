@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
 # SPDX-License-Identifier: MIT
 
-name: Test if we can build a container image
+name: Tests
 
 on:
   push:
@@ -17,7 +17,7 @@ permissions: {}
 
 jobs:
   build:
-    name: Build container image
+    name: Build (container)
     runs-on: ubuntu-latest
     permissions: {}
 
