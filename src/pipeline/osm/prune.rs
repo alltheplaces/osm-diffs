@@ -3,11 +3,12 @@ use crate::{
     coverage::Coverage,
     make_progress_bar,
     matchers::MatchMask,
-    tables::{Edge, GraphTable},
+    tables::{CoordsMap, Edge, GraphTable},
     u64_table,
     u64_table::U64Table,
 };
 use anyhow::{Ok, Result};
+use geo::Coord;
 use indicatif::{MultiProgress, ProgressBar};
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use rayon::prelude::*;
@@ -21,7 +22,7 @@ use std::{
 /// Decides which parts of OpenStreetMap we need for conflation.
 pub struct Pruner<'a> {
     _coverage: &'a Coverage<'a>,
-    keep_coords: U64Table,
+    coords: CoordsMap<'a>,
     keep_ways: U64Table,
     keep_relations: U64Table,
     relation_members: U64Table,
@@ -29,18 +30,18 @@ pub struct Pruner<'a> {
 
 /// Output of [prune_relations], the first  step of pruning.
 struct PruneRelationsOutput {
-    /// The OpenStreetMap relations we want to keep.
+    /// The IDs of the OpenStreetMap relations we want to keep.
     ///
     /// For example, a
     /// [multipolygon](https://wiki.openstreetmap.org/wiki/Relation:multipolygon)
     /// tagged with `amenity=restaurant` becomes an element of this set,
     /// wherease a relation tagged with `boundary=administrative` gets omitted.
     ///
-    /// As of July 2026, this set contains 0.9 million elements, which is
+    /// As of July 2026, this set contains 0.9 million IDs, which is
     /// 6.2% of the 14.6 million relations in OpenStreetMap.
     keep_relations: U64Table,
 
-    /// The OpenStreetMap features that are members of any relation we want to keep,
+    /// The IDs of the OpenStreetMap features that are members of any relation we want to keep,
     /// either directly or [indirectly](https://wiki.openstreetmap.org/wiki/Super-relation).
     ///
     /// For example, when a
@@ -48,32 +49,47 @@ struct PruneRelationsOutput {
     /// is tagged with `amenity=restaurant`, the various ways forming its interior holes
     /// and exterior boundary all become be part of this set.
     ///
-    /// As of July 2026, this set contains 5.8 million elements, which is
+    /// As of July 2026, this set contains 5.8 million IDs, which is
     /// 0.05% of the 11.9 billion features in OpenStreetMap.
     relation_members: U64Table, // 2413085 nodes, 3368795 ways, 47213 relations
 }
 
 /// Output of [prune_ways], the second step of pruning.
 struct PruneWaysOutput {
-    /// The OpenStreetMap nodes whose coordinates we want to keep.
+    /// The IDs of the OpenStreetMap nodes whose coordinates we want to keep.
     ///
-    /// For example, when a way is tagged with `tourism=hotel`,
-    /// its member nodes become part of this set. Likewise,
-    /// when a relation or [super-relation](https://wiki.openstreetmap.org/wiki/Super-relation)
-    /// is tagged as a hotel, all its supporting nodes get included.
+    /// For example, when a way is tagged with `tourism=hotel`, the IDs
+    /// of its member nodes become part of this set. Likewise, when a relation
+    /// or [super-relation](https://wiki.openstreetmap.org/wiki/Super-relation)
+    /// is tagged as a hotel, the IDs of all its supporting nodes get included.
     ///
-    /// As of July 2026, this set contains 286.7 million nodes,
+    /// As of July 2026, this set contains 286.7 million node IDs,
     /// which is 2.7% of the 10.7 billion nodes in OpenStreetMap.
     keep_coords: U64Table,
 
-    /// The OpenStreetMap ways we want to keep.
+    /// The IDs of the OpenStreetMap ways we want to keep.
     ///
     /// For example, when a way is tagged with `tourism=hotel`, it becomes part
     /// of this set, whereas a way tagged as `highway=residential` gets omitted.
     ///
-    /// As of July 2026, this set contains 40.3 M elements, which is
+    /// As of July 2026, this set contains 40.3 M way IDs, which is
     /// 3.3% of the 1.2 B ways in OpenStreetMap.
     keep_ways: U64Table,
+}
+
+/// Output of [prune_nodex], the third step of pruning.
+struct PruneNodesOutput<'a> {
+    /// The coordinates we want to keep, keyed by OpenStreetMap node ID.
+    ///
+    /// For example, when a way is tagged with `tourism=hotel`, the coordinates
+    /// of its member nodes become part of this table. Likewise, when a relation
+    /// or [super-relation](https://wiki.openstreetmap.org/wiki/Super-relation)
+    /// is tagged as a hotel, the coordiantes of all its supporting nodes get
+    /// included.
+    ///
+    /// As of July 2026, this map contains coordinates for 286.7 million nodes,
+    /// which is 2.7% of the 10.7 billion node coordinates in OpenStreetMap.
+    coords: CoordsMap<'a>,
 }
 
 impl<'a> Pruner<'a> {
@@ -85,9 +101,10 @@ impl<'a> Pruner<'a> {
     ) -> Result<Pruner<'a>> {
         let rels_output = prune_relations(osm_reader, progress, workdir)?;
         let ways_output = prune_ways(osm_reader, &rels_output, progress, workdir)?;
+        let nodes_output = prune_nodes(osm_reader, &ways_output, progress, workdir)?;
         Ok(Pruner {
             _coverage: coverage,
-            keep_coords: ways_output.keep_coords,
+            coords: nodes_output.coords,
             keep_ways: ways_output.keep_ways,
             keep_relations: rels_output.keep_relations,
             relation_members: rels_output.relation_members,
@@ -95,8 +112,8 @@ impl<'a> Pruner<'a> {
     }
 
     #[allow(unused)]
-    pub fn keep_coord(&self, node_id: u64) -> bool {
-        self.keep_coords.contains(node_id)
+    pub fn coord(&self, node_id: u64) -> Option<Coord> {
+        self.coords.get(node_id)
     }
 
     #[allow(unused)]
@@ -380,4 +397,68 @@ fn prune_ways(
         keep_ways,
         keep_coords,
     })
+}
+
+fn prune_nodes<'a>(
+    reader: &mut BlobReader<File>,
+    ways_output: &PruneWaysOutput,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<PruneNodesOutput<'a>> {
+    let keep_coords = &ways_output.keep_coords;
+    let coords_path = PathBuf::from(workdir).join("osm-prune.coords");
+    if coords_path.exists() {
+        let coords = CoordsMap::open(&coords_path)?;
+        return Ok(PruneNodesOutput { coords });
+    }
+
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.prune.nodes ",
+        reader.count_node_blobs() as u64,
+        "blobs",
+    );
+
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let num_workers = usize::from(thread::available_parallelism()?);
+        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (coords_tx, coords_rx) = sync_channel::<(u64, Coord)>(num_workers);
+        let producer = s.spawn(|| reader.send_node_blobs(blob_tx));
+        let consumer = s.spawn(move || {
+            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
+                let data = blob.into_data(); // decompress
+                let block = PrimitiveBlock::parse(&data);
+                for primitive in block.primitives() {
+                    if let Primitive::Node(node) = primitive {
+                        let node_id = node.id;
+                        if keep_coords.contains(node_id) {
+                            coords_tx.send((
+                                node_id,
+                                Coord {
+                                    x: node.lon,
+                                    y: node.lat,
+                                },
+                            ))?;
+                        }
+                    }
+                }
+                progress_bar.inc(1);
+                Ok(())
+            })
+        });
+
+        let coords_writer =
+            s.spawn(|| CoordsMap::create(coords_rx.into_iter(), workdir, &coords_path));
+
+        coords_writer.join().expect("panic in coords_writer")?;
+        consumer.join().expect("panic in consumer")?;
+        producer.join().expect("panic in producer")?;
+
+        Ok(())
+    })?;
+
+    let coords = CoordsMap::open(&coords_path)?;
+    progress_bar.finish_with_message(format!("blobs → {} coords", coords.len()));
+    Ok(PruneNodesOutput { coords })
 }

@@ -1,6 +1,7 @@
 //! Disk-based, potentially very large map with `u64` keys and [geo::Coord] values.
 
 use anyhow::{Ok, Result};
+use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use geo::Coord;
 use memmap2::Mmap;
 use std::{
@@ -8,6 +9,7 @@ use std::{
     io::{BufWriter, Seek, SeekFrom, Write},
     mem::size_of,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::SystemTime,
 };
 
@@ -22,8 +24,35 @@ pub struct CoordsMap<'a> {
     coords: &'a [u64],
 }
 
-impl CoordsMap<'_> {
-    pub fn open(path: &Path) -> Result<CoordsMap<'_>> {
+impl<'a> CoordsMap<'a> {
+    pub fn create(
+        coords: impl Iterator<Item = (u64, Coord)>,
+        workdir: &Path,
+        out: &Path,
+    ) -> Result<CoordsMap<'a>> {
+        let mut writer = Writer::create(out)?;
+        let coords_count = AtomicU64::new(0);
+        let sorter: ExternalSorter<(u64, u64), std::io::Error, LimitedBufferBuilder> =
+            ExternalSorterBuilder::new()
+                .with_tmp_dir(workdir)
+                .with_buffer(LimitedBufferBuilder::new(
+                    16 * 1024 * 1024,
+                    /* preallocate */ true,
+                ))
+                .build()?;
+        let sorted = sorter.sort(coords.map(|(key, coord)| {
+            coords_count.fetch_add(1, Ordering::SeqCst);
+            std::io::Result::Ok((key, Writer::pack_coord(coord)))
+        }))?;
+        for s in sorted {
+            let (key, packed_coord) = s?;
+            writer.write(key, packed_coord)?;
+        }
+        writer.close()?;
+        Self::open(out)
+    }
+
+    pub fn open(path: &'_ Path) -> Result<CoordsMap<'a>> {
         let file = File::open(path)?;
 
         // SAFETY: We don’t modify the file while it is mapped into memory.
@@ -131,7 +160,13 @@ impl Writer {
         })
     }
 
-    pub fn write(&mut self, key: u64, coord: Coord) -> Result<()> {
+    fn pack_coord(coord: Coord) -> u64 {
+        let x_i32 = (coord.x * 1e7) as i32;
+        let y_i32 = (coord.y * 1e7) as i32;
+        (x_i32 as u64) << 32 | ((y_i32 as u32) as u64)
+    }
+
+    fn write(&mut self, key: u64, packed_coord: u64) -> Result<()> {
         if key <= self.last_key {
             anyhow::bail!(
                 "keys must be written in ascending order, but {} <= {}",
@@ -143,10 +178,7 @@ impl Writer {
         self.writer.write_all(&key.to_le_bytes())?;
         self.last_key = key;
 
-        let x_i32 = (coord.x * 1e7) as i32;
-        let y_i32 = (coord.y * 1e7) as i32;
-        let encoded = (x_i32 as u64) << 32 | ((y_i32 as u32) as u64);
-        self.coords_writer.write_all(&encoded.to_le_bytes())?;
+        self.coords_writer.write_all(&packed_coord.to_le_bytes())?;
         self.coords_count += 1;
 
         Ok(())
@@ -210,11 +242,11 @@ mod tests {
         };
         let file = NamedTempFile::new()?;
         let mut writer = Writer::create(&file.path())?;
-        writer.write(17, BERN)?;
-        writer.write(41, OTTAWA)?;
-        writer.write(42, BERN)?;
-        writer.write(43, USHUAIA)?;
-        writer.write(44, MELBOURNE)?;
+        writer.write(17, Writer::pack_coord(BERN))?;
+        writer.write(41, Writer::pack_coord(OTTAWA))?;
+        writer.write(42, Writer::pack_coord(BERN))?;
+        writer.write(43, Writer::pack_coord(USHUAIA))?;
+        writer.write(44, Writer::pack_coord(MELBOURNE))?;
         writer.close()?;
         let file_metadata = std::fs::metadata(file.path())?;
 
