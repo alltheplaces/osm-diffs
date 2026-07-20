@@ -7,9 +7,7 @@ mod matchers;
 mod pipeline;
 mod places;
 mod s2_util;
-#[allow(unused)] // TODO: Use in production (non-testing) code.
 mod tables;
-mod u64_table;
 
 // Re-exported for main.rs.
 pub use pipeline::run_pipeline;
