@@ -7,6 +7,8 @@
 
 mod coords_map;
 mod graph;
+mod string_counts;
 
 pub use coords_map::CoordsMap;
 pub use graph::{Edge, GraphTable};
+pub use string_counts::StringCounts;
