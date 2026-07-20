@@ -3,8 +3,7 @@ use crate::{
     coverage::Coverage,
     make_progress_bar,
     matchers::MatchMask,
-    tables::{CoordsMap, Edge, GraphTable, StringCounts},
-    u64_table::U64Table,
+    tables::{CoordsMap, Edge, GraphTable, StringCounts, U64Table},
 };
 use anyhow::{Ok, Result};
 use geo::Coord;

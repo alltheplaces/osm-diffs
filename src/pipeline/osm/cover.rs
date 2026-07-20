@@ -1,5 +1,5 @@
 use super::{BlobReader, ParentChainExt, make_progress_bar};
-use crate::{coverage::Coverage, u64_table::U64Table};
+use crate::{coverage::Coverage, tables::U64Table};
 use anyhow::{Ok, Result};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};

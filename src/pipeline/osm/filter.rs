@@ -1,8 +1,10 @@
 use super::{
     BlobReader, FeatureStore, MemberRole, Node, Relation, RelationMember, Way, coords::Coords,
 };
-use crate::coverage::{Coverage, is_wikidata_key, parse_wikidata_ids};
-use crate::u64_table::U64Table;
+use crate::{
+    coverage::{Coverage, is_wikidata_key, parse_wikidata_ids},
+    tables::U64Table,
+};
 use anyhow::{Ok, Result};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};

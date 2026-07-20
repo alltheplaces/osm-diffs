@@ -11,7 +11,7 @@ use std::{
 
 pub struct StringCounts<'a> {
     file: File,
-    mmap: Mmap,
+    _mmap: Mmap,
     entries_count: usize,
 
     chars: &'a [u8],
@@ -129,7 +129,7 @@ impl<'a> StringCounts<'a> {
 
         Ok(StringCounts {
             file,
-            mmap,
+            _mmap: mmap,
             entries_count,
             chars,
             char_offsets,
@@ -242,7 +242,7 @@ impl Writer {
 
         // Write file header.
         self.writer.seek(SeekFrom::Start(0))?;
-        self.writer.write_all(FILE_SIGNATURE); // header[0]
+        self.writer.write_all(FILE_SIGNATURE)?; // header[0]
         self.writer.write_all(&self.strings_count.to_le_bytes())?; // header[1]
         self.writer.write_all(&strings_offset.to_le_bytes())?; // header[2]
         self.writer.write_all(&strings_size.to_le_bytes())?; // header[3]

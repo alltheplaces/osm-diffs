@@ -18,7 +18,7 @@ const FILE_SIGNATURE: &[u8; 8] = b"coords_0";
 
 pub struct CoordsMap<'a> {
     file: File,
-    mmap: Mmap,
+    _mmap: Mmap,
     entries_count: usize,
     keys: &'a [u64],
     coords: &'a [u64],
@@ -98,7 +98,7 @@ impl<'a> CoordsMap<'a> {
 
         Ok(CoordsMap {
             file,
-            mmap,
+            _mmap: mmap,
             entries_count,
             keys,
             coords,
@@ -123,6 +123,7 @@ impl<'a> CoordsMap<'a> {
     }
 
     /// Returns the modification time of the backing file.
+    #[allow(unused)]
     pub fn modified(&self) -> Result<SystemTime> {
         Ok(self.file.metadata()?.modified()?)
     }
@@ -191,7 +192,7 @@ impl Writer {
 
         // Write file header.
         self.writer.seek(SeekFrom::Start(0))?;
-        self.writer.write_all(FILE_SIGNATURE);
+        self.writer.write_all(FILE_SIGNATURE)?;
         self.writer.write_all(&self.coords_count.to_le_bytes())?;
         self.writer.write_all(&keys_offset.to_le_bytes())?;
         self.writer.write_all(&coords_offset.to_le_bytes())?;
