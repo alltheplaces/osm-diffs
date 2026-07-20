@@ -3,7 +3,7 @@ use crate::{
     coverage::Coverage,
     make_progress_bar,
     matchers::MatchMask,
-    tables::{CoordsMap, Edge, GraphTable},
+    tables::{CoordsMap, Edge, GraphTable, StringCounts},
     u64_table,
     u64_table::U64Table,
 };
@@ -20,16 +20,18 @@ use std::{
 };
 
 /// Decides which parts of OpenStreetMap we need for conflation.
-pub struct Pruner<'a> {
+#[allow(unused)]
+pub struct PruneOutput<'a> {
     _coverage: &'a Coverage<'a>,
     coords: CoordsMap<'a>,
+    strings: StringCounts<'a>,
     keep_ways: U64Table,
     keep_relations: U64Table,
     relation_members: U64Table,
 }
 
 /// Output of [prune_relations], the first  step of pruning.
-struct PruneRelationsOutput {
+struct PruneRelationsOutput<'a> {
     /// The IDs of the OpenStreetMap relations we want to keep.
     ///
     /// For example, a
@@ -52,10 +54,22 @@ struct PruneRelationsOutput {
     /// As of July 2026, this set contains 5.8 million IDs, which is
     /// 0.05% of the 11.9 billion features in OpenStreetMap.
     relation_members: U64Table, // 2413085 nodes, 3368795 ways, 47213 relations
+
+    /// The strings that appear the ways and relations we want to keep, and how
+    /// often each string gets used. Later down the pipeline, we need these
+    /// counters to construct a string pool where more the most frequent strings
+    /// get assigned lower numbers.
+    ///
+    /// For example, when a relation is tagged with `tourism=hotel`,
+    /// the strings `"tourism"` and `"hotel"` get added to this counter.
+    ///
+    /// As of July 2026, this counter contains 1.03 million unique strings,
+    /// which is 0.53% of the 194.3 million unique tags in OpenStreetMap.
+    strings: StringCounts<'a>,
 }
 
 /// Output of [prune_ways], the second step of pruning.
-struct PruneWaysOutput {
+struct PruneWaysOutput<'a> {
     /// The IDs of the OpenStreetMap nodes whose coordinates we want to keep.
     ///
     /// For example, when a way is tagged with `tourism=hotel`, the IDs
@@ -72,12 +86,24 @@ struct PruneWaysOutput {
     /// For example, when a way is tagged with `tourism=hotel`, it becomes part
     /// of this set, whereas a way tagged as `highway=residential` gets omitted.
     ///
-    /// As of July 2026, this set contains 40.3 M way IDs, which is
-    /// 3.3% of the 1.2 B ways in OpenStreetMap.
+    /// As of July 2026, this set contains 40.3 million way IDs, which is
+    /// 3.3% of the 1.2 billion ways in OpenStreetMap.
     keep_ways: U64Table,
+
+    /// The strings that appear the ways and relations we want to keep, and how
+    /// often each string gets used. Later down the pipeline, we need these
+    /// counters to construct a string pool where more the most frequent strings
+    /// get assigned lower numbers.
+    ///
+    /// For example, when a way or relation is tagged with `tourism=hotel`,
+    /// the strings `"tourism"` and `"hotel"` get added to this counter.
+    ///
+    /// As of July 2026, this counter contains 9.3 million unique strings,
+    /// which is 4.8% of the 194.3 million unique tags in OpenStreetMap.
+    strings: StringCounts<'a>,
 }
 
-/// Output of [prune_nodex], the third step of pruning.
+/// Output of [prune_nodes], the third step of pruning.
 struct PruneNodesOutput<'a> {
     /// The coordinates we want to keep, keyed by OpenStreetMap node ID.
     ///
@@ -90,21 +116,34 @@ struct PruneNodesOutput<'a> {
     /// As of July 2026, this map contains coordinates for 286.7 million nodes,
     /// which is 2.7% of the 10.7 billion node coordinates in OpenStreetMap.
     coords: CoordsMap<'a>,
+
+    /// The strings we want to keep, and how often each string gets used.
+    /// Later down the pipeline, we need these counters to construct a string pool
+    /// where more the most frequent strings get assigned lower numbers.
+    ///
+    /// For example, when a node, way or relation is tagged with `tourism=hotel`,
+    /// the strings `"tourism"` and `"hotel"` get added to this counter.
+    /// The strings also include relation roles such as `"inner"`.
+    ///
+    /// As of July 2026, this counter contains 30.8 million unique strings,
+    /// which is 15.9% of the 194.3 million unique tags in OpenStreetMap.
+    strings: StringCounts<'a>,
 }
 
-impl<'a> Pruner<'a> {
+impl<'a> PruneOutput<'a> {
     pub fn create(
         osm_reader: &mut BlobReader<File>,
         coverage: &'a Coverage<'a>,
         progress: &MultiProgress,
         workdir: &Path,
-    ) -> Result<Pruner<'a>> {
+    ) -> Result<PruneOutput<'a>> {
         let rels_output = prune_relations(osm_reader, progress, workdir)?;
         let ways_output = prune_ways(osm_reader, &rels_output, progress, workdir)?;
         let nodes_output = prune_nodes(osm_reader, &ways_output, progress, workdir)?;
-        Ok(Pruner {
+        Ok(PruneOutput {
             _coverage: coverage,
             coords: nodes_output.coords,
+            strings: nodes_output.strings,
             keep_ways: ways_output.keep_ways,
             keep_relations: rels_output.keep_relations,
             relation_members: rels_output.relation_members,
@@ -128,17 +167,19 @@ impl<'a> Pruner<'a> {
 }
 
 /// Runs the pipeline step `osm.prune.rels`.
-fn prune_relations(
+fn prune_relations<'a>(
     reader: &mut BlobReader<File>,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<PruneRelationsOutput> {
+) -> Result<PruneRelationsOutput<'a>> {
     let rel_path = PathBuf::from(workdir).join("osm-prune.keep-relations");
     let rel_members_path = PathBuf::from(workdir).join("osm-prune.relation-members");
-    if rel_path.exists() && rel_members_path.exists() {
+    let strings_path = PathBuf::from(workdir).join("osm-prune-rels.strings");
+    if rel_path.exists() && rel_members_path.exists() && strings_path.exists() {
         return Ok(PruneRelationsOutput {
             keep_relations: U64Table::open(&rel_path)?,
             relation_members: U64Table::open(&rel_members_path)?,
+            strings: StringCounts::open(&strings_path)?,
         });
     }
 
@@ -153,7 +194,7 @@ fn prune_relations(
     let (relations, graph) = prune_relations_pass_1(reader, &progress_bar, workdir, &rel_path)?;
 
     // Second pass.
-    let rel_members = prune_relations_pass_2(
+    let (rel_members, strings) = prune_relations_pass_2(
         reader,
         &relations,
         &graph,
@@ -163,14 +204,16 @@ fn prune_relations(
     )?;
 
     progress_bar.finish_with_message(format!(
-        "blobs → {} relations with {} members",
+        "blobs → {} relations with {} members, {} strings",
         relations.len(),
         rel_members.len(),
+        strings.len(),
     ));
 
     Ok(PruneRelationsOutput {
         keep_relations: relations,
         relation_members: rel_members,
+        strings,
     })
 }
 
@@ -247,22 +290,26 @@ fn prune_relations_pass_1<'a>(
 }
 
 /// Pipeline step `osm.prune.rels`, pass 2 of 2.
-fn prune_relations_pass_2(
+fn prune_relations_pass_2<'a>(
     reader: &mut BlobReader<File>,
     keep_1: &U64Table,
     graph: &GraphTable<'_>,
     progress_bar: &ProgressBar,
     workdir: &Path,
     out: &Path,
-) -> Result<U64Table> {
-    if out.exists() {
-        return Ok(U64Table::open(out)?);
+) -> Result<(U64Table, StringCounts<'a>)> {
+    let strings_path = workdir.join("osm-prune-rels.strings");
+    if out.exists() && strings_path.exists() {
+        let rel_members = U64Table::open(out)?;
+        let strings = StringCounts::open(&strings_path)?;
+        return Ok((rel_members, strings));
     }
 
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (strings_tx, strings_rx) = sync_channel::<(String, u64)>(32 * 1024);
         let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
         let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
         let blob_consumer = s.spawn(move || {
@@ -274,12 +321,17 @@ fn prune_relations_pass_2(
                         && graph.ancestors(rel.id).any(|id| keep_1.contains(id))
                     {
                         keep_tx.send(rel.id * 10 + 3)?;
-                        for (_role_name, member_id, member_type) in rel.members() {
+                        for (role_name, member_id, member_type) in rel.members() {
+                            strings_tx.send((String::from(role_name), 1))?;
                             match member_type {
                                 RelationMemberType::Node => keep_tx.send(member_id * 10 + 1)?,
                                 RelationMemberType::Way => keep_tx.send(member_id * 10 + 2)?,
                                 RelationMemberType::Relation => keep_tx.send(member_id * 10 + 3)?,
                             }
+                        }
+                        for (tag_key, tag_value) in rel.tags() {
+                            strings_tx.send((String::from(tag_key), 1))?;
+                            strings_tx.send((String::from(tag_value), 1))?;
                         }
                     }
                 }
@@ -288,29 +340,39 @@ fn prune_relations_pass_2(
             })
         });
         let keep_writer = s.spawn(|| u64_table::create(keep_rx, workdir, out));
+
+        let strings_writer =
+            s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
+
+        strings_writer.join().expect("panic in strings_writer")?;
         keep_writer.join().expect("panic in keep_writer")?;
         blob_consumer.join().expect("panic in blob_consumer")?;
         blob_producer.join().expect("panic in blob_producer")?;
         Ok(())
     })?;
-    Ok(U64Table::open(out)?)
+
+    let rel_members = U64Table::open(out)?;
+    let strings = StringCounts::open(&strings_path)?;
+    Ok((rel_members, strings))
 }
 
 /// Runs the pipeline step `osm.prune.rels`.
-fn prune_ways(
+fn prune_ways<'a>(
     reader: &mut BlobReader<File>,
     rels_output: &PruneRelationsOutput,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<PruneWaysOutput> {
+) -> Result<PruneWaysOutput<'a>> {
     let relation_members = &rels_output.relation_members;
 
     let keep_ways_path = PathBuf::from(workdir).join("osm-prune.keep-ways");
     let keep_coords_path = PathBuf::from(workdir).join("osm-prune.keep-coords");
-    if keep_ways_path.exists() && keep_coords_path.exists() {
+    let strings_path = PathBuf::from(workdir).join("osm-prune-ways.strings");
+    if keep_ways_path.exists() && keep_coords_path.exists() && strings_path.exists() {
         return Ok(PruneWaysOutput {
             keep_ways: U64Table::open(&keep_ways_path)?,
             keep_coords: U64Table::open(&keep_coords_path)?,
+            strings: StringCounts::open(&strings_path)?,
         });
     }
 
@@ -325,11 +387,13 @@ fn prune_ways(
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let (coords_tx, coords_rx) = sync_channel::<u64>(128 * 1024);
+        let (coords_tx, coords_rx) = sync_channel::<u64>(64 * 1024);
+        let (strings_tx, strings_rx) = sync_channel::<(String, u64)>(64 * 1024);
         let (ways_tx, ways_rx) = sync_channel::<u64>(64 * 1024);
         let blob_producer = s.spawn(|| reader.send_way_blobs(blob_tx));
 
-        let coords_tx_1 = coords_tx.clone();
+        let coords_tx_1 = coords_tx.clone(); // ownership moved into blob_consumer
+        let strings_tx_1 = strings_tx.clone(); // ownership moved into blob_consumer
         let blob_consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
@@ -348,6 +412,10 @@ fn prune_ways(
                                 if node_id > 0 {
                                     coords_tx_1.send(node_id as u64)?;
                                 }
+                            }
+                            for (tag_key, tag_value) in way.tags() {
+                                strings_tx_1.send((String::from(tag_key), 1))?;
+                                strings_tx_1.send((String::from(tag_value), 1))?;
                             }
                         }
                     }
@@ -371,12 +439,27 @@ fn prune_ways(
         let keep_coords_writer =
             s.spawn(|| u64_table::create(coords_rx, workdir, &keep_coords_path));
 
+        // Merge [PruneRelationsOutput.strings] into our own string counts.
+        let rel_strings_reader = s.spawn(move || {
+            for (s, count) in rels_output.strings.iter() {
+                strings_tx.send((String::from(s), count))?;
+            }
+            Ok(())
+        });
+
+        let strings_writer =
+            s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
+
+        strings_writer.join().expect("panic in strings_writer")?;
         keep_coords_writer
             .join()
             .expect("panic in keep_coords_writer")?;
         keep_ways_writer
             .join()
             .expect("panic in keep_ways_writer")?;
+        rel_strings_reader
+            .join()
+            .expect("panic in rel_strings_reader")?;
         rel_member_collector
             .join()
             .expect("panic in rel_member_collector")?;
@@ -387,15 +470,18 @@ fn prune_ways(
 
     let keep_ways = U64Table::open(&keep_ways_path)?;
     let keep_coords = U64Table::open(&keep_coords_path)?;
+    let strings = StringCounts::open(&strings_path)?;
     progress_bar.finish_with_message(format!(
-        "blobs → {} ways, {} coords",
+        "blobs → {} ways, {} coords, {} strings",
         keep_ways.len(),
-        keep_coords.len()
+        keep_coords.len(),
+        strings.len()
     ));
 
     Ok(PruneWaysOutput {
         keep_ways,
         keep_coords,
+        strings,
     })
 }
 
@@ -407,9 +493,11 @@ fn prune_nodes<'a>(
 ) -> Result<PruneNodesOutput<'a>> {
     let keep_coords = &ways_output.keep_coords;
     let coords_path = PathBuf::from(workdir).join("osm-prune.coords");
-    if coords_path.exists() {
+    let strings_path = PathBuf::from(workdir).join("osm-prune-nodes.strings");
+    if coords_path.exists() && strings_path.exists() {
         let coords = CoordsMap::open(&coords_path)?;
-        return Ok(PruneNodesOutput { coords });
+        let strings = StringCounts::open(&strings_path)?;
+        return Ok(PruneNodesOutput { coords, strings });
     }
 
     let progress_bar = make_progress_bar(
@@ -423,8 +511,11 @@ fn prune_nodes<'a>(
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let (coords_tx, coords_rx) = sync_channel::<(u64, Coord)>(num_workers);
+        let (coords_tx, coords_rx) = sync_channel::<(u64, Coord)>(64 * 1024);
+        let (strings_tx, strings_rx) = sync_channel::<(String, u64)>(64 * 1024);
         let producer = s.spawn(|| reader.send_node_blobs(blob_tx));
+
+        let strings_tx_1 = strings_tx.clone(); // ownership moved into consumer
         let consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
@@ -441,6 +532,24 @@ fn prune_nodes<'a>(
                                 },
                             ))?;
                         }
+
+                        let keep_node = {
+                            let mut mask = MatchMask::default();
+                            for (key, value) in node.tags.iter() {
+                                mask.add_tag(key, value);
+                            }
+                            !mask.is_empty()
+                        };
+                        if keep_node {
+                            // TODO: Measure whether it makes any difference in performance
+                            // or memory consupmtion to collect counts separately per blob,
+                            // and only send aggregated counts over the channel. If it does,
+                            // change the code also for ways and relations.
+                            for (key, value) in node.tags {
+                                strings_tx_1.send((String::from(key), 1))?;
+                                strings_tx_1.send((String::from(value), 1))?;
+                            }
+                        }
                     }
                 }
                 progress_bar.inc(1);
@@ -448,10 +557,26 @@ fn prune_nodes<'a>(
             })
         });
 
+        // Merge [PruneWaysOutput.strings] (which already contain the counts
+        // for relations) into our own string counts.
+        let way_strings_reader = s.spawn(move || {
+            for (s, count) in ways_output.strings.iter() {
+                strings_tx.send((String::from(s), count))?;
+            }
+            Ok(())
+        });
+
         let coords_writer =
             s.spawn(|| CoordsMap::create(coords_rx.into_iter(), workdir, &coords_path));
 
+        let strings_writer =
+            s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
+
+        strings_writer.join().expect("panic in strings_writer")?;
         coords_writer.join().expect("panic in coords_writer")?;
+        way_strings_reader
+            .join()
+            .expect("panic in way_strings_reader")?;
         consumer.join().expect("panic in consumer")?;
         producer.join().expect("panic in producer")?;
 
@@ -459,6 +584,11 @@ fn prune_nodes<'a>(
     })?;
 
     let coords = CoordsMap::open(&coords_path)?;
-    progress_bar.finish_with_message(format!("blobs → {} coords", coords.len()));
-    Ok(PruneNodesOutput { coords })
+    let strings = StringCounts::open(&strings_path)?;
+    progress_bar.finish_with_message(format!(
+        "blobs → {} coords, {} strings",
+        coords.len(),
+        strings.len()
+    ));
+    Ok(PruneNodesOutput { coords, strings })
 }
