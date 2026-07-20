@@ -5,7 +5,7 @@ use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuild
 use geo::Coord;
 use memmap2::Mmap;
 use std::{
-    fs::{File, rename},
+    fs::{File, remove_file, rename},
     io::{BufWriter, Seek, SeekFrom, Write},
     mem::size_of,
     path::{Path, PathBuf},
@@ -146,7 +146,7 @@ impl Writer {
         writer.write_all(&[0_u8; HEADER_SIZE])?;
 
         let mut coords_path = PathBuf::from(path);
-        coords_path.add_extension(".coords.tmp");
+        coords_path.add_extension("coords.tmp");
         let coords_writer = BufWriter::with_capacity(32 * 1024, File::create(&coords_path)?);
 
         Ok(Writer {
@@ -202,6 +202,7 @@ impl Writer {
         self.coords_writer.flush()?; // flush() returns errors
         drop(self.coords_writer); // drop() does not return errors
         std::io::copy(&mut File::open(&self.coords_path)?, &mut self.writer)?;
+        remove_file(&self.coords_path)?;
 
         self.writer.flush()?; // flush() returns errors
         drop(self.writer); // drop() does not return errors
