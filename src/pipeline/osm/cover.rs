@@ -1,5 +1,5 @@
 use super::{BlobReader, ParentChainExt, make_progress_bar};
-use crate::{coverage::Coverage, u64_table, u64_table::U64Table};
+use crate::{coverage::Coverage, u64_table::U64Table};
 use anyhow::{Ok, Result};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
@@ -27,7 +27,7 @@ pub fn cover_nodes<R: Read + Seek + Send>(
         return Ok(U64Table::open(&out)?);
     }
 
-    let mut num_covered_nodes = 0;
+    let mut result: Option<U64Table> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -56,7 +56,7 @@ pub fn cover_nodes<R: Read + Seek + Send>(
         });
 
         let writer = s.spawn(|| {
-            num_covered_nodes = u64_table::create(node_rx, workdir, &out)?;
+            result = Some(U64Table::create(node_rx.into_iter(), workdir, &out)?);
             Ok(())
         });
 
@@ -65,10 +65,9 @@ pub fn cover_nodes<R: Read + Seek + Send>(
         producer.join().expect("producer panic")?;
         Ok(())
     })?;
-
-    progress_bar.finish_with_message(format!("blobs → {} nodes", num_covered_nodes));
-
-    Ok(U64Table::open(&out)?)
+    let result = result.expect("result");
+    progress_bar.finish_with_message(format!("blobs → {} nodes", result.len()));
+    Ok(result)
 }
 
 pub fn cover_ways<R: Read + Seek + Send>(
@@ -82,7 +81,7 @@ pub fn cover_ways<R: Read + Seek + Send>(
         return Ok(U64Table::open(&out)?);
     }
 
-    let mut num_covered_ways = 0;
+    let mut result: Option<U64Table> = None;
     let progress_bar = make_progress_bar(
         progress,
         "osm.cover.ways  ",
@@ -122,7 +121,7 @@ pub fn cover_ways<R: Read + Seek + Send>(
 
         // Thread to sort way ids and write the resulting table to the working directory.
         let writer = s.spawn(|| {
-            num_covered_ways = crate::u64_table::create(way_rx, workdir, &out)?;
+            result = Some(U64Table::create(way_rx.into_iter(), workdir, &out)?);
             Ok(())
         });
 
@@ -131,9 +130,10 @@ pub fn cover_ways<R: Read + Seek + Send>(
         producer.join().expect("producer panic")?;
         Ok(())
     })?;
+    let result = result.expect("result");
 
-    progress_bar.finish_with_message(format!("blobs → {} ways", num_covered_ways));
-    Ok(U64Table::open(&out)?)
+    progress_bar.finish_with_message(format!("blobs → {} ways", result.len()));
+    Ok(result)
 }
 
 // TODO: Handle recursive relations.
@@ -157,7 +157,8 @@ pub fn cover_relations<R: Read + Seek + Send>(
         reader.count_relation_blobs() as u64,
         "blobs → relations",
     );
-    let mut num_relations = 0;
+
+    let mut result: Option<U64Table> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -215,7 +216,7 @@ pub fn cover_relations<R: Read + Seek + Send>(
 
         // Thread to sort way ids and write the resulting table to the working directory.
         let writer = s.spawn(|| {
-            num_relations = crate::u64_table::create(rel_rx, workdir, &out)?;
+            result = Some(U64Table::create(rel_rx.into_iter(), workdir, &out)?);
             Ok(())
         });
 
@@ -224,7 +225,8 @@ pub fn cover_relations<R: Read + Seek + Send>(
         producer.join().expect("producer panic")?;
         Ok(())
     })?;
+    let result = result.expect("result");
 
-    progress_bar.finish_with_message(format!("blobs → {} relations", num_relations));
-    Ok(U64Table::open(&out)?)
+    progress_bar.finish_with_message(format!("blobs → {} relations", result.len()));
+    Ok(result)
 }

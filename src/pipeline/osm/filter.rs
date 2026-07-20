@@ -2,7 +2,7 @@ use super::{
     BlobReader, FeatureStore, MemberRole, Node, Relation, RelationMember, Way, coords::Coords,
 };
 use crate::coverage::{Coverage, is_wikidata_key, parse_wikidata_ids};
-use crate::{u64_table, u64_table::U64Table};
+use crate::u64_table::U64Table;
 use anyhow::{Ok, Result};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
@@ -223,12 +223,14 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
         });
 
         let node_ref_writer = s.spawn(|| {
-            num_node_refs = u64_table::create(node_ref_rx, workdir, &node_refs_path)?;
+            let table = U64Table::create(node_ref_rx.into_iter(), workdir, &node_refs_path)?;
+            num_node_refs = table.len();
             Ok(())
         });
 
         let way_ref_writer = s.spawn(|| {
-            num_way_refs = u64_table::create(way_ref_rx, workdir, &way_refs_path)?;
+            let table = U64Table::create(way_ref_rx.into_iter(), workdir, &way_refs_path)?;
+            num_way_refs = table.len();
             Ok(())
         });
 
@@ -400,7 +402,8 @@ pub fn filter_ways<'a, R: Read + Seek + Send>(
         });
 
         let node_ref_writer = s.spawn(|| {
-            num_node_refs = u64_table::create(node_ref_rx, workdir, &node_refs_path)?;
+            let table = U64Table::create(node_ref_rx.into_iter(), workdir, &node_refs_path)?;
+            num_node_refs = table.len();
             Ok(())
         });
 
