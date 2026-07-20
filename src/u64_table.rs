@@ -2,8 +2,6 @@ use anyhow::{Ok, Result, anyhow};
 use memmap2::Mmap;
 use std::{fs::File, path::Path, time::SystemTime};
 
-pub use writer::create;
-
 /// A memory-mapped file with sorted 64-bit integers in little-endian encoding.
 ///
 /// Used in the pipeline to represent large sets of identifiers that may not
@@ -19,6 +17,15 @@ pub struct U64Table {
 }
 
 impl U64Table {
+    pub fn create(
+        elements: impl Iterator<Item = u64>,
+        workdir: &Path,
+        out: &Path,
+    ) -> Result<U64Table> {
+        _ = writer::create(elements, workdir, out)?;
+        Self::open(out)
+    }
+
     pub fn open(path: &Path) -> Result<U64Table> {
         let file_size: u64 = std::fs::metadata(path)?.len();
         if !file_size.is_multiple_of(8) {
@@ -149,9 +156,8 @@ mod writer {
     use std::fs::File;
     use std::io::{BufWriter, Write};
     use std::path::{Path, PathBuf};
-    use std::sync::mpsc::Receiver;
 
-    pub fn create(stream: Receiver<u64>, workdir: &Path, out: &Path) -> Result<u64> {
+    pub fn create(elements: impl Iterator<Item = u64>, workdir: &Path, out: &Path) -> Result<u64> {
         let mut tmp_out = PathBuf::from(out);
         tmp_out.add_extension("tmp");
         let sorter: ExternalSorter<u64, std::io::Error, LimitedBufferBuilder> =
@@ -161,7 +167,7 @@ mod writer {
                     /* buffer_size */ 5_000_000, /* preallocate */ true,
                 ))
                 .build()?;
-        let sorted = sorter.sort(stream.into_iter().map(std::io::Result::Ok))?;
+        let sorted = sorter.sort(elements.map(std::io::Result::Ok))?;
         let file = File::create(&tmp_out)?;
         let mut writer = BufWriter::with_capacity(32768, file);
         let mut num_unique_values = 0;
@@ -191,23 +197,14 @@ mod writer {
     mod tests {
         use super::super::U64Table;
         use anyhow::{Ok, Result};
-        use std::sync::mpsc::sync_channel;
 
         #[test]
         fn test_create() -> Result<()> {
-            let (tx, rx) = sync_channel::<u64>(10);
             let tmp = tempfile::TempDir::new()?;
             let out = tmp.path().join("test.u64_table");
 
-            tx.send(42)?;
-            tx.send(23)?;
-            tx.send(23)?;
-            tx.send(7777)?;
-            tx.send(23)?;
-            drop(tx);
-
             let num_written = super::create(
-                /* stream */ rx,
+                /* elements */ [42, 23, 23, 7777, 23].into_iter(),
                 /* workdir */ tmp.path(),
                 /* out */ &out,
             )?;
@@ -225,31 +222,27 @@ mod writer {
 
         #[test]
         fn test_create_single_value() -> Result<()> {
-            let (tx, rx) = sync_channel::<u64>(10);
             let tmp = tempfile::TempDir::new()?;
             let out = tmp.path().join("test.u64_table");
 
-            tx.send(9)?;
-            drop(tx);
-
-            let num_written = super::create(rx, tmp.path(), &out)?;
+            let num_written = super::create([9].into_iter(), tmp.path(), &out)?;
             assert_eq!(num_written, 1);
 
             let table = U64Table::open(&out)?;
             assert_eq!(table.contains(4), false);
+            assert_eq!(table.contains(8), false);
             assert_eq!(table.contains(9), true);
+            assert_eq!(table.contains(10), false);
 
             Ok(())
         }
 
         #[test]
         fn test_create_empty() -> Result<()> {
-            let (tx, rx) = sync_channel::<u64>(10);
             let tmp = tempfile::TempDir::new()?;
             let out = tmp.path().join("test.u64_table");
-            drop(tx);
 
-            let num_written = super::create(rx, tmp.path(), &out)?;
+            let num_written = super::create([].into_iter(), tmp.path(), &out)?;
             assert_eq!(num_written, 0);
 
             let table = U64Table::open(&out)?;

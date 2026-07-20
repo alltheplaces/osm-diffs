@@ -4,7 +4,6 @@ use crate::{
     make_progress_bar,
     matchers::MatchMask,
     tables::{CoordsMap, Edge, GraphTable, StringCounts},
-    u64_table,
     u64_table::U64Table,
 };
 use anyhow::{Ok, Result};
@@ -279,7 +278,8 @@ fn prune_relations_pass_1<'a>(
                 Ok(())
             })
         });
-        let keep_writer = s.spawn(|| u64_table::create(keep_rx, workdir, keep_relations_path));
+        let keep_writer =
+            s.spawn(|| U64Table::create(keep_rx.into_iter(), workdir, keep_relations_path));
         let graph_writer = s.spawn(|| {
             relations_graph = Some(GraphTable::create(
                 edge_rx.into_iter(),
@@ -315,6 +315,7 @@ fn prune_relations_pass_2<'a>(
         return Ok((rel_members, strings));
     }
 
+    let mut rel_members: Option<U64Table> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -349,7 +350,11 @@ fn prune_relations_pass_2<'a>(
                 Ok(())
             })
         });
-        let keep_writer = s.spawn(|| u64_table::create(keep_rx, workdir, out));
+
+        let keep_writer = s.spawn(|| {
+            rel_members = Some(U64Table::create(keep_rx.into_iter(), workdir, out)?);
+            Ok(())
+        });
 
         let strings_writer =
             s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
@@ -361,9 +366,8 @@ fn prune_relations_pass_2<'a>(
         Ok(())
     })?;
 
-    let rel_members = U64Table::open(out)?;
     let strings = StringCounts::open(&strings_path)?;
-    Ok((rel_members, strings))
+    Ok((rel_members.expect("rel_members"), strings))
 }
 
 /// Runs the pipeline step `osm.prune.rels`.
@@ -393,6 +397,8 @@ fn prune_ways<'a>(
         "blobs",
     );
 
+    let mut keep_coords: Option<U64Table> = None;
+    let mut keep_ways: Option<U64Table> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -445,9 +451,22 @@ fn prune_ways<'a>(
             }
             Ok(())
         });
-        let keep_ways_writer = s.spawn(|| u64_table::create(ways_rx, workdir, &keep_ways_path));
-        let keep_coords_writer =
-            s.spawn(|| u64_table::create(coords_rx, workdir, &keep_coords_path));
+        let keep_ways_writer = s.spawn(|| {
+            keep_ways = Some(U64Table::create(
+                ways_rx.into_iter(),
+                workdir,
+                &keep_ways_path,
+            )?);
+            Ok(())
+        });
+        let keep_coords_writer = s.spawn(|| {
+            keep_coords = Some(U64Table::create(
+                coords_rx.into_iter(),
+                workdir,
+                &keep_coords_path,
+            )?);
+            Ok(())
+        });
 
         // Merge [PruneRelationsOutput.strings] into our own string counts.
         let rel_strings_reader = s.spawn(move || {
@@ -478,8 +497,8 @@ fn prune_ways<'a>(
         Ok(())
     })?;
 
-    let keep_ways = U64Table::open(&keep_ways_path)?;
-    let keep_coords = U64Table::open(&keep_coords_path)?;
+    let keep_ways = keep_ways.expect("keep_ways");
+    let keep_coords = keep_coords.expect("keep_coords");
     let strings = StringCounts::open(&strings_path)?;
     progress_bar.finish_with_message(format!(
         "blobs → {} ways, {} coords, {} strings",
@@ -523,6 +542,7 @@ fn prune_nodes<'a>(
         "blobs",
     );
 
+    let mut keep_nodes: Option<U64Table> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -584,7 +604,14 @@ fn prune_nodes<'a>(
             s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
         let coords_writer =
             s.spawn(|| CoordsMap::create(coords_rx.into_iter(), workdir, &coords_path));
-        let keep_nodes_writer = s.spawn(|| u64_table::create(keep_rx, workdir, &keep_nodes_path));
+        let keep_nodes_writer = s.spawn(|| {
+            keep_nodes = Some(U64Table::create(
+                keep_rx.into_iter(),
+                workdir,
+                &keep_nodes_path,
+            )?);
+            Ok(())
+        });
 
         strings_writer.join().expect("panic in strings_writer")?;
         coords_writer.join().expect("panic in coords_writer")?;
@@ -600,7 +627,7 @@ fn prune_nodes<'a>(
         Ok(())
     })?;
 
-    let keep_nodes = U64Table::open(&keep_nodes_path)?;
+    let keep_nodes = keep_nodes.expect("keep_nodes");
     let coords = CoordsMap::open(&coords_path)?;
     let strings = StringCounts::open(&strings_path)?;
     progress_bar.finish_with_message(format!(
