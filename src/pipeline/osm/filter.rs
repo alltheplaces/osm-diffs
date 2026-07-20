@@ -3,7 +3,7 @@ use super::{
 };
 use crate::{
     coverage::{Coverage, is_wikidata_key, parse_wikidata_ids},
-    tables::U64Table,
+    tables::U64Set,
 };
 use anyhow::{Ok, Result};
 use indicatif::MultiProgress;
@@ -117,7 +117,7 @@ impl<'a> FeatureStore for FilteredFeatureStore<'a> {
 pub fn filter_relations<'a, R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
     coverage: &Coverage,
-    covered_relations: &U64Table,
+    covered_relations: &U64Set,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<FilteredFile<'a>> {
@@ -225,13 +225,13 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
         });
 
         let node_ref_writer = s.spawn(|| {
-            let table = U64Table::create(node_ref_rx.into_iter(), workdir, &node_refs_path)?;
+            let table = U64Set::create(node_ref_rx.into_iter(), workdir, &node_refs_path)?;
             num_node_refs = table.len();
             Ok(())
         });
 
         let way_ref_writer = s.spawn(|| {
-            let table = U64Table::create(way_ref_rx.into_iter(), workdir, &way_refs_path)?;
+            let table = U64Set::create(way_ref_rx.into_iter(), workdir, &way_refs_path)?;
             num_way_refs = table.len();
             Ok(())
         });
@@ -279,7 +279,7 @@ pub fn filter_relations<'a, R: Read + Seek + Send>(
 pub fn filter_ways<'a, R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
     coverage: &Coverage,
-    covered_ways: &U64Table,
+    covered_ways: &U64Set,
     filtered_relations: &FilteredFile,
     progress: &MultiProgress,
     workdir: &Path,
@@ -404,7 +404,7 @@ pub fn filter_ways<'a, R: Read + Seek + Send>(
         });
 
         let node_ref_writer = s.spawn(|| {
-            let table = U64Table::create(node_ref_rx.into_iter(), workdir, &node_refs_path)?;
+            let table = U64Set::create(node_ref_rx.into_iter(), workdir, &node_refs_path)?;
             num_node_refs = table.len();
             Ok(())
         });
@@ -457,7 +457,7 @@ fn collect_way_nodes(way: &osm_pbf_iter::Way) -> Vec<u64> {
 pub fn filter_nodes<'a, R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
     coverage: &Coverage,
-    covered_nodes: &U64Table,
+    covered_nodes: &U64Set,
     filtered_ways: &FilteredFile,
     filtered_relations: &FilteredFile,
     progress: &MultiProgress,
@@ -634,7 +634,7 @@ fn round_coords(lon: f64, lat: f64) -> Option<(i32, i32)> {
     }
 }
 
-fn filter<'a, I>(id: u64, tags: I, covered_ids: &U64Table, coverage: &Coverage) -> bool
+fn filter<'a, I>(id: u64, tags: I, covered_ids: &U64Set, coverage: &Coverage) -> bool
 where
     I: Iterator<Item = (&'a str, &'a str)>,
 {

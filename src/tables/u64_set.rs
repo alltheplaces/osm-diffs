@@ -11,22 +11,22 @@ use std::{fs::File, path::Path, time::SystemTime};
 /// Containment test is currently implemented as a regular binary search.
 /// If performance ever becomes an issue, consider Cache-Sensitive Skip Lines,
 /// but this would make the file format slightly more complicated.
-pub struct U64Table {
+pub struct U64Set {
     file: File, // The file that backs mmap.
     mmap: Mmap,
 }
 
-impl U64Table {
+impl U64Set {
     pub fn create(
         elements: impl Iterator<Item = u64>,
         workdir: &Path,
         out: &Path,
-    ) -> Result<U64Table> {
+    ) -> Result<U64Set> {
         _ = writer::create(elements, workdir, out)?;
         Self::open(out)
     }
 
-    pub fn open(path: &Path) -> Result<U64Table> {
+    pub fn open(path: &Path) -> Result<U64Set> {
         let file_size: u64 = std::fs::metadata(path)?.len();
         if !file_size.is_multiple_of(8) {
             return Err(anyhow!("file size must be multiple of 8"));
@@ -36,7 +36,7 @@ impl U64Table {
 
         // SAFETY: We don’t truncate the file while it is mapped into memory.
         let mmap = unsafe { Mmap::map(&file)? };
-        Ok(U64Table { file, mmap })
+        Ok(U64Set { file, mmap })
     }
 
     pub fn contains(&self, n: u64) -> bool {
@@ -85,12 +85,12 @@ mod tests {
     use std::{io::Write, sync::LazyLock};
     use tempfile::NamedTempFile;
 
-    const TEST_TABLE: LazyLock<U64Table> = LazyLock::new(|| {
+    const TEST_TABLE: LazyLock<U64Set> = LazyLock::new(|| {
         let mut file = NamedTempFile::new().expect("NamedTempFile");
         for i in [7_u64, 23, 42] {
             file.write_all(&i.to_le_bytes()).expect("File::write");
         }
-        U64Table::open(&file.path()).expect("U64Table::open")
+        U64Set::open(&file.path()).expect("U64Set::open")
     });
 
     #[test]
@@ -119,7 +119,7 @@ mod tests {
         let mut file = NamedTempFile::new()?;
         file.write_all(&42_u64.to_le_bytes())?;
 
-        let table = U64Table::open(file.path())?;
+        let table = U64Set::open(file.path())?;
         let file_metadata = std::fs::metadata(&file.path())?;
         assert_eq!(table.modified()?, file_metadata.modified()?);
         Ok(())
@@ -130,15 +130,15 @@ mod tests {
         let mut file = NamedTempFile::new()?;
 
         // `open()` should accept an empty file.
-        assert!(U64Table::open(file.path()).is_ok());
+        assert!(U64Set::open(file.path()).is_ok());
 
         // `open()` should accept a file with 16 bytes.
         file.write_all(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15])?;
-        assert!(U64Table::open(file.path()).is_ok());
+        assert!(U64Set::open(file.path()).is_ok());
 
         // `open()` should not accept a file with 17 bytes.
         file.write_all(&[0])?;
-        assert!(U64Table::open(file.path()).is_err());
+        assert!(U64Set::open(file.path()).is_err());
 
         Ok(())
     }
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn test_open_inexistent_file() {
         let path = Path::new("file/does/not/exist");
-        assert!(U64Table::open(&path).is_err());
+        assert!(U64Set::open(&path).is_err());
     }
 }
 
@@ -195,7 +195,7 @@ mod writer {
 
     #[cfg(test)]
     mod tests {
-        use super::super::U64Table;
+        use super::super::U64Set;
         use anyhow::{Ok, Result};
 
         #[test]
@@ -210,7 +210,7 @@ mod writer {
             )?;
             assert_eq!(num_written, 3);
 
-            let table = U64Table::open(&out)?;
+            let table = U64Set::open(&out)?;
             assert_eq!(table.contains(4), false);
             assert_eq!(table.contains(23), true);
             assert_eq!(table.contains(42), true);
@@ -228,7 +228,7 @@ mod writer {
             let num_written = super::create([9].into_iter(), tmp.path(), &out)?;
             assert_eq!(num_written, 1);
 
-            let table = U64Table::open(&out)?;
+            let table = U64Set::open(&out)?;
             assert_eq!(table.contains(4), false);
             assert_eq!(table.contains(8), false);
             assert_eq!(table.contains(9), true);
@@ -245,7 +245,7 @@ mod writer {
             let num_written = super::create([].into_iter(), tmp.path(), &out)?;
             assert_eq!(num_written, 0);
 
-            let table = U64Table::open(&out)?;
+            let table = U64Set::open(&out)?;
             assert_eq!(table.contains(42), false);
 
             Ok(())

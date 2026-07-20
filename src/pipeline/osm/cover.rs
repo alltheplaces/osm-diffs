@@ -1,5 +1,5 @@
 use super::{BlobReader, ParentChainExt, make_progress_bar};
-use crate::{coverage::Coverage, tables::U64Table};
+use crate::{coverage::Coverage, tables::U64Set};
 use anyhow::{Ok, Result};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
@@ -15,7 +15,7 @@ pub fn cover_nodes<R: Read + Seek + Send>(
     coverage: &Coverage,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<U64Table> {
+) -> Result<U64Set> {
     let progress_bar = make_progress_bar(
         progress,
         "osm.cover.nodes ",
@@ -24,10 +24,10 @@ pub fn cover_nodes<R: Read + Seek + Send>(
     );
     let out = workdir.join("covered-nodes");
     if out.exists() {
-        return Ok(U64Table::open(&out)?);
+        return Ok(U64Set::open(&out)?);
     }
 
-    let mut result: Option<U64Table> = None;
+    let mut result: Option<U64Set> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -56,7 +56,7 @@ pub fn cover_nodes<R: Read + Seek + Send>(
         });
 
         let writer = s.spawn(|| {
-            result = Some(U64Table::create(node_rx.into_iter(), workdir, &out)?);
+            result = Some(U64Set::create(node_rx.into_iter(), workdir, &out)?);
             Ok(())
         });
 
@@ -72,16 +72,16 @@ pub fn cover_nodes<R: Read + Seek + Send>(
 
 pub fn cover_ways<R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    covered_nodes: &U64Table,
+    covered_nodes: &U64Set,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<U64Table> {
+) -> Result<U64Set> {
     let out = workdir.join("covered-ways");
     if out.exists() {
-        return Ok(U64Table::open(&out)?);
+        return Ok(U64Set::open(&out)?);
     }
 
-    let mut result: Option<U64Table> = None;
+    let mut result: Option<U64Set> = None;
     let progress_bar = make_progress_bar(
         progress,
         "osm.cover.ways  ",
@@ -121,7 +121,7 @@ pub fn cover_ways<R: Read + Seek + Send>(
 
         // Thread to sort way ids and write the resulting table to the working directory.
         let writer = s.spawn(|| {
-            result = Some(U64Table::create(way_rx.into_iter(), workdir, &out)?);
+            result = Some(U64Set::create(way_rx.into_iter(), workdir, &out)?);
             Ok(())
         });
 
@@ -140,15 +140,15 @@ pub fn cover_ways<R: Read + Seek + Send>(
 // https://github.com/diffed-places/pipeline/issues/141
 pub fn cover_relations<R: Read + Seek + Send>(
     reader: &mut BlobReader<R>,
-    covered_nodes: &U64Table,
-    covered_ways: &U64Table,
+    covered_nodes: &U64Set,
+    covered_ways: &U64Set,
     relation_parents: &HashMap<u64, u64>,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<U64Table> {
+) -> Result<U64Set> {
     let out = workdir.join("covered-relations");
     if out.exists() {
-        return Ok(U64Table::open(&out)?);
+        return Ok(U64Set::open(&out)?);
     }
 
     let progress_bar = make_progress_bar(
@@ -158,7 +158,7 @@ pub fn cover_relations<R: Read + Seek + Send>(
         "blobs → relations",
     );
 
-    let mut result: Option<U64Table> = None;
+    let mut result: Option<U64Set> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -216,7 +216,7 @@ pub fn cover_relations<R: Read + Seek + Send>(
 
         // Thread to sort way ids and write the resulting table to the working directory.
         let writer = s.spawn(|| {
-            result = Some(U64Table::create(rel_rx.into_iter(), workdir, &out)?);
+            result = Some(U64Set::create(rel_rx.into_iter(), workdir, &out)?);
             Ok(())
         });
 

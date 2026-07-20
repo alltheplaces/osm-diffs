@@ -3,7 +3,7 @@ use crate::{
     coverage::Coverage,
     make_progress_bar,
     matchers::MatchMask,
-    tables::{CoordsMap, Edge, GraphTable, StringCounts, U64Table},
+    tables::{CoordsMap, Edge, GraphTable, StringCounts, U64Set},
 };
 use anyhow::{Ok, Result};
 use geo::Coord;
@@ -23,10 +23,10 @@ pub struct PruneOutput<'a> {
     _coverage: &'a Coverage<'a>,
     coords: CoordsMap<'a>,
     strings: StringCounts<'a>,
-    keep_nodes: U64Table,
-    keep_ways: U64Table,
-    keep_relations: U64Table,
-    relation_members: U64Table,
+    keep_nodes: U64Set,
+    keep_ways: U64Set,
+    keep_relations: U64Set,
+    relation_members: U64Set,
 }
 
 /// Output of [prune_relations], the first  step of pruning.
@@ -40,7 +40,7 @@ struct PruneRelationsOutput<'a> {
     ///
     /// As of July 2026, this set contains 0.9 million IDs, which is
     /// 6.2% of the 14.6 million relations in OpenStreetMap.
-    keep_relations: U64Table,
+    keep_relations: U64Set,
 
     /// The IDs of OpenStreetMap features that are members of any relation we want to keep,
     /// either directly or [indirectly](https://wiki.openstreetmap.org/wiki/Super-relation).
@@ -52,7 +52,7 @@ struct PruneRelationsOutput<'a> {
     ///
     /// As of July 2026, this set contains 5.8 million IDs, which is
     /// 0.05% of the 11.9 billion features in OpenStreetMap.
-    relation_members: U64Table, // 2413085 nodes, 3368795 ways, 47213 relations
+    relation_members: U64Set, // 2413085 nodes, 3368795 ways, 47213 relations
 
     /// The strings that appear the ways and relations we want to keep, and how
     /// often each string gets used. Later down the pipeline, we need these
@@ -78,7 +78,7 @@ struct PruneWaysOutput<'a> {
     ///
     /// As of July 2026, this set contains 286.7 million node IDs,
     /// which is 2.7% of the 10.7 billion nodes in OpenStreetMap.
-    keep_coords: U64Table,
+    keep_coords: U64Set,
 
     /// The IDs of OpenStreetMap ways we want to keep.
     ///
@@ -87,7 +87,7 @@ struct PruneWaysOutput<'a> {
     ///
     /// As of July 2026, this set contains 40.3 million way IDs, which is
     /// 3.3% of the 1.2 billion ways in OpenStreetMap.
-    keep_ways: U64Table,
+    keep_ways: U64Set,
 
     /// The strings that appear the ways and relations we want to keep, and how
     /// often each string gets used. Later down the pipeline, we need these
@@ -110,7 +110,7 @@ struct PruneNodesOutput<'a> {
     /// As of July 2026, this set contains 122.5 million node IDs,
     /// which is 1.1% of the 10.7 billion nodes in OpenStreetMap,
     /// or 41.8% of the 292.9 million OSM nodes with at least one tag.
-    keep_nodes: U64Table,
+    keep_nodes: U64Set,
 
     /// The coordinates we want to keep, keyed by OpenStreetMap node ID.
     ///
@@ -185,8 +185,8 @@ fn prune_relations<'a>(
     let strings_path = PathBuf::from(workdir).join("osm-prune-rels.strings");
     if rel_path.exists() && rel_members_path.exists() && strings_path.exists() {
         return Ok(PruneRelationsOutput {
-            keep_relations: U64Table::open(&rel_path)?,
-            relation_members: U64Table::open(&rel_members_path)?,
+            keep_relations: U64Set::open(&rel_path)?,
+            relation_members: U64Set::open(&rel_members_path)?,
             strings: StringCounts::open(&strings_path)?,
         });
     }
@@ -231,10 +231,10 @@ fn prune_relations_pass_1<'a>(
     progress_bar: &ProgressBar,
     workdir: &Path,
     keep_relations_path: &Path,
-) -> Result<(U64Table, GraphTable<'a>)> {
+) -> Result<(U64Set, GraphTable<'a>)> {
     let relation_graph_path = PathBuf::from(workdir).join("osm-prune.relation-graph");
     if keep_relations_path.exists() && relation_graph_path.exists() {
-        let keep_relations = U64Table::open(keep_relations_path)?;
+        let keep_relations = U64Set::open(keep_relations_path)?;
         let relations_graph = GraphTable::open(&relation_graph_path)?;
         return Ok((keep_relations, relations_graph));
     }
@@ -278,7 +278,7 @@ fn prune_relations_pass_1<'a>(
             })
         });
         let keep_writer =
-            s.spawn(|| U64Table::create(keep_rx.into_iter(), workdir, keep_relations_path));
+            s.spawn(|| U64Set::create(keep_rx.into_iter(), workdir, keep_relations_path));
         let graph_writer = s.spawn(|| {
             relations_graph = Some(GraphTable::create(
                 edge_rx.into_iter(),
@@ -294,27 +294,27 @@ fn prune_relations_pass_1<'a>(
         Ok(())
     })?;
 
-    let keep_relations = U64Table::open(keep_relations_path)?;
+    let keep_relations = U64Set::open(keep_relations_path)?;
     Ok((keep_relations, relations_graph.expect("graph")))
 }
 
 /// Pipeline step `osm.prune.rels`, pass 2 of 2.
 fn prune_relations_pass_2<'a>(
     reader: &mut BlobReader<File>,
-    keep_1: &U64Table,
+    keep_1: &U64Set,
     graph: &GraphTable<'_>,
     progress_bar: &ProgressBar,
     workdir: &Path,
     out: &Path,
-) -> Result<(U64Table, StringCounts<'a>)> {
+) -> Result<(U64Set, StringCounts<'a>)> {
     let strings_path = workdir.join("osm-prune-rels.strings");
     if out.exists() && strings_path.exists() {
-        let rel_members = U64Table::open(out)?;
+        let rel_members = U64Set::open(out)?;
         let strings = StringCounts::open(&strings_path)?;
         return Ok((rel_members, strings));
     }
 
-    let mut rel_members: Option<U64Table> = None;
+    let mut rel_members: Option<U64Set> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -351,7 +351,7 @@ fn prune_relations_pass_2<'a>(
         });
 
         let keep_writer = s.spawn(|| {
-            rel_members = Some(U64Table::create(keep_rx.into_iter(), workdir, out)?);
+            rel_members = Some(U64Set::create(keep_rx.into_iter(), workdir, out)?);
             Ok(())
         });
 
@@ -383,8 +383,8 @@ fn prune_ways<'a>(
     let strings_path = PathBuf::from(workdir).join("osm-prune-ways.strings");
     if keep_ways_path.exists() && keep_coords_path.exists() && strings_path.exists() {
         return Ok(PruneWaysOutput {
-            keep_ways: U64Table::open(&keep_ways_path)?,
-            keep_coords: U64Table::open(&keep_coords_path)?,
+            keep_ways: U64Set::open(&keep_ways_path)?,
+            keep_coords: U64Set::open(&keep_coords_path)?,
             strings: StringCounts::open(&strings_path)?,
         });
     }
@@ -396,8 +396,8 @@ fn prune_ways<'a>(
         "blobs",
     );
 
-    let mut keep_coords: Option<U64Table> = None;
-    let mut keep_ways: Option<U64Table> = None;
+    let mut keep_coords: Option<U64Set> = None;
+    let mut keep_ways: Option<U64Set> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -451,7 +451,7 @@ fn prune_ways<'a>(
             Ok(())
         });
         let keep_ways_writer = s.spawn(|| {
-            keep_ways = Some(U64Table::create(
+            keep_ways = Some(U64Set::create(
                 ways_rx.into_iter(),
                 workdir,
                 &keep_ways_path,
@@ -459,7 +459,7 @@ fn prune_ways<'a>(
             Ok(())
         });
         let keep_coords_writer = s.spawn(|| {
-            keep_coords = Some(U64Table::create(
+            keep_coords = Some(U64Set::create(
                 coords_rx.into_iter(),
                 workdir,
                 &keep_coords_path,
@@ -524,7 +524,7 @@ fn prune_nodes<'a>(
     let coords_path = PathBuf::from(workdir).join("osm-prune.coords");
     let strings_path = PathBuf::from(workdir).join("osm-prune.strings");
     if keep_nodes_path.exists() && coords_path.exists() && strings_path.exists() {
-        let keep_nodes = U64Table::open(&keep_nodes_path)?;
+        let keep_nodes = U64Set::open(&keep_nodes_path)?;
         let coords = CoordsMap::open(&coords_path)?;
         let strings = StringCounts::open(&strings_path)?;
         return Ok(PruneNodesOutput {
@@ -541,7 +541,7 @@ fn prune_nodes<'a>(
         "blobs",
     );
 
-    let mut keep_nodes: Option<U64Table> = None;
+    let mut keep_nodes: Option<U64Set> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
@@ -604,7 +604,7 @@ fn prune_nodes<'a>(
         let coords_writer =
             s.spawn(|| CoordsMap::create(coords_rx.into_iter(), workdir, &coords_path));
         let keep_nodes_writer = s.spawn(|| {
-            keep_nodes = Some(U64Table::create(
+            keep_nodes = Some(U64Set::create(
                 keep_rx.into_iter(),
                 workdir,
                 &keep_nodes_path,
