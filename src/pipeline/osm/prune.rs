@@ -25,6 +25,7 @@ pub struct PruneOutput<'a> {
     _coverage: &'a Coverage<'a>,
     coords: CoordsMap<'a>,
     strings: StringCounts<'a>,
+    keep_nodes: U64Table,
     keep_ways: U64Table,
     keep_relations: U64Table,
     relation_members: U64Table,
@@ -32,7 +33,7 @@ pub struct PruneOutput<'a> {
 
 /// Output of [prune_relations], the first  step of pruning.
 struct PruneRelationsOutput<'a> {
-    /// The IDs of the OpenStreetMap relations we want to keep.
+    /// The IDs of OpenStreetMap relations we want to keep.
     ///
     /// For example, a
     /// [multipolygon](https://wiki.openstreetmap.org/wiki/Relation:multipolygon)
@@ -43,7 +44,7 @@ struct PruneRelationsOutput<'a> {
     /// 6.2% of the 14.6 million relations in OpenStreetMap.
     keep_relations: U64Table,
 
-    /// The IDs of the OpenStreetMap features that are members of any relation we want to keep,
+    /// The IDs of OpenStreetMap features that are members of any relation we want to keep,
     /// either directly or [indirectly](https://wiki.openstreetmap.org/wiki/Super-relation).
     ///
     /// For example, when a
@@ -70,7 +71,7 @@ struct PruneRelationsOutput<'a> {
 
 /// Output of [prune_ways], the second step of pruning.
 struct PruneWaysOutput<'a> {
-    /// The IDs of the OpenStreetMap nodes whose coordinates we want to keep.
+    /// The IDs of OpenStreetMap nodes whose coordinates we want to keep.
     ///
     /// For example, when a way is tagged with `tourism=hotel`, the IDs
     /// of its member nodes become part of this set. Likewise, when a relation
@@ -81,7 +82,7 @@ struct PruneWaysOutput<'a> {
     /// which is 2.7% of the 10.7 billion nodes in OpenStreetMap.
     keep_coords: U64Table,
 
-    /// The IDs of the OpenStreetMap ways we want to keep.
+    /// The IDs of OpenStreetMap ways we want to keep.
     ///
     /// For example, when a way is tagged with `tourism=hotel`, it becomes part
     /// of this set, whereas a way tagged as `highway=residential` gets omitted.
@@ -105,6 +106,14 @@ struct PruneWaysOutput<'a> {
 
 /// Output of [prune_nodes], the third step of pruning.
 struct PruneNodesOutput<'a> {
+    /// The IDs of OpenStreetMap nodes we want to keep, for example
+    /// nodes tagged with `tourism=hotel`.
+    ///
+    /// As of July 2026, this set contains 122.5 million node IDs,
+    /// which is 1.1% of the 10.7 billion nodes in OpenStreetMap,
+    /// or 41.8% of the 292.9 million OSM nodes with at least one tag.
+    keep_nodes: U64Table,
+
     /// The coordinates we want to keep, keyed by OpenStreetMap node ID.
     ///
     /// For example, when a way is tagged with `tourism=hotel`, the coordinates
@@ -144,6 +153,7 @@ impl<'a> PruneOutput<'a> {
             _coverage: coverage,
             coords: nodes_output.coords,
             strings: nodes_output.strings,
+            keep_nodes: nodes_output.keep_nodes,
             keep_ways: ways_output.keep_ways,
             keep_relations: rels_output.keep_relations,
             relation_members: rels_output.relation_members,
@@ -492,12 +502,18 @@ fn prune_nodes<'a>(
     workdir: &Path,
 ) -> Result<PruneNodesOutput<'a>> {
     let keep_coords = &ways_output.keep_coords;
+    let keep_nodes_path = PathBuf::from(workdir).join("osm-prune.keep-nodes");
     let coords_path = PathBuf::from(workdir).join("osm-prune.coords");
-    let strings_path = PathBuf::from(workdir).join("osm-prune-nodes.strings");
-    if coords_path.exists() && strings_path.exists() {
+    let strings_path = PathBuf::from(workdir).join("osm-prune.strings");
+    if keep_nodes_path.exists() && coords_path.exists() && strings_path.exists() {
+        let keep_nodes = U64Table::open(&keep_nodes_path)?;
         let coords = CoordsMap::open(&coords_path)?;
         let strings = StringCounts::open(&strings_path)?;
-        return Ok(PruneNodesOutput { coords, strings });
+        return Ok(PruneNodesOutput {
+            keep_nodes,
+            coords,
+            strings,
+        });
     }
 
     let progress_bar = make_progress_bar(
@@ -511,6 +527,7 @@ fn prune_nodes<'a>(
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
         let (coords_tx, coords_rx) = sync_channel::<(u64, Coord)>(64 * 1024);
         let (strings_tx, strings_rx) = sync_channel::<(String, u64)>(64 * 1024);
         let producer = s.spawn(|| reader.send_node_blobs(blob_tx));
@@ -541,10 +558,7 @@ fn prune_nodes<'a>(
                             !mask.is_empty()
                         };
                         if keep_node {
-                            // TODO: Measure whether it makes any difference in performance
-                            // or memory consupmtion to collect counts separately per blob,
-                            // and only send aggregated counts over the channel. If it does,
-                            // change the code also for ways and relations.
+                            keep_tx.send(node.id)?;
                             for (key, value) in node.tags {
                                 strings_tx_1.send((String::from(key), 1))?;
                                 strings_tx_1.send((String::from(value), 1))?;
@@ -566,14 +580,17 @@ fn prune_nodes<'a>(
             Ok(())
         });
 
-        let coords_writer =
-            s.spawn(|| CoordsMap::create(coords_rx.into_iter(), workdir, &coords_path));
-
         let strings_writer =
             s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
+        let coords_writer =
+            s.spawn(|| CoordsMap::create(coords_rx.into_iter(), workdir, &coords_path));
+        let keep_nodes_writer = s.spawn(|| u64_table::create(keep_rx, workdir, &keep_nodes_path));
 
         strings_writer.join().expect("panic in strings_writer")?;
         coords_writer.join().expect("panic in coords_writer")?;
+        keep_nodes_writer
+            .join()
+            .expect("panic in keep_nodes_writer")?;
         way_strings_reader
             .join()
             .expect("panic in way_strings_reader")?;
@@ -583,12 +600,18 @@ fn prune_nodes<'a>(
         Ok(())
     })?;
 
+    let keep_nodes = U64Table::open(&keep_nodes_path)?;
     let coords = CoordsMap::open(&coords_path)?;
     let strings = StringCounts::open(&strings_path)?;
     progress_bar.finish_with_message(format!(
-        "blobs → {} coords, {} strings",
+        "blobs → {} nodes, {} coords, {} strings",
+        keep_nodes.len(),
         coords.len(),
         strings.len()
     ));
-    Ok(PruneNodesOutput { coords, strings })
+    Ok(PruneNodesOutput {
+        keep_nodes,
+        coords,
+        strings,
+    })
 }
