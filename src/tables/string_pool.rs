@@ -1,9 +1,11 @@
-use anyhow::{Ok, Result};
+use anyhow::{Context, Ok, Result};
+use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use memmap2::Mmap;
 use std::{
     fs::{File, remove_file, rename},
     hash::{DefaultHasher, Hash, Hasher},
-    io::{BufWriter, Seek, SeekFrom, Write},
+    io,
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -12,16 +14,22 @@ pub struct StringPool<'a> {
     file: File,
     _mmap: Mmap,
     len: usize,
+    hash_index: &'a [u64],
+    hash_values: &'a [u64],
     chars: &'a [u8],
     starts: &'a [u64],
 }
 
-const HEADER_SIZE: usize = 8 * 8;
+const HEADER_SIZE: usize = 10 * 8;
 const FILE_SIGNATURE: &[u8; 8] = b"strpool0";
 
 impl<'a> StringPool<'a> {
-    pub fn create(strings: impl Iterator<Item = String>, path: &Path) -> Result<StringPool<'a>> {
-        let mut writer = Writer::create(path)?;
+    pub fn create(
+        strings: impl Iterator<Item = String>,
+        workdir: &Path,
+        path: &Path,
+    ) -> Result<StringPool<'a>> {
+        let mut writer = Writer::create(workdir, path)?;
         for s in strings {
             writer.write(&s)?;
         }
@@ -45,14 +53,54 @@ impl<'a> StringPool<'a> {
         };
         let len = usize::try_from(header[1])?;
 
-        let starts = {
+        let hash_index = {
             let offset = usize::try_from(header[2])?;
             let size = usize::try_from(header[3])?;
-            if offset + size <= mmap.len() && offset.is_multiple_of(8) {
+            if offset + size <= mmap.len() && offset.is_multiple_of(8) && size.is_multiple_of(8) {
                 // SAFETY: Verified size and alignment.
                 unsafe {
                     let ptr = mmap.as_ptr().add(offset) as *const u64;
-                    std::slice::from_raw_parts(ptr, size)
+                    std::slice::from_raw_parts(ptr, size / 8)
+                }
+            } else {
+                anyhow::bail!(
+                    "misplaced hash_index in {}: mmap.len={}, offset={}, size={}",
+                    path.display(),
+                    mmap.len(),
+                    offset,
+                    size
+                );
+            }
+        };
+
+        let hash_values = {
+            let offset = usize::try_from(header[4])?;
+            let size = usize::try_from(header[5])?;
+            if offset + size <= mmap.len() && offset.is_multiple_of(8) && size.is_multiple_of(8) {
+                // SAFETY: Verified size and alignment.
+                unsafe {
+                    let ptr = mmap.as_ptr().add(offset) as *const u64;
+                    std::slice::from_raw_parts(ptr, size / 8)
+                }
+            } else {
+                anyhow::bail!(
+                    "misplaced hash_values in {}: mmap.len={}, offset={}, size={}",
+                    path.display(),
+                    mmap.len(),
+                    offset,
+                    size
+                );
+            }
+        };
+
+        let starts = {
+            let offset = usize::try_from(header[6])?;
+            let size = usize::try_from(header[7])?;
+            if offset + size <= mmap.len() && offset.is_multiple_of(8) && size.is_multiple_of(8) {
+                // SAFETY: Verified size and alignment.
+                unsafe {
+                    let ptr = mmap.as_ptr().add(offset) as *const u64;
+                    std::slice::from_raw_parts(ptr, size / 8)
                 }
             } else {
                 anyhow::bail!(
@@ -66,8 +114,8 @@ impl<'a> StringPool<'a> {
         };
 
         let chars = {
-            let offset = usize::try_from(header[4])?;
-            let size = usize::try_from(header[5])?;
+            let offset = usize::try_from(header[8])?;
+            let size = usize::try_from(header[9])?;
             if offset + size <= mmap.len() {
                 // SAFETY: Verified length; no alignment constraints of &[u8].
                 unsafe {
@@ -89,6 +137,8 @@ impl<'a> StringPool<'a> {
             file,
             _mmap: mmap,
             len,
+            hash_index,
+            hash_values,
             chars,
             starts,
         })
@@ -111,6 +161,7 @@ impl<'a> StringPool<'a> {
 struct Writer {
     path: PathBuf,
     tmp_path: PathBuf,
+    workdir: PathBuf,
     entry_count: usize,
 
     writer: BufWriter<File>,
@@ -126,7 +177,7 @@ struct Writer {
 }
 
 impl Writer {
-    pub fn create(path: &Path) -> Result<Writer> {
+    pub fn create(workdir: &Path, path: &Path) -> Result<Writer> {
         let mut tmp_path = PathBuf::from(path);
         tmp_path.add_extension("tmp");
         let mut writer = BufWriter::with_capacity(32 * 1024, File::create(&tmp_path)?);
@@ -147,6 +198,7 @@ impl Writer {
         Ok(Writer {
             path: PathBuf::from(path),
             tmp_path,
+            workdir: PathBuf::from(workdir),
             entry_count: 0,
             writer,
             chars_path,
@@ -175,47 +227,150 @@ impl Writer {
     }
 
     pub fn close(mut self) -> Result<()> {
-        // TODO: Sort hashes. For now, we discard them.
-        assert_eq!(
-            self.hashes_writer.stream_position()?,
-            self.entry_count as u64 * 8
-        );
-        drop(self.hashes_writer.into_inner()?);
+        // Sort hashes.
+        let (hash_index_path, hash_values_path) = {
+            self.hashes_writer.flush()?;
+            assert_eq!(
+                self.hashes_writer.stream_position()?,
+                self.entry_count as u64 * 8
+            );
+            drop(self.hashes_writer.into_inner()?);
+            Self::sort_hashes(&self.workdir, &self.hashes_path)?
+        };
         remove_file(&self.hashes_path)?;
+        let hash_index_size = std::fs::metadata(&hash_index_path)?.len();
+        let hash_values_size = std::fs::metadata(&hash_values_path)?.len();
+        let hash_index_pos = HEADER_SIZE as u64;
+        let hash_values_pos = hash_index_pos + hash_index_size;
 
         let chars_size: u64 = self.chars_writer.stream_position()?;
-
         self.starts_writer.write_all(&chars_size.to_le_bytes())?;
         let starts_size: u64 = self.starts_writer.stream_position()?;
-        let starts_pos: u64 = HEADER_SIZE as u64;
+        let starts_pos: u64 = hash_values_pos + hash_values_size;
 
         let chars_pos: u64 = starts_pos + starts_size;
 
         // Write file header.
         self.writer.seek(SeekFrom::Start(0))?;
-        self.writer.write_all(FILE_SIGNATURE)?; // header[0]
-        self.writer.write_all(&self.entry_count.to_le_bytes())?; // header[1]
-        self.writer.write_all(&starts_pos.to_le_bytes())?; // header[2]
-        self.writer.write_all(&starts_size.to_le_bytes())?; // header[3]
-        self.writer.write_all(&chars_pos.to_le_bytes())?; // header[4]
-        self.writer.write_all(&chars_size.to_le_bytes())?; // header[5]	
+        self.writer.write_all(FILE_SIGNATURE)?; // header[0] = magic
+        self.writer.write_all(&self.entry_count.to_le_bytes())?; // header[1] = len
+        self.writer.write_all(&hash_index_pos.to_le_bytes())?; // header[2] = hash_index.pos
+        self.writer.write_all(&hash_index_size.to_le_bytes())?; // header[3] = hash_index.len
+        self.writer.write_all(&hash_values_pos.to_le_bytes())?; // header[4] = hash_values.pos
+        self.writer.write_all(&hash_values_size.to_le_bytes())?; // header[5] = hash_values.len
+        self.writer.write_all(&starts_pos.to_le_bytes())?; // header[6] = starts.pos
+        self.writer.write_all(&starts_size.to_le_bytes())?; // header[7] = starts.len
+        self.writer.write_all(&chars_pos.to_le_bytes())?; // header[8] = chars.pos
+        self.writer.write_all(&chars_size.to_le_bytes())?; // header[9]	= chars.len
         assert!(self.writer.stream_position()? <= HEADER_SIZE as u64);
+        self.writer.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
+
+        // Copy hash_index array into the output file.
+        {
+            assert_eq!(self.writer.stream_position()?, hash_index_pos);
+            std::io::copy(&mut File::open(&hash_index_path)?, &mut self.writer)?;
+            remove_file(&hash_index_path)?;
+            drop(hash_index_path);
+        }
+
+        // Copy hash_values array into the output file.
+        {
+            assert_eq!(self.writer.stream_position()?, hash_values_pos);
+            std::io::copy(&mut File::open(&hash_values_path)?, &mut self.writer)?;
+            remove_file(&hash_values_path)?;
+            drop(hash_values_path);
+        }
 
         // Copy starts array into the output file.
-        self.writer.seek(SeekFrom::Start(starts_pos))?;
-        drop(self.starts_writer.into_inner()?);
-        std::io::copy(&mut File::open(&self.starts_path)?, &mut self.writer)?;
-        remove_file(&self.starts_path)?;
+        {
+            assert_eq!(self.writer.stream_position()?, starts_pos);
+            drop(self.starts_writer.into_inner()?);
+            std::io::copy(&mut File::open(&self.starts_path)?, &mut self.writer)?;
+            remove_file(&self.starts_path)?;
+        }
 
         // Copy characters into the output file.
-        assert_eq!(self.writer.stream_position()?, chars_pos);
-        drop(self.chars_writer.into_inner()?);
-        std::io::copy(&mut File::open(&self.chars_path)?, &mut self.writer)?;
-        remove_file(&self.chars_path)?;
+        {
+            assert_eq!(self.writer.stream_position()?, chars_pos);
+            drop(self.chars_writer.into_inner()?);
+            std::io::copy(&mut File::open(&self.chars_path)?, &mut self.writer)?;
+            remove_file(&self.chars_path)?;
+        }
 
         self.writer.into_inner()?.sync_all()?;
         rename(&self.tmp_path, &self.path)?;
         Ok(())
+    }
+
+    fn sort_hashes(workdir: &Path, path: &Path) -> Result<(PathBuf, PathBuf)> {
+        let index_path = {
+            let mut p = PathBuf::from(path);
+            p.add_extension("index.tmp");
+            p
+        };
+        let hash_values_path = {
+            let mut p = PathBuf::from(path);
+            p.add_extension("sorted.tmp");
+            p
+        };
+        let mut index_writer = BufWriter::with_capacity(32 * 1024, File::create(&index_path)?);
+        let mut hash_values_writer =
+            BufWriter::with_capacity(32 * 1024, File::create(&hash_values_path)?);
+
+        let sorter: ExternalSorter<(u64, usize), std::io::Error, LimitedBufferBuilder> =
+            ExternalSorterBuilder::new()
+                .with_tmp_dir(workdir)
+                .with_buffer(LimitedBufferBuilder::new(
+                    4 * 1024 * 1024,
+                    /* preallocate */ true,
+                ))
+                .build()?;
+        let sorted = sorter.sort(HashFileIter::create(path)?)?;
+        for item in sorted {
+            let (hash_value, index) = item?;
+            hash_values_writer.write_all(&hash_value.to_le_bytes())?;
+            index_writer.write_all(&(index as u64).to_le_bytes())?;
+        }
+        index_writer.flush()?;
+        index_writer.into_inner()?.sync_all()?;
+
+        hash_values_writer.flush()?;
+        hash_values_writer.into_inner()?.sync_all()?;
+
+        Ok((index_path, hash_values_path))
+    }
+}
+
+pub struct HashFileIter {
+    reader: BufReader<File>,
+    count: usize,
+}
+
+impl HashFileIter {
+    pub fn create(path: &Path) -> Result<Self> {
+        let file =
+            File::open(path).with_context(|| format!("failed to open file: {}", path.display()))?;
+        let reader = BufReader::new(file);
+        Ok(Self { reader, count: 0 })
+    }
+}
+
+impl Iterator for HashFileIter {
+    type Item = io::Result<(u64, usize)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::result::Result::Ok;
+        let mut buf = [0u8; 8];
+        match self.reader.read_exact(&mut buf) {
+            Ok(()) => {
+                let hash_value = u64::from_le_bytes(buf);
+                let index = self.count;
+                self.count += 1;
+                Some(Ok((hash_value, index)))
+            }
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => None,
+            Err(e) => Some(Err(e)),
+        }
     }
 }
 
@@ -226,11 +381,15 @@ mod tests {
     use tempfile::TempDir;
 
     const TEST_POOL: LazyLock<StringPool> = LazyLock::new(|| {
-        let entries = &["zero", "one", "two", "three"];
+        let entries = &["zero", "one", "two", "hello world"];
         let workdir = TempDir::new().expect("TempDir::new() failed");
         let path = workdir.path().join("test.StringPool");
-        StringPool::create(entries.into_iter().map(|&s| String::from(s)), &path)
-            .expect("StringPool::create() failed")
+        StringPool::create(
+            entries.into_iter().map(|&s| String::from(s)),
+            &workdir.path(),
+            &path,
+        )
+        .expect("StringPool::create() failed")
     });
 
     #[test]
@@ -238,7 +397,7 @@ mod tests {
         assert_eq!(TEST_POOL.get(0), "zero");
         assert_eq!(TEST_POOL.get(1), "one");
         assert_eq!(TEST_POOL.get(2), "two");
-        assert_eq!(TEST_POOL.get(3), "three");
+        assert_eq!(TEST_POOL.get(3), "hello world");
     }
 
     #[test]

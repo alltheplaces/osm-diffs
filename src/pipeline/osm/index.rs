@@ -78,6 +78,7 @@ fn index_strings<'a>(
                 None
             }
         }),
+        workdir,
         &string_pool_path,
     )?;
     iter_result?;
