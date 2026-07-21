@@ -24,7 +24,7 @@ mod filter;
 mod prune;
 
 use filter::FilteredFeatureStore;
-use prune::PruneOutput;
+use prune::Prunings;
 
 pub fn import_osm(
     coverage: &Path,
@@ -44,10 +44,12 @@ pub fn import_osm(
     let mut file = File::open(&pbf).with_context(pbf_error)?;
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
 
+    let _prunings = Prunings::create(&mut reader, progress, workdir)?;
+
+    // TODO: Remove the old version of the pipeline (everything below),
+    // once the new code actually works.
     let coverage = Coverage::load(coverage)
         .with_context(|| format!("could not open coverage file `{:?}`", coverage))?;
-
-    let _prune_out = PruneOutput::create(&mut reader, &coverage, progress, workdir)?;
     let relation_parents = build_relation_parents(&mut reader, progress)?;
 
     // Find which nodes, ways and relations lie within the coverage.
