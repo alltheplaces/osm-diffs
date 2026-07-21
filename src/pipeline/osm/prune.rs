@@ -20,7 +20,7 @@ use std::{
 #[allow(unused)]
 pub struct Prunings<'a> {
     coords: CoordsMap<'a>,
-    strings: StringCounts<'a>,
+    pub strings: StringCounts<'a>,
     keep_nodes: U64Set,
     keep_ways: U64Set,
     keep_relations: U64Set,

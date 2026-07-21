@@ -154,7 +154,6 @@ impl<'a> StringCounts<'a> {
         })
     }
 
-    #[allow(unused)]
     pub fn modified(&self) -> Result<SystemTime> {
         Ok(self.file.metadata()?.modified()?)
     }

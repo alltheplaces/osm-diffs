@@ -8,9 +8,11 @@
 mod coords_map;
 mod graph;
 mod string_counts;
+mod string_pool;
 mod u64_set;
 
 pub use coords_map::CoordsMap;
 pub use graph::{Edge, GraphTable};
 pub use string_counts::StringCounts;
+pub use string_pool::StringPool;
 pub use u64_set::U64Set;

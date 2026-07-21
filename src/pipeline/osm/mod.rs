@@ -21,9 +21,11 @@ mod coords;
 mod cover;
 mod fetch;
 mod filter;
+mod index;
 mod prune;
 
 use filter::FilteredFeatureStore;
+use index::Index;
 use prune::Prunings;
 
 pub fn import_osm(
@@ -44,12 +46,17 @@ pub fn import_osm(
     let mut file = File::open(&pbf).with_context(pbf_error)?;
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
 
-    let _prunings = Prunings::create(&mut reader, progress, workdir)?;
+    let prunings = Prunings::create(&mut reader, progress, workdir)?;
+    let _index = Index::create(&mut reader, &prunings, progress, workdir)?;
+    if false {
+        todo!();
+    }
 
     // TODO: Remove the old version of the pipeline (everything below),
     // once the new code actually works.
     let coverage = Coverage::load(coverage)
         .with_context(|| format!("could not open coverage file `{:?}`", coverage))?;
+
     let relation_parents = build_relation_parents(&mut reader, progress)?;
 
     // Find which nodes, ways and relations lie within the coverage.
