@@ -15,7 +15,7 @@ pub struct StringPool<'a> {
     _mmap: Mmap,
     len: usize,
     buckets: &'a [u32],
-    hash_index: &'a [u64],
+    hash_index: &'a [u32],
     hash_values: &'a [u16],
     chars: &'a [u8],
     starts: &'a [u64],
@@ -86,11 +86,11 @@ impl<'a> StringPool<'a> {
         let hash_index = {
             let offset = usize::try_from(header[4])?;
             let size = usize::try_from(header[5])?;
-            if offset + size <= mmap.len() && offset.is_multiple_of(8) && size.is_multiple_of(8) {
+            if offset + size <= mmap.len() && offset.is_multiple_of(4) && size.is_multiple_of(4) {
                 // SAFETY: Verified size and alignment.
                 unsafe {
-                    let ptr = mmap.as_ptr().add(offset) as *const u64;
-                    std::slice::from_raw_parts(ptr, size / 8)
+                    let ptr = mmap.as_ptr().add(offset) as *const u32;
+                    std::slice::from_raw_parts(ptr, size / 4)
                 }
             } else {
                 anyhow::bail!(
@@ -271,54 +271,53 @@ impl Writer {
             Self::sort_hashes(&self.workdir, &self.hashes_path)?
         };
         remove_file(&self.hashes_path)?;
-        let hash_index_size = std::fs::metadata(&hash_index_path)?.len();
-        let hash_values_size = std::fs::metadata(&hash_values_path)?.len();
 
+        // Write sentinel to end of starts array.
         let chars_size: u64 = self.chars_writer.stream_position()?;
         self.starts_writer.write_all(&chars_size.to_le_bytes())?;
-        let starts_size: u64 = self.starts_writer.stream_position()?;
 
         self.writer.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
 
-        let buckets_pos: u64 = {
+        // Write buckets array into the output file.
+        let (buckets_pos, buckets_size): (u64, u64) = {
             // Align to 64-byte cache line.
             Self::write_padding(&mut self.writer, 64)?;
             let pos = self.writer.stream_position()?;
             for bucket in &buckets {
                 self.writer.write_all(&bucket.to_le_bytes())?;
             }
-            pos
+            drop(buckets);
+            (pos, self.writer.stream_position()? - pos)
         };
-        let buckets_size: u64 = self.writer.stream_position()? - buckets_pos;
 
         // Copy hash_index array into the output file.
-        let hash_index_pos: u64 = {
+        let (hash_index_pos, hash_index_size): (u64, u64) = {
             Self::write_padding(&mut self.writer, 8)?;
             let pos = self.writer.stream_position()?;
             std::io::copy(&mut File::open(&hash_index_path)?, &mut self.writer)?;
             remove_file(&hash_index_path)?;
             drop(hash_index_path);
-            pos
+            (pos, self.writer.stream_position()? - pos)
         };
 
         // Copy hash_values array into the output file.
-        let hash_values_pos: u64 = {
+        let (hash_values_pos, hash_values_size): (u64, u64) = {
             Self::write_padding(&mut self.writer, 4)?;
             let pos = self.writer.stream_position()?;
             std::io::copy(&mut File::open(&hash_values_path)?, &mut self.writer)?;
             remove_file(&hash_values_path)?;
             drop(hash_values_path);
-            pos
+            (pos, self.writer.stream_position()? - pos)
         };
 
         // Copy starts array into the output file.
-        let starts_pos: u64 = {
+        let (starts_pos, starts_size): (u64, u64) = {
             Self::write_padding(&mut self.writer, 8)?;
             let pos = self.writer.stream_position()?;
             drop(self.starts_writer.into_inner()?);
             std::io::copy(&mut File::open(&self.starts_path)?, &mut self.writer)?;
             remove_file(&self.starts_path)?;
-            pos
+            (pos, self.writer.stream_position()? - pos)
         };
 
         // Copy characters into the output file.
@@ -415,7 +414,7 @@ impl Writer {
             }
             let lower_16_bits = (hash_value & 0xffff) as u16;
             hash_values_writer.write_all(&lower_16_bits.to_le_bytes())?;
-            index_writer.write_all(&(index as u64).to_le_bytes())?; // TODO: u32
+            index_writer.write_all(&index.to_le_bytes())?;
 
             item_count += 1;
         }
