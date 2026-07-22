@@ -179,7 +179,7 @@ impl<'a> StringPool<'a> {
     pub fn get(&self, idx: usize) -> &'a str {
         let start = u64::from_le(self.starts[idx]) as usize;
         let end = u64::from_le(self.starts[idx + 1]) as usize;
-        // SAFETY: Writer API only accepts Rust strings, which are valid UTF-8.
+        // SAFETY: Writer API only takes Rust strings, which are valid UTF-8.
         unsafe { str::from_utf8_unchecked(&self.chars[start..end]) }
     }
 
@@ -188,7 +188,33 @@ impl<'a> StringPool<'a> {
         self.len
     }
 
+    #[allow(unused)]
+    pub fn lookup(&self, key: &str) -> Option<usize> {
+        let hash_value: u32 = Self::hash(key);
+        let bucket = (hash_value >> 16) as usize;
+        let hash_16 = hash_value as u16;
+        let lo = u32::from_le(self.buckets[bucket]) as usize;
+        let hi = u32::from_le(self.buckets[bucket + 1]) as usize;
+
+        let mut p = lo + self.hash_values[lo..hi].partition_point(|&x| u16::from_le(x) < hash_16);
+        while p < hi && u16::from_le(self.hash_values[p]) == hash_16 {
+            let candidate = self.hash_index[p] as usize;
+            let start = self.starts[candidate] as usize;
+            let end = self.starts[candidate + 1] as usize;
+            // SAFETY: Writer API only takes Rust strings, which are valid UTF-8.
+            let candidate_str = unsafe { str::from_utf8_unchecked(&self.chars[start..end]) };
+            if key == candidate_str {
+                return Some(candidate);
+            }
+            p += 1;
+        }
+
+        None
+    }
+
     fn hash(s: &str) -> u32 {
+        // TODO: Measure whether the xxhash crate makes any performance difference
+        // when indexing the full OpenStreetMap planet.
         let mut hasher = DefaultHasher::new();
         s.hash(&mut hasher);
         hasher.finish() as u32
@@ -512,5 +538,15 @@ mod tests {
     #[test]
     fn test_len() {
         assert_eq!(TEST_POOL.len(), 4);
+    }
+
+    #[test]
+    fn test_lookup() {
+        assert_eq!(TEST_POOL.lookup(""), None);
+        assert_eq!(TEST_POOL.lookup("not in table"), None);
+        assert_eq!(TEST_POOL.lookup("zero"), Some(0));
+        assert_eq!(TEST_POOL.lookup("one"), Some(1));
+        assert_eq!(TEST_POOL.lookup("two"), Some(2));
+        assert_eq!(TEST_POOL.lookup("hello world"), Some(3));
     }
 }
