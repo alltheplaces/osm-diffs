@@ -21,7 +21,7 @@ use std::{
 pub struct Prunings<'a> {
     coords: CoordsMap<'a>,
     pub strings: StringCounts<'a>,
-    keep_nodes: U64Set,
+    pub keep_nodes: U64Set,
     keep_ways: U64Set,
     keep_relations: U64Set,
     relation_members: U64Set,
