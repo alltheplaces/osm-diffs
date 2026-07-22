@@ -14,14 +14,18 @@ pub struct StringPool<'a> {
     file: File,
     _mmap: Mmap,
     len: usize,
+    buckets: &'a [u32],
     hash_index: &'a [u64],
-    hash_values: &'a [u32],
+    hash_values: &'a [u16],
     chars: &'a [u8],
     starts: &'a [u64],
 }
 
-const HEADER_SIZE: usize = 10 * 8;
+const HEADER_SIZE: usize = 16 * 8;
 const FILE_SIGNATURE: &[u8; 8] = b"strpool0";
+const BUCKET_COUNT: usize = 65536;
+
+type Buckets = Vec<u32>;
 
 impl<'a> StringPool<'a> {
     pub fn create(
@@ -53,9 +57,35 @@ impl<'a> StringPool<'a> {
         };
         let len = usize::try_from(header[1])?;
 
-        let hash_index = {
+        let buckets = {
             let offset = usize::try_from(header[2])?;
             let size = usize::try_from(header[3])?;
+            if offset + size <= mmap.len()
+                && offset.is_multiple_of(64)
+                && size == (BUCKET_COUNT + 1) * 4
+            {
+                // SAFETY: Verified size and alignment.
+                unsafe {
+                    let ptr = mmap.as_ptr().add(offset) as *const u32;
+                    std::slice::from_raw_parts(ptr, size / 4)
+                }
+            } else {
+                anyhow::bail!(
+                    "misplaced buckets in {}: mmap.len={}, offset={}, size={}",
+                    path.display(),
+                    mmap.len(),
+                    offset,
+                    size
+                );
+            }
+        };
+        if !is_u32_slice_sorted_little_endian(buckets) {
+            anyhow::bail!("buckets not sorted: {}", path.display());
+        }
+
+        let hash_index = {
+            let offset = usize::try_from(header[4])?;
+            let size = usize::try_from(header[5])?;
             if offset + size <= mmap.len() && offset.is_multiple_of(8) && size.is_multiple_of(8) {
                 // SAFETY: Verified size and alignment.
                 unsafe {
@@ -74,13 +104,13 @@ impl<'a> StringPool<'a> {
         };
 
         let hash_values = {
-            let offset = usize::try_from(header[4])?;
-            let size = usize::try_from(header[5])?;
-            if offset + size <= mmap.len() && offset.is_multiple_of(4) && size.is_multiple_of(4) {
+            let offset = usize::try_from(header[6])?;
+            let size = usize::try_from(header[7])?;
+            if offset + size <= mmap.len() && offset.is_multiple_of(2) && size.is_multiple_of(2) {
                 // SAFETY: Verified size and alignment.
                 unsafe {
-                    let ptr = mmap.as_ptr().add(offset) as *const u32;
-                    std::slice::from_raw_parts(ptr, size / 4)
+                    let ptr = mmap.as_ptr().add(offset) as *const u16;
+                    std::slice::from_raw_parts(ptr, size / 2)
                 }
             } else {
                 anyhow::bail!(
@@ -94,8 +124,8 @@ impl<'a> StringPool<'a> {
         };
 
         let starts = {
-            let offset = usize::try_from(header[6])?;
-            let size = usize::try_from(header[7])?;
+            let offset = usize::try_from(header[8])?;
+            let size = usize::try_from(header[9])?;
             if offset + size <= mmap.len() && offset.is_multiple_of(8) && size.is_multiple_of(8) {
                 // SAFETY: Verified size and alignment.
                 unsafe {
@@ -114,8 +144,8 @@ impl<'a> StringPool<'a> {
         };
 
         let chars = {
-            let offset = usize::try_from(header[8])?;
-            let size = usize::try_from(header[9])?;
+            let offset = usize::try_from(header[10])?;
+            let size = usize::try_from(header[11])?;
             if offset + size <= mmap.len() {
                 // SAFETY: Verified length; no alignment constraints of &[u8].
                 unsafe {
@@ -137,6 +167,7 @@ impl<'a> StringPool<'a> {
             file,
             _mmap: mmap,
             len,
+            buckets,
             hash_index,
             hash_values,
             chars,
@@ -230,7 +261,7 @@ impl Writer {
 
     pub fn close(mut self) -> Result<()> {
         // Sort hashes.
-        let (hash_index_path, hash_values_path) = {
+        let (buckets, hash_index_path, hash_values_path) = {
             self.hashes_writer.flush()?;
             assert_eq!(
                 self.hashes_writer.stream_position()?,
@@ -248,6 +279,17 @@ impl Writer {
         let starts_size: u64 = self.starts_writer.stream_position()?;
 
         self.writer.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
+
+        let buckets_pos: u64 = {
+            // Align to 64-byte cache line.
+            Self::write_padding(&mut self.writer, 64)?;
+            let pos = self.writer.stream_position()?;
+            for bucket in &buckets {
+                self.writer.write_all(&bucket.to_le_bytes())?;
+            }
+            pos
+        };
+        let buckets_size: u64 = self.writer.stream_position()? - buckets_pos;
 
         // Copy hash_index array into the output file.
         let hash_index_pos: u64 = {
@@ -292,14 +334,16 @@ impl Writer {
         self.writer.seek(SeekFrom::Start(0))?;
         self.writer.write_all(FILE_SIGNATURE)?; // header[0] = magic
         self.writer.write_all(&self.entry_count.to_le_bytes())?; // header[1] = len
-        self.writer.write_all(&hash_index_pos.to_le_bytes())?; // header[2] = hash_index.pos
-        self.writer.write_all(&hash_index_size.to_le_bytes())?; // header[3] = hash_index.len
-        self.writer.write_all(&hash_values_pos.to_le_bytes())?; // header[4] = hash_values.pos
-        self.writer.write_all(&hash_values_size.to_le_bytes())?; // header[5] = hash_values.len
-        self.writer.write_all(&starts_pos.to_le_bytes())?; // header[6] = starts.pos
-        self.writer.write_all(&starts_size.to_le_bytes())?; // header[7] = starts.len
-        self.writer.write_all(&chars_pos.to_le_bytes())?; // header[8] = chars.pos
-        self.writer.write_all(&chars_size.to_le_bytes())?; // header[9]	= chars.len
+        self.writer.write_all(&buckets_pos.to_le_bytes())?; // header[2] = buckets.pos
+        self.writer.write_all(&buckets_size.to_le_bytes())?; // header[3] = buckets.size
+        self.writer.write_all(&hash_index_pos.to_le_bytes())?; // header[4] = hash_index.pos
+        self.writer.write_all(&hash_index_size.to_le_bytes())?; // header[5] = hash_index.size
+        self.writer.write_all(&hash_values_pos.to_le_bytes())?; // header[6] = hash_values.pos
+        self.writer.write_all(&hash_values_size.to_le_bytes())?; // header[7] = hash_values.size
+        self.writer.write_all(&starts_pos.to_le_bytes())?; // header[8] = starts.pos
+        self.writer.write_all(&starts_size.to_le_bytes())?; // header[9] = starts.size
+        self.writer.write_all(&chars_pos.to_le_bytes())?; // header[10] = chars.pos
+        self.writer.write_all(&chars_size.to_le_bytes())?; // header[11] = chars.size
         assert!(self.writer.stream_position()? <= HEADER_SIZE as u64);
 
         self.writer.into_inner()?.sync_all()?;
@@ -307,7 +351,8 @@ impl Writer {
         Ok(())
     }
 
-    fn sort_hashes(workdir: &Path, path: &Path) -> Result<(PathBuf, PathBuf)> {
+    fn sort_hashes(workdir: &Path, path: &Path) -> Result<(Buckets, PathBuf, PathBuf)> {
+        let mut buckets = vec![0; BUCKET_COUNT + 1]; // last is sentinel
         let index_path = {
             let mut p = PathBuf::from(path);
             p.add_extension("index.tmp");
@@ -326,23 +371,62 @@ impl Writer {
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    4 * 1024 * 1024,
+                    1024 * 1024,
                     /* preallocate */ true,
                 ))
                 .build()?;
         let sorted = sorter.sort(HashFileIter::create(path)?)?;
+
+        let mut last_hash_value: u32 = 0;
+        let mut last_bucket: usize = 0;
+        let mut item_count: u32 = 0;
         for item in sorted {
             let (hash_value, index) = item?;
-            hash_values_writer.write_all(&hash_value.to_le_bytes())?;
-            index_writer.write_all(&(index as u64).to_le_bytes())?;
+
+            if hash_value < last_hash_value {
+                anyhow::bail!(
+                    "hash_values not sorted: {} < {}",
+                    hash_value,
+                    last_hash_value
+                );
+            }
+            last_hash_value = hash_value;
+
+            let index = {
+                if index <= u32::MAX as usize {
+                    index as u32
+                } else {
+                    anyhow::bail!("StringPool cannot have more than 2^32 entries");
+                }
+            };
+
+            let bucket = ((hash_value >> 16) & 0xffff) as usize;
+            if bucket < last_bucket {
+                anyhow::bail!(
+                    "StringPool buckets not sorted: {} < {}",
+                    bucket,
+                    last_bucket
+                );
+            }
+
+            if bucket != last_bucket {
+                buckets[(last_bucket + 1)..=bucket].fill(item_count);
+                last_bucket = bucket;
+            }
+            let lower_16_bits = (hash_value & 0xffff) as u16;
+            hash_values_writer.write_all(&lower_16_bits.to_le_bytes())?;
+            index_writer.write_all(&(index as u64).to_le_bytes())?; // TODO: u32
+
+            item_count += 1;
         }
+        buckets[(last_bucket + 1)..=BUCKET_COUNT].fill(item_count);
+
         index_writer.flush()?;
         index_writer.into_inner()?.sync_all()?;
 
         hash_values_writer.flush()?;
         hash_values_writer.into_inner()?.sync_all()?;
-
-        Ok((index_path, hash_values_path))
+        Ok((buckets, index_path, hash_values_path))
     }
 
     fn write_padding(writer: &mut BufWriter<File>, alignment: usize) -> Result<()> {
@@ -390,6 +474,14 @@ impl Iterator for HashFileIter {
             Err(e) => Some(Err(e)),
         }
     }
+}
+
+fn is_u32_slice_sorted_little_endian(slice: &[u32]) -> bool {
+    slice.windows(2).all(|window| {
+        let a = u32::from_le(window[0]);
+        let b = u32::from_le(window[1]);
+        a <= b
+    })
 }
 
 #[cfg(test)]
