@@ -15,7 +15,7 @@ pub struct StringPool<'a> {
     _mmap: Mmap,
     len: usize,
     hash_index: &'a [u64],
-    hash_values: &'a [u64],
+    hash_values: &'a [u32],
     chars: &'a [u8],
     starts: &'a [u64],
 }
@@ -76,11 +76,11 @@ impl<'a> StringPool<'a> {
         let hash_values = {
             let offset = usize::try_from(header[4])?;
             let size = usize::try_from(header[5])?;
-            if offset + size <= mmap.len() && offset.is_multiple_of(8) && size.is_multiple_of(8) {
+            if offset + size <= mmap.len() && offset.is_multiple_of(4) && size.is_multiple_of(4) {
                 // SAFETY: Verified size and alignment.
                 unsafe {
-                    let ptr = mmap.as_ptr().add(offset) as *const u64;
-                    std::slice::from_raw_parts(ptr, size / 8)
+                    let ptr = mmap.as_ptr().add(offset) as *const u32;
+                    std::slice::from_raw_parts(ptr, size / 4)
                 }
             } else {
                 anyhow::bail!(
@@ -156,6 +156,12 @@ impl<'a> StringPool<'a> {
     pub fn len(&self) -> usize {
         self.len
     }
+
+    fn hash(s: &str) -> u32 {
+        let mut hasher = DefaultHasher::new();
+        s.hash(&mut hasher);
+        hasher.finish() as u32
+    }
 }
 
 struct Writer {
@@ -215,11 +221,7 @@ impl Writer {
         self.starts_writer.write_all(&start.to_le_bytes())?;
         self.chars_writer.write_all(s.as_bytes())?;
 
-        let hash_value: u64 = {
-            let mut hasher = DefaultHasher::new();
-            s.hash(&mut hasher);
-            hasher.finish()
-        };
+        let hash_value: u32 = StringPool::hash(s);
         self.hashes_writer.write_all(&hash_value.to_le_bytes())?;
 
         self.entry_count += 1;
@@ -232,7 +234,7 @@ impl Writer {
             self.hashes_writer.flush()?;
             assert_eq!(
                 self.hashes_writer.stream_position()?,
-                self.entry_count as u64 * 8
+                self.entry_count as u64 * 4
             );
             drop(self.hashes_writer.into_inner()?);
             Self::sort_hashes(&self.workdir, &self.hashes_path)?
@@ -240,15 +242,51 @@ impl Writer {
         remove_file(&self.hashes_path)?;
         let hash_index_size = std::fs::metadata(&hash_index_path)?.len();
         let hash_values_size = std::fs::metadata(&hash_values_path)?.len();
-        let hash_index_pos = HEADER_SIZE as u64;
-        let hash_values_pos = hash_index_pos + hash_index_size;
 
         let chars_size: u64 = self.chars_writer.stream_position()?;
         self.starts_writer.write_all(&chars_size.to_le_bytes())?;
         let starts_size: u64 = self.starts_writer.stream_position()?;
-        let starts_pos: u64 = hash_values_pos + hash_values_size;
 
-        let chars_pos: u64 = starts_pos + starts_size;
+        self.writer.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
+
+        // Copy hash_index array into the output file.
+        let hash_index_pos: u64 = {
+            Self::write_padding(&mut self.writer, 8)?;
+            let pos = self.writer.stream_position()?;
+            std::io::copy(&mut File::open(&hash_index_path)?, &mut self.writer)?;
+            remove_file(&hash_index_path)?;
+            drop(hash_index_path);
+            pos
+        };
+
+        // Copy hash_values array into the output file.
+        let hash_values_pos: u64 = {
+            Self::write_padding(&mut self.writer, 4)?;
+            let pos = self.writer.stream_position()?;
+            std::io::copy(&mut File::open(&hash_values_path)?, &mut self.writer)?;
+            remove_file(&hash_values_path)?;
+            drop(hash_values_path);
+            pos
+        };
+
+        // Copy starts array into the output file.
+        let starts_pos: u64 = {
+            Self::write_padding(&mut self.writer, 8)?;
+            let pos = self.writer.stream_position()?;
+            drop(self.starts_writer.into_inner()?);
+            std::io::copy(&mut File::open(&self.starts_path)?, &mut self.writer)?;
+            remove_file(&self.starts_path)?;
+            pos
+        };
+
+        // Copy characters into the output file.
+        let chars_pos: u64 = {
+            let pos = self.writer.stream_position()?;
+            drop(self.chars_writer.into_inner()?);
+            std::io::copy(&mut File::open(&self.chars_path)?, &mut self.writer)?;
+            remove_file(&self.chars_path)?;
+            pos
+        };
 
         // Write file header.
         self.writer.seek(SeekFrom::Start(0))?;
@@ -263,39 +301,6 @@ impl Writer {
         self.writer.write_all(&chars_pos.to_le_bytes())?; // header[8] = chars.pos
         self.writer.write_all(&chars_size.to_le_bytes())?; // header[9]	= chars.len
         assert!(self.writer.stream_position()? <= HEADER_SIZE as u64);
-        self.writer.seek(SeekFrom::Start(HEADER_SIZE as u64))?;
-
-        // Copy hash_index array into the output file.
-        {
-            assert_eq!(self.writer.stream_position()?, hash_index_pos);
-            std::io::copy(&mut File::open(&hash_index_path)?, &mut self.writer)?;
-            remove_file(&hash_index_path)?;
-            drop(hash_index_path);
-        }
-
-        // Copy hash_values array into the output file.
-        {
-            assert_eq!(self.writer.stream_position()?, hash_values_pos);
-            std::io::copy(&mut File::open(&hash_values_path)?, &mut self.writer)?;
-            remove_file(&hash_values_path)?;
-            drop(hash_values_path);
-        }
-
-        // Copy starts array into the output file.
-        {
-            assert_eq!(self.writer.stream_position()?, starts_pos);
-            drop(self.starts_writer.into_inner()?);
-            std::io::copy(&mut File::open(&self.starts_path)?, &mut self.writer)?;
-            remove_file(&self.starts_path)?;
-        }
-
-        // Copy characters into the output file.
-        {
-            assert_eq!(self.writer.stream_position()?, chars_pos);
-            drop(self.chars_writer.into_inner()?);
-            std::io::copy(&mut File::open(&self.chars_path)?, &mut self.writer)?;
-            remove_file(&self.chars_path)?;
-        }
 
         self.writer.into_inner()?.sync_all()?;
         rename(&self.tmp_path, &self.path)?;
@@ -317,7 +322,7 @@ impl Writer {
         let mut hash_values_writer =
             BufWriter::with_capacity(32 * 1024, File::create(&hash_values_path)?);
 
-        let sorter: ExternalSorter<(u64, usize), std::io::Error, LimitedBufferBuilder> =
+        let sorter: ExternalSorter<(u32, usize), std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
@@ -339,6 +344,19 @@ impl Writer {
 
         Ok((index_path, hash_values_path))
     }
+
+    fn write_padding(writer: &mut BufWriter<File>, alignment: usize) -> Result<()> {
+        if alignment > 1 {
+            let pos = writer.stream_position()?;
+            let alignment = alignment as u64;
+            let num_bytes = ((alignment - (pos % alignment)) % alignment) as usize;
+            if num_bytes > 0 {
+                let padding = vec![0; num_bytes];
+                writer.write_all(&padding)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub struct HashFileIter {
@@ -356,14 +374,14 @@ impl HashFileIter {
 }
 
 impl Iterator for HashFileIter {
-    type Item = io::Result<(u64, usize)>;
+    type Item = io::Result<(u32, usize)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         use std::result::Result::Ok;
-        let mut buf = [0u8; 8];
+        let mut buf = [0u8; 4];
         match self.reader.read_exact(&mut buf) {
             Ok(()) => {
-                let hash_value = u64::from_le_bytes(buf);
+                let hash_value = u32::from_le_bytes(buf);
                 let index = self.count;
                 self.count += 1;
                 Some(Ok((hash_value, index)))
