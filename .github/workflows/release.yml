@@ -86,6 +86,23 @@ jobs:
           TIMESTAMP=${{ steps.commit-info.outputs.timestamp }}
           sh sbom/merge_sbom.sh ${IMAGE} ${DIGEST} ${TIMESTAMP}
 
+      - name: Push SBOM as OCI artifact
+        run: |
+          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST=$(cat artifacts/digest.txt)
+          VCS_URL="${{ github.server_url }}/${{ github.repository }}"
+          oras push \
+            ${IMAGE}@${DIGEST} \
+            artifacts/container.cdx.json:application/vnd.cyclonedx+json \
+            --annotation "org.opencontainers.artifact.type=application/vnd.cyclonedx+json" \
+            --annotation "org.opencontainers.image.description=CycloneDX SBOM for ${{ matrix.arch }} architecture" \
+            --annotation "org.opencontainers.image.source=${VCS_URL} \
+            --annotation "org.opencontainers.image.title=SBOM" \
+            --annotation "vnd.cyclonedx.format=json" \
+            --annotation "vnd.cyclonedx.version=1.7" \
+            --username "${{ github.actor }}" \
+            --password "${{ secrets.GITHUB_TOKEN }}"
+
       - name: Upload image digest and SBOM to artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
