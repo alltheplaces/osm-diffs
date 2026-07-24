@@ -34,6 +34,7 @@ RUN echo "@edge https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/ap
       cmake \
       git \
       jq \
+      protoc \
       sqlite-static \
       sqlite-dev \
       zlib-static \

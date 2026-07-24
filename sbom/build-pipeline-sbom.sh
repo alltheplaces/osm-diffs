@@ -55,7 +55,6 @@ if [ ! -f "$RAW_FILE" ]; then
     exit 1
 fi
 
-
 JQ_PROGRAM=$(cat <<'JQEOF'
 # Add a crates.io supplier to a component object if it lacks one.
 def add_supplier:
@@ -79,7 +78,7 @@ def add_supplier:
 .metadata.tools = {
   "components": .metadata.tools + [{
       name: "jq",
-      version: $jq_version,
+      version: $JQ_VERSION,
       supplier: {
         name: "Alpine Linux",
         url: ["https://alpinelinux.org"]
@@ -100,14 +99,50 @@ def add_supplier:
   {name: "crypto:tls:minVersion", value: "1.3"},
   {name: "crypto:tls:maxVersion", value: "1.3"}
 ] |
+.formulation = [{
+    "bom-ref": "build-formulation",
+    components: [{
+      type: "operating-system",
+      name: "Alpine Linux",
+      version: $ALPINE_VERSION,
+      "bom-ref": "build-os",
+      description: "Operating system for building binaries",
+      supplier: {
+        name: "Alpine Linux",
+        url: ["https://alpinelinux.org"]
+      }
+    }, {
+      type: "application",
+      "bom-ref": "build-rustc",
+      name: "rustc",
+      version: $RUSTC_VERSION,
+      purl: "pkg:generic/rust-lang/rustc@" + $RUSTC_VERSION,
+      description: "Rust compiler",
+      supplier: {
+        name: "The Rust Project",
+        url: ["https://www.rust-lang.org"]
+      }
+    }, {
+      type: "application",
+      "bom-ref": "build-protoc",
+      name: "protoc",
+      version: $PROTOC_VERSION,
+      purl: "pkg:apk/alpine/protoc@" + $PROTOC_VERSION + "?arch=" + $ARCH,
+      description: "Protocol Buffers compiler",
+      supplier: {
+        name: "Alpine Linux",
+        url: ["https://alpinelinux.org"]
+      }
+    }]
+}] |
 .components += [
   {
     "type": "library",
     "bom-ref": "pkg/aws-lc",
     "name": "aws-lc",
     "author": "AWS Cryptography",
-    "purl": "pkg:github/aws/aws-lc@v" + $aws_lc_sys_version,
-    "version": $aws_lc_sys_version,
+    "purl": "pkg:github/aws/aws-lc@v" + $AWS_LC_SYS_VERSION,
+    "version": $AWS_LC_SYS_VERSION,
     "description":"AWS fork of BoringSSL; native crypto primitives beneath aws-lc-rs",
     "supplier": {
       "name": "AWS Cryptography",
@@ -157,11 +192,28 @@ def add_supplier:
 JQEOF
 )
 
+ARCH=$(uname -m)
+case "$ARCH" in
+    x86_64) ARCH="amd64" ;;
+    arm64)  ARCH="aarch64" ;;
+esac
+
+ALPINE_VERSION="$(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)"
+APK_VERSION="$(apk --version | sed -E 's/.* ([0-9]+\.[0-9]+(\.[0-9]+(-r[0-9]+)?)?).*/\1/')"
+AWS_LC_SYS_VERSION="$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')"
+JQ_VERSION="$(jq --version | sed -n 's/jq-//p')"
+PROTOC_VERSION="$(protoc --version | awk '{print $2}')"   # "31.1" from "libprotoc 31.1"
+RUSTC_VERSION="$(rustc --version --verbose | awk '/^release:/{print $2}')"
+
 # ── post-process and write output ────────────────────────────────────────────
 jq \
-  --arg     binary             "$BINARY_NAME" \
-  --arg     aws_lc_sys_version "$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')" \
-  --arg     jq_version         "$(jq --version | sed -n 's/jq-//p')" \
+  --arg binary             "${BINARY_NAME}" \
+  --arg ALPINE_VERSION     "${ALPINE_VERSION}" \
+  --arg ARCH               "${ARCH}" \
+  --arg AWS_LC_SYS_VERSION "${AWS_LC_SYS_VERSION}" \
+  --arg JQ_VERSION         "${JQ_VERSION}" \
+  --arg PROTOC_VERSION     "${PROTOC_VERSION}" \
+  --arg RUSTC_VERSION      "${RUSTC_VERSION}" \
   "$JQ_PROGRAM" \
   "$RAW_FILE" > "$OUTPUT"
 
