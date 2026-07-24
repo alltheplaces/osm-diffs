@@ -37,11 +37,9 @@ jobs:
               --build-arg BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  \
               --volume $(pwd)/artifacts:/artifacts                          \
               -f Containerfile .
-    - name: Validate SBOM for Tippecanoe
+    - name: Build SBOM
+      run: sh sbom/merge_sbom.sh
+    - name: Validate SBOM
       run: |
           podman run --volume $(pwd)/artifacts:/artifacts:ro cyclonedx/cyclonedx-cli \
-              validate --input-file /artifacts/tippecanoe.cdx.json --fail-on-errors
-    - name: Validate SBOM for Pipeline
-      run: |
-          podman run --volume $(pwd)/artifacts:/artifacts:ro cyclonedx/cyclonedx-cli \
-              validate --input-file /artifacts/pipeline.cdx.json --fail-on-errors
+              validate --input-file /artifacts/container.cdx.json --fail-on-errors
