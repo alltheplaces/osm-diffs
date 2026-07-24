@@ -7,7 +7,7 @@
 # which automatically runs on GitHub infrastructure after a git tag
 # for a fresh release has been pushed.
 
-ALPINE_VERSION=$(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)
+ALPINE_VERSION=$(grep "^VERSION_ID=" /etc/os-release | cut -d '=' -f 2)
 APK_VERSION=$(apk --version             | sed -E 's/.* ([0-9]+\.[0-9]+(\.[0-9]+(-r[0-9]+)?)?).*/\1/')
 JQ_VERSION=$(jq --version               | sed -n 's/jq-//p')
 MUSL_VERSION=$(apk info musl            | head -1 | sed 's/musl-//;s/ .*//')
