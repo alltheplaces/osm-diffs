@@ -141,13 +141,19 @@ jobs:
         id: manifests
         run: |
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          IMAGE_SHA=${IMAGE}:${{ github.sha }}
           IMAGE_AMD64=${IMAGE}@`cat artifacts-amd64/digest.txt`
           IMAGE_ARM64=${IMAGE}@`cat artifacts-arm64/digest.txt`
+          VCS_REF="${{ github.sha }}"
+          VCS_URL="${{ github.server_url }}/${{ github.repository }}"
 
           mkdir artifacts
-
-          IMAGE_SHA=${IMAGE}:${{ github.sha }}
-          podman manifest create ${IMAGE_SHA}
+          podman manifest create ${IMAGE_SHA} \
+            --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
+            --annotation org.opencontainers.image.description="Data pipeline for alltheplaces/osm-diffs" \
+            --annotation org.opencontainers.image.licenses="MIT" \
+            --annotation org.opencontainers.image.revision="${VCS_REF}" \
+            --annotation org.opencontainers.image.source="${VCS_URL}"
           podman manifest add ${IMAGE_SHA} ${IMAGE_AMD64}
           podman manifest add ${IMAGE_SHA} ${IMAGE_ARM64}
           podman tag ${IMAGE_SHA} ${IMAGE}:latest ${IMAGE}:${{ github.ref_name }}
