@@ -74,11 +74,37 @@ def add_supplier:
 .specVersion = "1.7" |
 .metadata.lifecycles = [{phase: "build"}] |
 .metadata.authors = [{name: "Sascha Brawer", email: "sascha@brawer.ch"}] |
-.metadata.supplier = {name: "All The Places", url: "https://github.com/alltheplaces/"} |
+.metadata.supplier = {
+  name: "All The Places",
+  url: ["https://github.com/alltheplaces/"]
+} |
 .metadata.tools = {
-  "components": .metadata.tools + [{
+  components: [{
+      type: "operating-system",
+      name: "Alpine Linux",
+      version: $ALPINE_VERSION,
+      "bom-ref": "sbom-os",
+      description: "Operating system on which this SBOM was built",
+      supplier: {
+        name: "Alpine Linux",
+        url: ["https://alpinelinux.org"]
+      }
+    }, {
+      type: "application",
+      name: "cargo-cyclonedx",
+      "bom-ref": "cargo-cyclonedx",
+      version: $CARGO_CYCLONEDX_VERSION,
+      purl: "pkg:apk/alpine/cargo-cyclonedx@" + $CARGO_CYCLONEDX_VERSION + "?arch=" + $ARCH,
+      supplier: {
+        name: "Alpine Linux",
+        url: ["https://alpinelinux.org"]
+      }
+    }, {
+      type: "application",
       name: "jq",
+      "bom-ref": "jq",
       version: $JQ_VERSION,
+      purl: "pkg:apk/alpine/jq@" + $JQ_VERSION + "?arch=" + $ARCH,
       supplier: {
         name: "Alpine Linux",
         url: ["https://alpinelinux.org"]
@@ -86,7 +112,7 @@ def add_supplier:
     }
   ]
 } |
-.metadata.component.supplier = {name: "All The Places", url: "https://github.com/alltheplaces/"} |
+.metadata.component.supplier = {name: "All The Places", url: ["https://github.com/alltheplaces/"]} |
 .metadata.component.purl = "pkg:github/alltheplaces/osm-diffs@" + .metadata.component.version |
 .metadata.component.licenses = [{expression: "MIT"}] |
 .components |= [ .[] | add_supplier ] |
@@ -198,22 +224,24 @@ case "$ARCH" in
     arm64)  ARCH="aarch64" ;;
 esac
 
-ALPINE_VERSION="$(grep "^VERSION_ID=" /etc/os-release | cut -d '"' -f 2)"
+ALPINE_VERSION="$(grep "^VERSION_ID=" /etc/os-release | cut -d '=' -f 2)"
 APK_VERSION="$(apk --version | sed -E 's/.* ([0-9]+\.[0-9]+(\.[0-9]+(-r[0-9]+)?)?).*/\1/')"
 AWS_LC_SYS_VERSION="$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')"
+CARGO_CYCLONEDX_VERSION="$(cargo cyclonedx --version | cut -d ' ' -f 2)"
 JQ_VERSION="$(jq --version | sed -n 's/jq-//p')"
 PROTOC_VERSION="$(protoc --version | awk '{print $2}')"   # "31.1" from "libprotoc 31.1"
 RUSTC_VERSION="$(rustc --version --verbose | awk '/^release:/{print $2}')"
 
 # ── post-process and write output ────────────────────────────────────────────
 jq \
-  --arg binary             "${BINARY_NAME}" \
-  --arg ALPINE_VERSION     "${ALPINE_VERSION}" \
-  --arg ARCH               "${ARCH}" \
-  --arg AWS_LC_SYS_VERSION "${AWS_LC_SYS_VERSION}" \
-  --arg JQ_VERSION         "${JQ_VERSION}" \
-  --arg PROTOC_VERSION     "${PROTOC_VERSION}" \
-  --arg RUSTC_VERSION      "${RUSTC_VERSION}" \
+  --arg binary                   "${BINARY_NAME}" \
+  --arg ALPINE_VERSION           "${ALPINE_VERSION}" \
+  --arg ARCH                     "${ARCH}" \
+  --arg AWS_LC_SYS_VERSION       "${AWS_LC_SYS_VERSION}" \
+  --arg CARGO_CYCLONEDX_VERSION  "${CARGO_CYCLONEDX_VERSION}" \
+  --arg JQ_VERSION               "${JQ_VERSION}" \
+  --arg PROTOC_VERSION           "${PROTOC_VERSION}" \
+  --arg RUSTC_VERSION            "${RUSTC_VERSION}" \
   "$JQ_PROGRAM" \
   "$RAW_FILE" > "$OUTPUT"
 
