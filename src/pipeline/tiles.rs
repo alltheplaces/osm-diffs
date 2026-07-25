@@ -72,8 +72,8 @@ fn make_tippecanoe_command(
         if metadata.len() > 0 {
             cmd.arg(format!(
                 "--named-layer={}:{}",
-                &layer.name,
-                &layer.path.display()
+                layer.name,
+                layer.path.display()
             ));
         } else {
             eprintln!("dropping layer {:?}", layer);
