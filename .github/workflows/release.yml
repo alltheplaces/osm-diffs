@@ -42,9 +42,10 @@ jobs:
           sudo apt-get update
           sudo apt-get -y install podman
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Container Registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Get commit timestamp
         id: commit-info
@@ -100,9 +101,7 @@ jobs:
             --annotation org.opencontainers.image.licenses="MIT" \
             --annotation org.opencontainers.image.revision="${VCS_REF}" \
             --annotation org.opencontainers.image.source="${VCS_URL}" \
-            --annotation org.opencontainers.image.title="SBOM" \
-            --username "${{ github.actor }}" \
-            --password "${{ secrets.GITHUB_TOKEN }}"
+            --annotation org.opencontainers.image.title="SBOM"
 
       - name: Upload image digest and SBOM to artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
