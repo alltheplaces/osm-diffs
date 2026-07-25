@@ -89,16 +89,18 @@ jobs:
         run: |
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST=$(cat artifacts/digest.txt)
+          VCS_REF="${{ github.sha }}"
           VCS_URL="${{ github.server_url }}/${{ github.repository }}"
           oras push \
             ${IMAGE}@${DIGEST} \
             artifacts/container.cdx.json:application/vnd.cyclonedx+json \
-            --annotation "org.opencontainers.artifact.type=application/vnd.cyclonedx+json" \
-            --annotation "org.opencontainers.image.description=CycloneDX SBOM for ${{ matrix.arch }} architecture" \
-            --annotation "org.opencontainers.image.source=${VCS_URL} \
-            --annotation "org.opencontainers.image.title=SBOM" \
-            --annotation "vnd.cyclonedx.format=json" \
-            --annotation "vnd.cyclonedx.version=1.7" \
+            --annotation org.opencontainers.artifact.type="application/vnd.cyclonedx+json" \
+            --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
+            --annotation org.opencontainers.image.description="CycloneDX SBOM for ${{ matrix.arch }} architecture" \
+            --annotation org.opencontainers.image.licenses="MIT" \
+            --annotation org.opencontainers.image.revision="${VCS_REF}" \
+            --annotation org.opencontainers.image.source="${VCS_URL}" \
+            --annotation org.opencontainers.image.title="SBOM" \
             --username "${{ github.actor }}" \
             --password "${{ secrets.GITHUB_TOKEN }}"
 
