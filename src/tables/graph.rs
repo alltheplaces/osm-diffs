@@ -57,7 +57,7 @@ impl<'a> GraphTable<'a> {
         if mmap.len() != expected_size {
             anyhow::bail!(
                 "{} has wrong file size, expected {}, got {}",
-                &path.display(),
+                path.display(),
                 expected_size,
                 mmap.len()
             );
