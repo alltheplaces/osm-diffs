@@ -138,6 +138,6 @@ jq -n \
     }]
   }])
 }
-' > "$OUTPUT"
+' | jq -c . > "$OUTPUT"
 
 echo "Written: $OUTPUT"
