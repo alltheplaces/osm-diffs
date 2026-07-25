@@ -104,7 +104,8 @@ jobs:
               --annotation org.opencontainers.image.licenses="MIT" \
               --annotation org.opencontainers.image.revision="${VCS_REF}" \
               --annotation org.opencontainers.image.source="${VCS_URL}" \
-              --annotation org.opencontainers.image.title="SBOM"
+              --annotation org.opencontainers.image.title="SBOM"; then
+              break
             fi
             if [ $attempt -lt 5 ]; then
               echo "Attempt $attempt failed, retrying in 10 seconds..."
