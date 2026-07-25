@@ -1,0 +1,20 @@
+// SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
+// SPDX-License-Identifier: MIT
+
+syntax = "proto3";
+
+package tables.features;
+
+// An OpenStreetMap feature stored by a FeatureTable.
+message Feature {
+    // id = (osm_id * 10) + 1 for nodes; + 2 for ways; + 3 for relations.
+    uint64 id = 1;
+    uint32 version = 2;
+    uint64 changeset = 3;
+    uint64 timestamp = 4;
+    repeated uint32 tags = 5;
+    fixed64 centroid = 6;
+    repeated uint64 way_members = 16;
+}
+
+

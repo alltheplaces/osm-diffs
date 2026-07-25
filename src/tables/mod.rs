@@ -11,7 +11,12 @@ mod string_counts;
 mod string_pool;
 mod u64_set;
 
+mod features {
+    include!(concat!(env!("OUT_DIR"), "/tables.features.rs"));
+}
+
 pub use coords_map::CoordsMap;
+pub use features::Feature;
 pub use graph::{Edge, GraphTable};
 pub use string_counts::StringCounts;
 pub use string_pool::StringPool;

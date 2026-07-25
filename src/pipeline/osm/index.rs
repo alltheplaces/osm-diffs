@@ -2,7 +2,7 @@ use super::{BlobReader, Prunings};
 use crate::{
     make_progress_bar,
     matchers::MatchMask,
-    tables::{StringCounts, StringPool},
+    tables::{Feature, StringCounts, StringPool},
 };
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
@@ -117,27 +117,40 @@ fn index_nodes(
                 for primitive in block.primitives() {
                     if let Primitive::Node(node) = primitive
                         && keep_nodes.contains(node.id)
+                        && let Some(info) = node.info
+                        && let Some(version) = info.version
+                        && let Some(changeset) = info.changeset
                     {
+                        let mut f = Feature {
+                            id: 10 * node.id + 1,
+                            version,
+                            changeset,
+                            ..Default::default()
+                        };
+
                         // Handle geometry.
                         let s2_lat_lon = s2::latlng::LatLng::from_degrees(node.lat, node.lon);
                         let _s2_cell_id = s2::cellid::CellID::from(s2_lat_lon);
 
                         // Handle tags.
                         let mut mask = MatchMask::default();
+                        f.tags.reserve(node.tags.len() * 2);
                         for (key, value) in node.tags.iter() {
                             mask.add_tag(key, value);
-                            let _key_id = strings.lookup(key).unwrap_or_else(|| {
+                            let key_id = strings.lookup(key).unwrap_or_else(|| {
                                 panic!(
                                     "OpenStreetMap node/{} tag key not in StringPool: \"{}\"",
                                     node.id, key
                                 )
                             });
-                            let _value_id = strings.lookup(value).unwrap_or_else(|| {
+                            f.tags.push(key_id as u32);
+                            let value_id = strings.lookup(value).unwrap_or_else(|| {
                                 panic!(
                                     "OpenStreetMap node/{} tag value not in StringPool: \"{}\"",
                                     node.id, value
                                 )
                             });
+                            f.tags.push(value_id as u32);
                         }
 
                         // TODO: Encode as proto message. Sort by s2_cell_id.
