@@ -70,13 +70,15 @@ jobs:
             --timestamp $(date -d "${TIMESTAMP}" +%s) \
             --volume $(pwd)/artifacts:/artifacts \
             .
+          podman inspect --format '{{.Digest}}' ${IMAGE} >artifacts/digest.txt
+          echo Built container "${IMAGE}@$(cat artifacts/digest.txt)"
 
       - name: Push image
         id: push
         run: |
-          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }}
-          podman push ${IMAGE} \
-            --digestfile artifacts/digest.txt
+          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST=$(cat artifacts/digest.txt)
+          podman push ${IMAGE}@${DIGEST}
 
       - name: Merge SBOM for container
         id: merge-sbom
@@ -92,9 +94,7 @@ jobs:
           DIGEST=$(cat artifacts/digest.txt)
           VCS_REF="${{ github.sha }}"
           VCS_URL="${{ github.server_url }}/${{ github.repository }}"
-          oras push \
-            ${IMAGE}@${DIGEST} \
-            artifacts/container.cdx.json:application/vnd.cyclonedx+json \
+          oras push ${IMAGE}@${DIGEST} artifacts/container.cdx.json \
             --annotation org.opencontainers.artifact.type="application/vnd.cyclonedx+json" \
             --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
             --annotation org.opencontainers.image.description="CycloneDX SBOM for ${{ matrix.arch }} architecture" \
