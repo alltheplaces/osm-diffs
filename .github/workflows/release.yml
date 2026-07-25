@@ -73,6 +73,14 @@ jobs:
           podman inspect --format '{{.Digest}}' ${IMAGE} >artifacts/digest.txt
           echo Built container "${IMAGE}@$(cat artifacts/digest.txt)"
 
+      - name: Build SBOM
+        id: build-sbom
+        run: |
+          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DIGEST=$(cat artifacts/digest.txt)
+          TIMESTAMP=${{ steps.commit-info.outputs.timestamp }}
+          sh sbom/merge_sbom.sh ${IMAGE} ${DIGEST} ${TIMESTAMP}
+
       - name: Push image
         id: push
         run: |
@@ -80,28 +88,32 @@ jobs:
           DIGEST=$(cat artifacts/digest.txt)
           podman push ${IMAGE}@${DIGEST}
 
-      - name: Merge SBOM for container
-        id: merge-sbom
-        run: |
-          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DIGEST=$(cat artifacts/digest.txt)
-          TIMESTAMP=${{ steps.commit-info.outputs.timestamp }}
-          sh sbom/merge_sbom.sh ${IMAGE} ${DIGEST} ${TIMESTAMP}
-
-      - name: Push SBOM as OCI artifact
+      - name: Push SBOM
         run: |
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST=$(cat artifacts/digest.txt)
           VCS_REF="${{ github.sha }}"
           VCS_URL="${{ github.server_url }}/${{ github.repository }}"
-          oras push ${IMAGE}@${DIGEST} artifacts/container.cdx.json \
-            --annotation org.opencontainers.artifact.type="application/vnd.cyclonedx+json" \
-            --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
-            --annotation org.opencontainers.image.description="CycloneDX SBOM for ${{ matrix.arch }} architecture" \
-            --annotation org.opencontainers.image.licenses="MIT" \
-            --annotation org.opencontainers.image.revision="${VCS_REF}" \
-            --annotation org.opencontainers.image.source="${VCS_URL}" \
-            --annotation org.opencontainers.image.title="SBOM"
+
+          # Retry logic to handle registry consistency issues
+          for attempt in {1..5}; do
+            if oras push ${IMAGE}@${DIGEST} artifacts/container.cdx.json \
+              --annotation org.opencontainers.artifact.type="application/vnd.cyclonedx+json" \
+              --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
+              --annotation org.opencontainers.image.description="CycloneDX SBOM for ${{ matrix.arch }} architecture" \
+              --annotation org.opencontainers.image.licenses="MIT" \
+              --annotation org.opencontainers.image.revision="${VCS_REF}" \
+              --annotation org.opencontainers.image.source="${VCS_URL}" \
+              --annotation org.opencontainers.image.title="SBOM"
+            fi
+            if [ $attempt -lt 5 ]; then
+              echo "Attempt $attempt failed, retrying in 10 seconds..."
+              sleep 10
+            else
+              echo "All retry attempts failed"
+              exit 1
+            fi
+          done
 
       - name: Upload image digest and SBOM to artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
