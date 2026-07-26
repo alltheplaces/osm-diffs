@@ -166,12 +166,7 @@ jobs:
           VCS_URL="${{ github.server_url }}/${{ github.repository }}"
 
           mkdir artifacts
-          podman manifest create ${IMAGE_SHA} \
-            --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
-            --annotation org.opencontainers.image.description="Data pipeline for alltheplaces/osm-diffs" \
-            --annotation org.opencontainers.image.licenses="MIT" \
-            --annotation org.opencontainers.image.revision="${VCS_REF}" \
-            --annotation org.opencontainers.image.source="${VCS_URL}"
+          podman manifest create ${IMAGE_SHA}
           podman manifest add ${IMAGE_SHA} ${IMAGE_AMD64}
           podman manifest add ${IMAGE_SHA} ${IMAGE_ARM64}
           podman tag ${IMAGE_SHA} ${IMAGE}:latest ${IMAGE}:${{ github.ref_name }}
