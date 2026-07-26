@@ -95,16 +95,21 @@ jobs:
           VCS_REF="${{ github.sha }}"
           VCS_URL="${{ github.server_url }}/${{ github.repository }}"
 
+          cp artifacts/container.cdx.json sbom.cdx.json
+
           # Retry logic to handle registry consistency issues
           for attempt in {1..5}; do
-            if oras push ${IMAGE}@${DIGEST} artifacts/container.cdx.json \
-              --annotation org.opencontainers.artifact.type="application/vnd.cyclonedx+json" \
+            if oras attach \
+              --distribution-spec v1.1-referrers-api \
+              --artifact-type "application/vnd.cyclonedx+json; version=1.7" \
               --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
               --annotation org.opencontainers.image.description="CycloneDX SBOM for ${{ matrix.arch }} architecture" \
               --annotation org.opencontainers.image.licenses="MIT" \
               --annotation org.opencontainers.image.revision="${VCS_REF}" \
               --annotation org.opencontainers.image.source="${VCS_URL}" \
-              --annotation org.opencontainers.image.title="SBOM"; then
+              --annotation org.opencontainers.image.title="SBOM" \
+              ${IMAGE}@${DIGEST} \
+              sbom.cdx.json; then
               break
             fi
             if [ $attempt -lt 5 ]; then
