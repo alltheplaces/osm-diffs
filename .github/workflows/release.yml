@@ -101,7 +101,7 @@ jobs:
           for attempt in {1..5}; do
             if oras attach \
               --distribution-spec v1.1-referrers-api \
-              --artifact-type "application/vnd.cyclonedx+json; version=1.7" \
+              --artifact-type "application/vnd.cyclonedx+json" \
               --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
               --annotation org.opencontainers.image.description="CycloneDX SBOM for ${{ matrix.arch }} architecture" \
               --annotation org.opencontainers.image.licenses="MIT" \
