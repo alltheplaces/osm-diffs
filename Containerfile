@@ -71,7 +71,7 @@ RUN sh build_tippecanoe_sbom.sh >/artifacts/tippecanoe.cdx.json
 
 WORKDIR /usr/osm-diffs
 
-COPY Cargo.toml Cargo.lock .
+COPY Cargo.toml Cargo.lock build.rs rust-toolchain.toml .
 COPY sbom sbom
 COPY src src
 COPY tests tests
