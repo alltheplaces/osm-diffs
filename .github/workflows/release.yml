@@ -34,9 +34,6 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
 
-      - name: Set up ORAS for artifact management
-        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
-
       - name: Install Podman
         run: |
           sudo apt-get update
@@ -45,7 +42,6 @@ jobs:
       - name: Log in to Container Registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
-          echo "${{ secrets.GITHUB_TOKEN }}" | oras login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
 
       - name: Get commit timestamp
         id: commit-info
@@ -87,39 +83,6 @@ jobs:
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST=$(cat artifacts/digest.txt)
           podman push ${IMAGE}@${DIGEST}
-
-      - name: Push SBOM
-        run: |
-          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DIGEST=$(cat artifacts/digest.txt)
-          VCS_REF="${{ github.sha }}"
-          VCS_URL="${{ github.server_url }}/${{ github.repository }}"
-
-          cp artifacts/container.cdx.json sbom.cdx.json
-
-          # Retry logic to handle registry consistency issues
-          for attempt in {1..5}; do
-            if oras attach \
-              --distribution-spec v1.1-referrers-api \
-              --artifact-type "application/vnd.cyclonedx+json" \
-              --annotation org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>" \
-              --annotation org.opencontainers.image.description="CycloneDX SBOM for ${{ matrix.arch }} architecture" \
-              --annotation org.opencontainers.image.licenses="MIT" \
-              --annotation org.opencontainers.image.revision="${VCS_REF}" \
-              --annotation org.opencontainers.image.source="${VCS_URL}" \
-              --annotation org.opencontainers.image.title="SBOM" \
-              ${IMAGE}@${DIGEST} \
-              sbom.cdx.json; then
-              break
-            fi
-            if [ $attempt -lt 5 ]; then
-              echo "Attempt $attempt failed, retrying in 10 seconds..."
-              sleep 10
-            else
-              echo "All retry attempts failed"
-              exit 1
-            fi
-          done
 
       - name: Upload image digest and SBOM to artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -221,6 +184,7 @@ jobs:
           sbom-path: artifacts-amd64/container.cdx.json
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.retrieve-digests.outputs.amd64_digest }}
+          push-to-registry: true
 
       - name: Attest arm64 SBOM
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 #v4.2.0
@@ -228,6 +192,7 @@ jobs:
           sbom-path: artifacts-arm64/container.cdx.json
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.retrieve-digests.outputs.arm64_digest }}
+          push-to-registry: true
 
       - name: Attest amd64 container
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 #v4.2.0
