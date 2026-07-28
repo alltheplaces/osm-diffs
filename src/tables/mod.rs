@@ -7,6 +7,8 @@
 
 mod coords_map;
 mod graph;
+#[allow(unused)]
+mod records;
 mod string_counts;
 mod string_pool;
 mod u64_set;
@@ -18,6 +20,8 @@ mod features {
 pub use coords_map::CoordsMap;
 pub use features::Feature;
 pub use graph::{Edge, GraphTable};
+#[allow(unused)]
+pub use records::{RecordsReader, RecordsWriter};
 pub use string_counts::StringCounts;
 pub use string_pool::StringPool;
 pub use u64_set::U64Set;
