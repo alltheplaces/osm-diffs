@@ -13,8 +13,27 @@ message Feature {
     uint64 changeset = 3;
     uint64 timestamp = 4;
     repeated uint32 tags = 5;
-    fixed64 centroid = 6;
+    bytes geometry_wkb = 6;
     repeated uint64 way_members = 16;
 }
 
+// An OpenStreetMap feature to be indexed.
+message FeatureToIndex {
+    // The OpenStreetMap feature to index.
+    Feature feature = 1;
 
+    // A bitmask to quickly skip over features that cannot possibly match
+    // the query feature. See matchers::MatchMask.
+    uint32 match_mask = 2;
+
+    // A set of S2 cell IDs that cover the geometry of the indexed feature.
+    repeated uint64 s2_cell_id = 3;
+
+    // Here would be a good place to store supplemental information
+    // that is needed to find the closest match in OpenStreetMap
+    // for a query feature from AllThePlaces, but that should’t
+    // get copied into the finalm conflated output. For example,
+    // if we ever want to compute the Token Sort Ratio metric
+    // for fuzzy matching of place names, add the pre-sorted
+    // token IDs here.
+}

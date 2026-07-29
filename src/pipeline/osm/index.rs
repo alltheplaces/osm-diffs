@@ -2,14 +2,16 @@ use super::{BlobReader, Prunings};
 use crate::{
     make_progress_bar,
     matchers::MatchMask,
-    tables::{Feature, StringCounts, StringPool},
+    tables::{Feature, FeatureToIndex, RecordReader, RecordWriter, StringCounts, StringPool},
 };
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock};
+use prost::Message;
 use rayon::prelude::*;
 use std::{fs::File, path::Path, sync::mpsc::sync_channel, thread};
+use wkb::writer::write_point;
 
 #[allow(unused)]
 pub struct Index<'a> {
@@ -24,7 +26,7 @@ impl<'a> Index<'a> {
         workdir: &Path,
     ) -> Result<Index<'a>> {
         let strings = index_strings(&prunings.strings, progress, workdir)?;
-        index_nodes(osm, prunings, &strings, progress, workdir)?;
+        let _nodes = index_nodes(osm, prunings, &strings, progress, workdir)?;
         Ok(Index { strings })
     }
 }
@@ -95,22 +97,31 @@ fn index_nodes(
     prunings: &Prunings,
     strings: &StringPool,
     progress: &MultiProgress,
-    _workdir: &Path,
-) -> Result<()> {
+    workdir: &Path,
+) -> Result<RecordReader> {
+    let out_path = workdir.join("osm-index.nodes");
+    if out_path.exists() {
+        return RecordReader::open(&out_path);
+    }
+
     let progress_bar = make_progress_bar(
         progress,
         "osm.index.nodes  ",
         osm.count_node_blobs() as u64,
-        "nodes",
+        "blobs → features",
     );
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(1024);
         let producer = s.spawn(|| osm.send_node_blobs(blob_tx));
 
         let keep_nodes = &prunings.keep_nodes;
         let consumer = s.spawn(move || {
+            let wkb_options = wkb::writer::WriteOptions {
+                endianness: wkb::Endianness::LittleEndian,
+            };
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
@@ -121,20 +132,22 @@ fn index_nodes(
                         && let Some(version) = info.version
                         && let Some(changeset) = info.changeset
                     {
-                        let mut f = Feature {
-                            id: 10 * node.id + 1,
-                            version,
-                            changeset,
-                            ..Default::default()
-                        };
+                        let mut fti = FeatureToIndex::default();
+                        let feature = fti.feature.get_or_insert_with(Feature::default);
+                        feature.id = 10 * node.id + 1;
+                        feature.version = version;
+                        feature.changeset = changeset;
 
                         // Handle geometry.
+                        let point = geo::Point::new(node.lon, node.lat); // x = longitude, y = latitude
+                        write_point(&mut feature.geometry_wkb, &point, &wkb_options)?;
                         let s2_lat_lon = s2::latlng::LatLng::from_degrees(node.lat, node.lon);
-                        let _s2_cell_id = s2::cellid::CellID::from(s2_lat_lon);
+                        fti.s2_cell_id.reserve(1);
+                        fti.s2_cell_id.push(s2::cellid::CellID::from(s2_lat_lon).0);
 
                         // Handle tags.
                         let mut mask = MatchMask::default();
-                        f.tags.reserve(node.tags.len() * 2);
+                        feature.tags.reserve(node.tags.len() * 2);
                         for (key, value) in node.tags.iter() {
                             mask.add_tag(key, value);
                             let key_id = strings.lookup(key).unwrap_or_else(|| {
@@ -143,17 +156,20 @@ fn index_nodes(
                                     node.id, key
                                 )
                             });
-                            f.tags.push(key_id as u32);
+                            feature.tags.push(key_id as u32);
                             let value_id = strings.lookup(value).unwrap_or_else(|| {
                                 panic!(
                                     "OpenStreetMap node/{} tag value not in StringPool: \"{}\"",
                                     node.id, value
                                 )
                             });
-                            f.tags.push(value_id as u32);
+                            feature.tags.push(value_id as u32);
                         }
 
-                        // TODO: Encode as proto message. Sort by s2_cell_id.
+                        if !mask.is_empty() {
+                            fti.match_mask = mask.0 as u32;
+                            feature_tx.send(fti.encode_to_vec())?;
+                        }
                     }
                 }
                 progress_bar.inc(1);
@@ -161,10 +177,23 @@ fn index_nodes(
             })
         });
 
+        let writer = s.spawn(|| {
+            let mut tmp_path = out_path.clone();
+            tmp_path.add_extension("tmp");
+            let mut out = RecordWriter::create(&tmp_path)?;
+            for f in feature_rx {
+                out.write(&f)?;
+            }
+            out.close()?;
+            std::fs::rename(&tmp_path, &out_path)?;
+            Ok(())
+        });
+
+        writer.join().expect("panic in writer")?;
         consumer.join().expect("panic in consumer")?;
         producer.join().expect("panic in producer")?;
         Ok(())
     })?;
     progress_bar.finish();
-    Ok(())
+    RecordReader::open(&out_path)
 }
