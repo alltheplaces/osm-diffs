@@ -27,6 +27,7 @@ impl<'a> Index<'a> {
     ) -> Result<Index<'a>> {
         let strings = index_strings(&prunings.strings, progress, workdir)?;
         let _nodes = index_nodes(osm, prunings, &strings, progress, workdir)?;
+        let _ways = index_ways(osm, prunings, &strings, progress, workdir)?;
         Ok(Index { strings })
     }
 }
@@ -92,6 +93,10 @@ fn index_strings<'a>(
     Ok(pool)
 }
 
+const WKB_WRITE_OPTIONS: wkb::writer::WriteOptions = wkb::writer::WriteOptions {
+    endianness: wkb::Endianness::LittleEndian,
+};
+
 fn index_nodes(
     osm: &mut BlobReader<File>,
     prunings: &Prunings,
@@ -119,16 +124,13 @@ fn index_nodes(
 
         let keep_nodes = &prunings.keep_nodes;
         let consumer = s.spawn(move || {
-            let wkb_options = wkb::writer::WriteOptions {
-                endianness: wkb::Endianness::LittleEndian,
-            };
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Node(node) = primitive
                         && keep_nodes.contains(node.id)
-                        && let Some(info) = node.info
+                        && let Some(ref info) = node.info
                         && let Some(version) = info.version
                         && let Some(changeset) = info.changeset
                     {
@@ -137,10 +139,13 @@ fn index_nodes(
                         feature.id = 10 * node.id + 1;
                         feature.version = version;
                         feature.changeset = changeset;
+                        if let Some(timestamp) = info.timestamp {
+                            feature.timestamp = timestamp;
+                        }
 
                         // Handle geometry.
                         let point = geo::Point::new(node.lon, node.lat); // x = longitude, y = latitude
-                        write_point(&mut feature.geometry_wkb, &point, &wkb_options)?;
+                        write_point(&mut feature.geometry_wkb, &point, &WKB_WRITE_OPTIONS)?;
                         let s2_lat_lon = s2::latlng::LatLng::from_degrees(node.lat, node.lon);
                         fti.s2_cell_id.reserve(1);
                         fti.s2_cell_id.push(s2::cellid::CellID::from(s2_lat_lon).0);
@@ -196,4 +201,189 @@ fn index_nodes(
     })?;
     progress_bar.finish();
     RecordReader::open(&out_path)
+}
+
+fn index_ways(
+    osm: &mut BlobReader<File>,
+    prunings: &Prunings,
+    strings: &StringPool,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<RecordReader> {
+    let out_path = workdir.join("osm-index.ways");
+    if out_path.exists() {
+        return RecordReader::open(&out_path);
+    }
+
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.index.ways   ",
+        osm.count_way_blobs() as u64,
+        "blobs → features",
+    );
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let num_workers = usize::from(thread::available_parallelism()?);
+        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(1024);
+        let producer = s.spawn(|| osm.send_way_blobs(blob_tx));
+
+        let keep_ways = &prunings.keep_ways;
+        let consumer = s.spawn(move || {
+            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
+                let data = blob.into_data(); // decompress
+                let block = PrimitiveBlock::parse(&data);
+                for primitive in block.primitives() {
+                    if let Primitive::Way(way) = primitive
+                        && keep_ways.contains(way.id)
+                        && let Some(ref info) = way.info
+                        && let Some(version) = info.version
+                        && let Some(changeset) = info.changeset
+                    {
+                        let mut fti = FeatureToIndex::default();
+                        let feature = fti.feature.get_or_insert_with(Feature::default);
+                        feature.id = 10 * way.id + 2;
+                        feature.version = version;
+                        feature.changeset = changeset;
+                        if let Some(timestamp) = info.timestamp {
+                            feature.timestamp = timestamp;
+                        }
+
+                        // Handle way members, look up their coordinates.
+                        let way_members_count = way.refs().count();
+                        let way_members = &mut feature.way_members;
+                        way_members.reserve(way_members_count);
+                        let mut coords = Vec::<geo::Coord>::with_capacity(way_members_count);
+                        for node_id in way.refs() {
+                            if node_id > 0 {
+                                let node_id: u64 = node_id as u64;
+                                way_members.push(node_id);
+                                if let Some(c) = prunings.coords.get(node_id) {
+                                    coords.push(c);
+                                }
+                            }
+                        }
+                        let way_members_count = way_members.len();
+                        let is_closed = way_members_count >= 2
+                            && way_members[0] == way_members[way_members_count - 1];
+                        let _is_area = is_area(is_closed, way.tags());
+
+                        // Handle tags.
+                        let mut mask = MatchMask::default();
+                        feature.tags.reserve(way.tags().count() * 2);
+                        for (key, value) in way.tags() {
+                            mask.add_tag(key, value);
+                            let key_id = strings.lookup(key).unwrap_or_else(|| {
+                                panic!(
+                                    "OpenStreetMap way/{} tag key not in StringPool: \"{}\"",
+                                    way.id, key
+                                )
+                            });
+                            feature.tags.push(key_id as u32);
+                            let value_id = strings.lookup(value).unwrap_or_else(|| {
+                                panic!(
+                                    "OpenStreetMap way/{} tag value not in StringPool: \"{}\"",
+                                    way.id, value
+                                )
+                            });
+                            feature.tags.push(value_id as u32);
+                        }
+
+                        if !mask.is_empty() {
+                            fti.match_mask = mask.0 as u32;
+                            feature_tx.send(fti.encode_to_vec())?;
+                        }
+                    }
+                }
+                progress_bar.inc(1);
+                Ok(())
+            })
+        });
+
+        let writer = s.spawn(|| {
+            let mut tmp_path = out_path.clone();
+            tmp_path.add_extension("tmp");
+            let mut out = RecordWriter::create(&tmp_path)?;
+            for f in feature_rx {
+                out.write(&f)?;
+            }
+            out.close()?;
+            std::fs::rename(&tmp_path, &out_path)?;
+            Ok(())
+        });
+
+        writer.join().expect("panic in writer")?;
+        consumer.join().expect("panic in consumer")?;
+        producer.join().expect("panic in producer")?;
+        Ok(())
+    })?;
+    progress_bar.finish();
+    RecordReader::open(&out_path)
+}
+
+fn is_area<'a>(closed: bool, tags: impl Iterator<Item = (&'a str, &'a str)>) -> bool {
+    if !closed {
+        return false;
+    }
+
+    for (key, value) in tags {
+        if key == "area" {
+            match value {
+                "yes" => return true,
+                "no" => return false,
+                _ => {}
+            }
+        }
+
+        // TODO: Port the rest of the iD logic to find out whether this is an area.
+        // For this, we need to bring in some data files from the iD editor,
+        // generate Rust code from it, and find a way to (reliably) update the
+        // dependency whenever iD publishes fresh data files. Ugh.
+        let _key = remove_lifecycle_prefix(key);
+    }
+
+    false
+}
+
+fn remove_lifecycle_prefix(key: &str) -> &str {
+    // https://github.com/openstreetmap/iD/blob/3940995296b4f767451dcba2cd25edbebcd237f4/modules/osm/tags.ts#L31
+    if let Some((prefix, rest)) = key.split_once(':')
+        && matches!(
+            prefix,
+            "proposed"
+                | "planned"
+                | "construction"
+                | "disused"
+                | "abandoned"
+                | "was"
+                | "dismantled"
+                | "razed"
+                | "demolished"
+                | "destroyed"
+                | "removed"
+                | "obliterated"
+                | "intermittent"
+        )
+    {
+        rest
+    } else {
+        key
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_remove_lifecycle_prefix() {
+        assert_eq!(remove_lifecycle_prefix("planned:highway"), "highway");
+        assert_eq!(remove_lifecycle_prefix("razed:highway"), "highway");
+        assert_eq!(remove_lifecycle_prefix(""), "");
+        assert_eq!(remove_lifecycle_prefix("foo"), "foo");
+        assert_eq!(remove_lifecycle_prefix("foo:"), "foo:");
+        assert_eq!(remove_lifecycle_prefix("foo:bar"), "foo:bar");
+        assert_eq!(remove_lifecycle_prefix("foo:bar:"), "foo:bar:");
+        assert_eq!(remove_lifecycle_prefix("foo:bar:baz"), "foo:bar:baz");
+    }
 }

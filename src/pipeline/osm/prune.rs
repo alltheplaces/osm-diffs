@@ -19,10 +19,10 @@ use std::{
 /// Which parts of OpenStreetMap we need for conflation.
 #[allow(unused)]
 pub struct Prunings<'a> {
-    coords: CoordsMap<'a>,
+    pub coords: CoordsMap<'a>,
     pub strings: StringCounts<'a>,
     pub keep_nodes: U64Set,
-    keep_ways: U64Set,
+    pub keep_ways: U64Set,
     keep_relations: U64Set,
     relation_members: U64Set,
 }
