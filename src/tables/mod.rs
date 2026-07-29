@@ -18,7 +18,7 @@ mod features {
 }
 
 pub use coords_map::CoordsMap;
-pub use features::Feature;
+pub use features::{Feature, FeatureToIndex};
 pub use graph::{Edge, GraphTable};
 #[allow(unused)]
 pub use records::{RecordReader, RecordWriter};
