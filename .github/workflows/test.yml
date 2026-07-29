@@ -25,33 +25,46 @@ jobs:
     steps:
     - name: Set up shared compilation cache
       uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
+
     - name: Check out repository
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      with:
+        submodules: recursive
+
     - name: Install protocol buffers compiler
       run: |
         sudo apt-get install -y protobuf-compiler
         protoc --version
+
     - name: Install tippecanoe
       run: |
         sudo apt-get install -y tippecanoe
         tippecanoe --version
+
     - name: Install Rust LLVM tools preview
       run: rustup component add llvm-tools-preview
+
     - name: Install Rust coverage tool
       uses: taiki-e/install-action@18b1216eba7f8039b0f8d131d5473787f0edce68 # v2.85.3
       with:
         tool: cargo-llvm-cov
+
     - name: Fetch Rust dependencies
       run: cargo fetch --locked
+
     - name: Check formatting
       run: cargo fmt --check
+
     - name: Build
       run: cargo build --locked
+
     - name: Run tests
       run: |
         cargo llvm-cov test --cobertura --locked --verbose --output-path cobertura.xml
+
     - name: Look for common mistakes
       run: cargo clippy --locked
+
     - name: Upload test coverage to Coveralls
       with:
         fail-on-error: false  # not critical when coveralls.io is down
