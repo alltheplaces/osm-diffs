@@ -6,18 +6,18 @@ use anyhow::{Context, Result};
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 
 /// A spool file: an lz4-compressed stream of length-prefixed records.
-pub struct RecordsReader {
+pub struct RecordReader {
     path: PathBuf,
 }
 
-impl RecordsReader {
+impl RecordReader {
     /// Open a spool file for reading. This validates the file is accessible;
     /// the actual decompression happens lazily, once per call to `iter()`.
-    pub fn open(path: &Path) -> Result<RecordsReader> {
+    pub fn open(path: &Path) -> Result<RecordReader> {
         File::open(path)
             .with_context(|| format!("failed to open spool file {}", path.display()))?;
 
-        Ok(RecordsReader {
+        Ok(RecordReader {
             path: path.to_path_buf(),
         })
     }
@@ -27,19 +27,19 @@ impl RecordsReader {
         let file = File::open(&self.path)
             .with_context(|| format!("failed to open spool file {}", self.path.display()))?;
         let decoder = FrameDecoder::new(file);
-        Ok(RecordsIter {
+        Ok(RecordIter {
             reader: BufReader::new(decoder),
         })
     }
 }
 
 // Private: not part of the public API, just the concrete iterator type
-// hidden behind `impl Iterator` in `RecordsReader::iter()`.
-struct RecordsIter {
+// hidden behind `impl Iterator` in `RecordReader::iter()`.
+struct RecordIter {
     reader: BufReader<FrameDecoder<File>>,
 }
 
-impl RecordsIter {
+impl RecordIter {
     /// Reads the raw bytes of a single varint off the stream (at most 10,
     /// since a u64 varint never needs more), then decodes them with prost's
     /// `decode_varint`. Returns `Ok(None)` on clean EOF at a record boundary.
@@ -78,7 +78,7 @@ impl RecordsIter {
     }
 }
 
-impl Iterator for RecordsIter {
+impl Iterator for RecordIter {
     type Item = Result<Vec<u8>>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -101,16 +101,16 @@ impl Iterator for RecordsIter {
 
 /// Writer for a spool file: writes an lz4-compressed stream of
 /// length-prefixed records.
-pub struct RecordsWriter {
+pub struct RecordWriter {
     encoder: FrameEncoder<File>,
 }
 
-impl RecordsWriter {
+impl RecordWriter {
     /// Create a new spool file for writing, truncating it if it already exists.
-    pub fn create(path: &Path) -> Result<RecordsWriter> {
+    pub fn create(path: &Path) -> Result<RecordWriter> {
         let file = File::create(path)
             .with_context(|| format!("failed to create spool file {}", path.display()))?;
-        Ok(RecordsWriter {
+        Ok(RecordWriter {
             encoder: FrameEncoder::new(file),
         })
     }
@@ -152,12 +152,12 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new()?;
         let path = tmp.path();
 
-        let mut writer = RecordsWriter::create(path)?;
+        let mut writer = RecordWriter::create(path)?;
         writer.write(b"hello")?;
         writer.write(b"world, a slightly longer second record")?;
         writer.close()?;
 
-        let spool = RecordsReader::open(path)?;
+        let spool = RecordReader::open(path)?;
         let records: Result<Vec<Vec<u8>>> = spool.iter()?.collect();
         let records = records?;
 
