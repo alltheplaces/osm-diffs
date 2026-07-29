@@ -1,0 +1,3 @@
+[submodule "vendor/id-tagging-schema"]
+	path = vendor/id-tagging-schema
+	url = https://github.com/openstreetmap/id-tagging-schema.git
