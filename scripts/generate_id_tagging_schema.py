@@ -134,13 +134,49 @@ def remove_lifecycle_prefix(tag: str, prefixes: set[str]) -> str:
         return tag
 
 
+def join_quoted_strings(s: [str]) -> str:
+    return " | ".join('"%s"' % x for x in sorted(s))
+
+
+def generate_rust_match_clause(
+    area_keys: dict[str, set[str]],
+    _area_keys_exceptions: dict[str, dict[str, bool]],
+) -> str:
+    out = StringIO()
+    unconditional_keys = set()
+    clauses = []
+    for key, exceptions in sorted(area_keys.items()):
+        if len(exceptions) == 0:
+            unconditional_keys.add(key)
+        elif len(exceptions) == 1:
+            # Avoid clippy warnings.
+            clauses.append(
+                '"%s" => { has_area_tag = true; if value ==  "%s" { has_line_tag = true } }'
+                % (key, list(exceptions)[0])
+            )
+        else:
+            clauses.append(
+                '"%s" => { has_area_tag = true; match value { %s => has_line_tag = true, _ => {} } }'
+                % (key, join_quoted_strings(exceptions))
+            )
+    clauses.insert(
+        0, "%s => {has_area_tag = true}" % join_quoted_strings(unconditional_keys)
+    )
+    clauses.append("  _ => {}")
+
+    out.write("match remove_lifecycle_prefix(key) {")
+    out.write(", ".join(clauses))
+    out.write("}")
+    return out.getvalue()
+
+
 def generate_rust(
     lifecycle_prefixes: set[str],
     area_keys: dict[str, set[str]],
     area_keys_exceptions: dict[str, dict[str, bool]],
 ) -> str:
     out = StringIO()
-    prefixes_rs = "|".join('"%s"' % p for p in sorted(lifecycle_prefixes))
+    match_clause = generate_rust_match_clause(area_keys, area_keys_exceptions)
     out.write(
         """
         // DO NOT EDIT - THIS FILE IS GENERATED
@@ -152,6 +188,8 @@ def generate_rust(
                 return false;
             }
 
+            let mut has_area_tag = false;
+            let mut has_line_tag = false;
             for (key, value) in tags {
                 if key == "area" {
                     match value {
@@ -161,11 +199,13 @@ def generate_rust(
                     }
                 }
 
-                // TODO: Port the rest of the iD logic to find out whether this is an area.
-                let _key = remove_lifecycle_prefix(key);
+                // For these tags, we don’t return immediately. At this point,
+                // we don’t know if the iteration will yield `area=no`, which
+                // should win over any tag heuristics.
+                %s
             }
-        
-            false
+
+            has_area_tag && !has_line_tag
         }
 
         fn remove_lifecycle_prefix(key: &str) -> &str {
@@ -182,6 +222,31 @@ def generate_rust(
             use super::*;
 
             #[test]
+            fn test_is_area() {
+                // If a way is not closed, it is never an area, no matter how it is tagged.
+                assert_eq!(is_area(false, [("area", "yes")].into_iter()), false);
+                assert_eq!(is_area(true, [("area", "yes")].into_iter()), true);
+                assert_eq!(is_area(true, [("area", "no")].into_iter()), false);
+
+                // By default, a closed way is not an area, unless the tags say otherwise.
+                assert_eq!(is_area(true, [].into_iter()), false);
+                assert_eq!(is_area(true, [("foo", "bar")].into_iter()), false);
+
+                // Should handle allowlists and denylists.
+                assert_eq!(is_area(true, [("aerialway", "pylon")].into_iter()), true);
+                assert_eq!(is_area(true, [("aerialway", "pylon"), ("area", "no")].into_iter()), false);
+                assert_eq!(is_area(true, [("aerialway", "pylon"), ("area", "yes")].into_iter()), true);
+                assert_eq!(is_area(true, [("aerialway", "goods")].into_iter()), false);
+                assert_eq!(is_area(true, [("aerialway", "goods"), ("area", "no")].into_iter()), false);
+                assert_eq!(is_area(true, [("aerialway", "goods"), ("area", "yes")].into_iter()), true);
+
+                // Should recognize lifecycle prefixes, similar to how iD does it in its codebase.
+                assert_eq!(is_area(true, [("planned:aerialway", "pylon")].into_iter()), true);
+                assert_eq!(is_area(true, [("planned:aerialway", "goods")].into_iter()), false);
+                assert_eq!(is_area(true, [("razed:building", "yes")].into_iter()), true);
+            }
+
+            #[test]
             fn test_remove_lifecycle_prefix() {
                 assert_eq!(remove_lifecycle_prefix("planned:highway"), "highway");
                 assert_eq!(remove_lifecycle_prefix("razed:highway"), "highway");
@@ -193,9 +258,11 @@ def generate_rust(
                 assert_eq!(remove_lifecycle_prefix("foo:bar:baz"), "foo:bar:baz");
             }
         }
-
         """
-        % prefixes_rs
+        % (
+            match_clause,
+            join_quoted_strings(lifecycle_prefixes),
+        )
     )
     result = subprocess.run(
         ["rustfmt", "--edition", "2024"],

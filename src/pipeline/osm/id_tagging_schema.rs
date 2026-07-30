@@ -7,6 +7,8 @@ pub fn is_area<'a>(closed: bool, tags: impl Iterator<Item = (&'a str, &'a str)>)
         return false;
     }
 
+    let mut has_area_tag = false;
+    let mut has_line_tag = false;
     for (key, value) in tags {
         if key == "area" {
             match value {
@@ -16,11 +18,198 @@ pub fn is_area<'a>(closed: bool, tags: impl Iterator<Item = (&'a str, &'a str)>)
             }
         }
 
-        // TODO: Port the rest of the iD logic to find out whether this is an area.
-        let _key = remove_lifecycle_prefix(key);
+        // For these tags, we don’t return immediately. At this point,
+        // we don’t know if the iteration will yield `area=no`, which
+        // should win over any tag heuristics.
+        match remove_lifecycle_prefix(key) {
+            "addr:*"
+            | "allotments"
+            | "animal"
+            | "area:highway"
+            | "bridge:support"
+            | "building"
+            | "building:part"
+            | "cemetery"
+            | "club"
+            | "community_centre"
+            | "craft"
+            | "education"
+            | "emergency"
+            | "healthcare"
+            | "industrial"
+            | "internet_access"
+            | "junction"
+            | "landuse"
+            | "office"
+            | "pipeline"
+            | "place"
+            | "police"
+            | "polling_station"
+            | "residential"
+            | "seamark:harbour:category"
+            | "seamark:type"
+            | "shop"
+            | "telecom" => has_area_tag = true,
+            "advertising" => {
+                has_area_tag = true;
+                match value {
+                    "billboard" | "poster_box" | "sign" | "totem" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "aerialway" => {
+                has_area_tag = true;
+                match value {
+                    "cable_car" | "chair_lift" | "drag_lift" | "gondola" | "goods" | "j-bar"
+                    | "magic_carpet" | "mixed_lift" | "platter" | "rope_tow" | "t-bar"
+                    | "zip_line" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "aeroway" => {
+                has_area_tag = true;
+                match value {
+                    "jet_bridge" | "parking_position" | "runway" | "taxiway" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "amenity" => {
+                has_area_tag = true;
+                match value {
+                    "bench" | "bicycle_parking" | "weighbridge" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "attraction" => {
+                has_area_tag = true;
+                match value {
+                    "dark_ride" | "log_flume" | "river_rafting" | "summer_toboggan" | "train"
+                    | "water_slide" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "boundary" => {
+                has_area_tag = true;
+                if value == "administrative" {
+                    has_line_tag = true
+                }
+            }
+            "ceremonial_gate" => {
+                has_area_tag = true;
+                match value {
+                    "paifang" | "torii" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "golf" => {
+                has_area_tag = true;
+                match value {
+                    "cartpath" | "hole" | "path" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "historic" => {
+                has_area_tag = true;
+                if value == "ruins" {
+                    has_line_tag = true
+                }
+            }
+            "indoor" => {
+                has_area_tag = true;
+                match value {
+                    "corridor" | "wall" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "leisure" => {
+                has_area_tag = true;
+                match value {
+                    "slipway" | "track" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "man_made" => {
+                has_area_tag = true;
+                match value {
+                    "breakwater" | "carpet_hanger" | "ceremonial_gate" | "crane" | "cutline"
+                    | "dyke" | "embankment" | "gantry" | "geoglyph" | "goods_conveyor"
+                    | "groyne" | "pier" | "pipeline" | "quay" | "video_wall" | "yes" => {
+                        has_line_tag = true
+                    }
+                    _ => {}
+                }
+            }
+            "military" => {
+                has_area_tag = true;
+                if value == "trench" {
+                    has_line_tag = true
+                }
+            }
+            "natural" => {
+                has_area_tag = true;
+                match value {
+                    "arete" | "bay" | "cliff" | "coastline" | "ridge" | "strait" | "tree_row"
+                    | "valley" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "piste:type" => {
+                has_area_tag = true;
+                match value {
+                    "downhill" | "hike" | "ice_skate" | "nordic" | "ski_jump" | "skitour"
+                    | "sled" | "sleigh" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "playground" => {
+                has_area_tag = true;
+                match value {
+                    "activitypanel" | "balancebeam" | "basketswing" | "bridge" | "climbingwall"
+                    | "hopscotch" | "horizontal_bar" | "seesaw" | "slide" | "structure"
+                    | "swing" | "tunnel_tube" | "water" | "zipwire" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "power" => {
+                has_area_tag = true;
+                match value {
+                    "cable" | "line" | "minor_line" | "portal" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "public_transport" => {
+                has_area_tag = true;
+                if value == "platform" {
+                    has_line_tag = true
+                }
+            }
+            "roller_coaster" => {
+                has_area_tag = true;
+                match value {
+                    "support" | "track" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "tourism" => {
+                has_area_tag = true;
+                match value {
+                    "artwork" | "attraction" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            "waterway" => {
+                has_area_tag = true;
+                match value {
+                    "canal" | "dam" | "ditch" | "drain" | "fish_pass" | "lock_gate" | "river"
+                    | "stream" | "tidal_channel" | "weir" => has_line_tag = true,
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
     }
 
-    false
+    has_area_tag && !has_line_tag
 }
 
 fn remove_lifecycle_prefix(key: &str) -> &str {
@@ -51,6 +240,49 @@ fn remove_lifecycle_prefix(key: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_is_area() {
+        // If a way is not closed, it is never an area, no matter how it is tagged.
+        assert_eq!(is_area(false, [("area", "yes")].into_iter()), false);
+        assert_eq!(is_area(true, [("area", "yes")].into_iter()), true);
+        assert_eq!(is_area(true, [("area", "no")].into_iter()), false);
+
+        // By default, a closed way is not an area, unless the tags say otherwise.
+        assert_eq!(is_area(true, [].into_iter()), false);
+        assert_eq!(is_area(true, [("foo", "bar")].into_iter()), false);
+
+        // Should handle allowlists and denylists.
+        assert_eq!(is_area(true, [("aerialway", "pylon")].into_iter()), true);
+        assert_eq!(
+            is_area(true, [("aerialway", "pylon"), ("area", "no")].into_iter()),
+            false
+        );
+        assert_eq!(
+            is_area(true, [("aerialway", "pylon"), ("area", "yes")].into_iter()),
+            true
+        );
+        assert_eq!(is_area(true, [("aerialway", "goods")].into_iter()), false);
+        assert_eq!(
+            is_area(true, [("aerialway", "goods"), ("area", "no")].into_iter()),
+            false
+        );
+        assert_eq!(
+            is_area(true, [("aerialway", "goods"), ("area", "yes")].into_iter()),
+            true
+        );
+
+        // Should recognize lifecycle prefixes, similar to how iD does it in its codebase.
+        assert_eq!(
+            is_area(true, [("planned:aerialway", "pylon")].into_iter()),
+            true
+        );
+        assert_eq!(
+            is_area(true, [("planned:aerialway", "goods")].into_iter()),
+            false
+        );
+        assert_eq!(is_area(true, [("razed:building", "yes")].into_iter()), true);
+    }
 
     #[test]
     fn test_remove_lifecycle_prefix() {
