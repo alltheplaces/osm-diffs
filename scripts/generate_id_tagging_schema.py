@@ -330,11 +330,6 @@ def elide_transient_sbom_fields(data: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def format_rust(src: str) -> str:
-    # TODO: Pipe thorugh rustfmt
-    return src
-
-
 def update(path: str, content: str) -> bool:
     path = source_file_path(path)
     with open(path, "r") as fp:
