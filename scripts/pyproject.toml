@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
+# SPDX-License-Identifier: MIT
+
+[project]
+name = "scripts"
+version = "0.1.0"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Sascha Brawer", email = "sascha@brawer.ch" }]
+description = "Helper scripts internal to this project"
+requires-python = ">=3.12"
+dependencies = []

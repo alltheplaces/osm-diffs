@@ -21,6 +21,7 @@ mod coords;
 mod cover;
 mod fetch;
 mod filter;
+mod id_tagging_schema;
 mod index;
 mod prune;
 

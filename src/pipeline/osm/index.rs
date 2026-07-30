@@ -2,6 +2,7 @@ use super::{BlobReader, Prunings};
 use crate::{
     make_progress_bar,
     matchers::MatchMask,
+    pipeline::osm::id_tagging_schema::is_area,
     tables::{Feature, FeatureToIndex, RecordReader, RecordWriter, StringCounts, StringPool},
 };
 use anyhow::{Ok, Result};
@@ -319,71 +320,4 @@ fn index_ways(
     })?;
     progress_bar.finish();
     RecordReader::open(&out_path)
-}
-
-fn is_area<'a>(closed: bool, tags: impl Iterator<Item = (&'a str, &'a str)>) -> bool {
-    if !closed {
-        return false;
-    }
-
-    for (key, value) in tags {
-        if key == "area" {
-            match value {
-                "yes" => return true,
-                "no" => return false,
-                _ => {}
-            }
-        }
-
-        // TODO: Port the rest of the iD logic to find out whether this is an area.
-        // For this, we need to bring in some data files from the iD editor,
-        // generate Rust code from it, and find a way to (reliably) update the
-        // dependency whenever iD publishes fresh data files. Ugh.
-        let _key = remove_lifecycle_prefix(key);
-    }
-
-    false
-}
-
-fn remove_lifecycle_prefix(key: &str) -> &str {
-    // https://github.com/openstreetmap/iD/blob/3940995296b4f767451dcba2cd25edbebcd237f4/modules/osm/tags.ts#L31
-    if let Some((prefix, rest)) = key.split_once(':')
-        && matches!(
-            prefix,
-            "proposed"
-                | "planned"
-                | "construction"
-                | "disused"
-                | "abandoned"
-                | "was"
-                | "dismantled"
-                | "razed"
-                | "demolished"
-                | "destroyed"
-                | "removed"
-                | "obliterated"
-                | "intermittent"
-        )
-    {
-        rest
-    } else {
-        key
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_remove_lifecycle_prefix() {
-        assert_eq!(remove_lifecycle_prefix("planned:highway"), "highway");
-        assert_eq!(remove_lifecycle_prefix("razed:highway"), "highway");
-        assert_eq!(remove_lifecycle_prefix(""), "");
-        assert_eq!(remove_lifecycle_prefix("foo"), "foo");
-        assert_eq!(remove_lifecycle_prefix("foo:"), "foo:");
-        assert_eq!(remove_lifecycle_prefix("foo:bar"), "foo:bar");
-        assert_eq!(remove_lifecycle_prefix("foo:bar:"), "foo:bar:");
-        assert_eq!(remove_lifecycle_prefix("foo:bar:baz"), "foo:bar:baz");
-    }
 }
