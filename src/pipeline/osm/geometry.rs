@@ -22,9 +22,7 @@ use geo::MakeValid;
 use geo::algorithm::line_intersection::{LineIntersection, line_intersection};
 use geo::algorithm::sweep::{Cross, Intersections};
 use geo::algorithm::validation::Validation;
-use geo::{
-    Coord, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
-};
+use geo::{Coord, Geometry, Line, LineString, MultiLineString, MultiPoint, Point, Polygon};
 use std::cmp::Ordering;
 
 /// Build a valid OGC Simple Features geometry for a set of points.
