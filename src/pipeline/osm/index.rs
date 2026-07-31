@@ -2,7 +2,10 @@ use super::{BlobReader, Prunings};
 use crate::{
     make_progress_bar,
     matchers::MatchMask,
-    pipeline::osm::id_tagging_schema::is_area,
+    pipeline::osm::{
+        geometry::{build_line, build_ring},
+        id_tagging_schema::is_area,
+    },
     tables::{Feature, FeatureToIndex, RecordReader, RecordWriter, StringCounts, StringPool},
 };
 use anyhow::{Ok, Result};
@@ -12,7 +15,7 @@ use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock};
 use prost::Message;
 use rayon::prelude::*;
 use std::{fs::File, path::Path, sync::mpsc::sync_channel, thread};
-use wkb::writer::write_point;
+use wkb::writer::{write_geometry, write_point};
 
 #[allow(unused)]
 pub struct Index<'a> {
@@ -265,9 +268,23 @@ fn index_ways(
                             }
                         }
                         let way_members_count = way_members.len();
+
+                        // Construct the geometry, conforming to the OGC Simple Features model.
+                        // We try to repair degenerate cases, so the resulting shape can be
+                        // a Point, LineString, Polygon, MultiLineString, or MultiPolygon.
                         let is_closed = way_members_count >= 2
                             && way_members[0] == way_members[way_members_count - 1];
-                        let _is_area = is_area(is_closed, way.tags());
+                        let geometry = if is_area(is_closed, way.tags()) {
+                            build_ring(coords)
+                        } else {
+                            build_line(coords)
+                        };
+                        let Some(geometry) = geometry else {
+                            continue;
+                        };
+                        write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
+
+                        // TODO: Compute S2 cell coverage, store in fti.
 
                         // Handle tags.
                         let mut mask = MatchMask::default();

@@ -21,6 +21,8 @@ mod coords;
 mod cover;
 mod fetch;
 mod filter;
+#[allow(unused)]
+mod geometry;
 mod id_tagging_schema;
 mod index;
 mod prune;
