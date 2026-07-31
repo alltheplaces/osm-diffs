@@ -3,15 +3,16 @@ use crate::{
     make_progress_bar,
     matchers::MatchMask,
     pipeline::osm::{
-        geometry::{build_line, build_ring},
+        geometry::{build_line, build_points, build_ring},
         id_tagging_schema::is_area,
     },
     tables::{Feature, FeatureToIndex, RecordReader, RecordWriter, StringCounts, StringPool},
 };
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
+use geo::{Centroid, Geometry};
 use indicatif::MultiProgress;
-use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock};
+use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use prost::Message;
 use rayon::prelude::*;
 use std::{fs::File, path::Path, sync::mpsc::sync_channel, thread};
@@ -32,6 +33,7 @@ impl<'a> Index<'a> {
         let strings = index_strings(&prunings.strings, progress, workdir)?;
         let _nodes = index_nodes(osm, prunings, &strings, progress, workdir)?;
         let _ways = index_ways(osm, prunings, &strings, progress, workdir)?;
+        let _relations = index_relations(osm, prunings, &strings, progress, workdir)?;
         Ok(Index { strings })
     }
 }
@@ -52,7 +54,7 @@ fn index_strings<'a>(
 
     let read_progress = make_progress_bar(
         progress,
-        "osm.index.strings",
+        "osm.index.strings  ",
         strings.len() as u64,
         "strings",
     );
@@ -115,7 +117,7 @@ fn index_nodes(
 
     let progress_bar = make_progress_bar(
         progress,
-        "osm.index.nodes  ",
+        "osm.index.nodes    ",
         osm.count_node_blobs() as u64,
         "blobs → features",
     );
@@ -150,9 +152,7 @@ fn index_nodes(
                         // Handle geometry.
                         let point = geo::Point::new(node.lon, node.lat); // x = longitude, y = latitude
                         write_point(&mut feature.geometry_wkb, &point, &WKB_WRITE_OPTIONS)?;
-                        let s2_lat_lon = s2::latlng::LatLng::from_degrees(node.lat, node.lon);
-                        fti.s2_cell_id.reserve(1);
-                        fti.s2_cell_id.push(s2::cellid::CellID::from(s2_lat_lon).0);
+                        index_geometry(&Geometry::Point(point), &mut fti.s2_cell_id);
 
                         // Handle tags.
                         let mut mask = MatchMask::default();
@@ -207,6 +207,20 @@ fn index_nodes(
     RecordReader::open(&out_path)
 }
 
+// TODO: On behalf of index_relations(), this function should
+// additionally emit a table with just the geometry of the (relatively
+// few, about 5.8 million) ways in prunings.relation_members. This
+// table should be indexed by way ID, so that index_relations() can
+// quickly retrieve the geometry of all member ways when it constructs
+// OGC Simple Features geometry for an OpenStreetMap relation. Note
+// that the same way can (at least in theory) simultaneously be a
+// member of some multipolygon relation, so its coordinates have to be
+// interpreted as a ring, and also be a member of a non-multipolygon
+// relation whose member ways need to be stitched to form (say) a long
+// line string. Perhaps it will be best to emit just the coordinates
+// in sequence from here, so that the consumer (ie., index_relations)
+// can figure out how to best construct geometry. We’ll need to think
+// about this a little more.
 fn index_ways(
     osm: &mut BlobReader<File>,
     prunings: &Prunings,
@@ -221,7 +235,7 @@ fn index_ways(
 
     let progress_bar = make_progress_bar(
         progress,
-        "osm.index.ways   ",
+        "osm.index.ways     ",
         osm.count_way_blobs() as u64,
         "blobs → features",
     );
@@ -283,8 +297,7 @@ fn index_ways(
                             continue;
                         };
                         write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
-
-                        // TODO: Compute S2 cell coverage, store in fti.
+                        index_geometry(&geometry, &mut fti.s2_cell_id);
 
                         // Handle tags.
                         let mut mask = MatchMask::default();
@@ -337,4 +350,152 @@ fn index_ways(
     })?;
     progress_bar.finish();
     RecordReader::open(&out_path)
+}
+
+fn index_relations(
+    osm: &mut BlobReader<File>,
+    prunings: &Prunings,
+    strings: &StringPool,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<RecordReader> {
+    let out_path = workdir.join("osm-index.relations");
+    if out_path.exists() {
+        return RecordReader::open(&out_path);
+    }
+
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.index.relations",
+        osm.count_relation_blobs() as u64,
+        "blobs → features",
+    );
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let num_workers = usize::from(thread::available_parallelism()?);
+        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
+        let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(1024);
+        let producer = s.spawn(|| osm.send_relation_blobs(blob_tx));
+
+        let keep_relations = &prunings.keep_relations;
+        let consumer = s.spawn(move || {
+            blob_rx.into_iter().par_bridge().try_for_each(|blob| {
+                let data = blob.into_data(); // decompress
+                let block = PrimitiveBlock::parse(&data);
+                for primitive in block.primitives() {
+                    if let Primitive::Relation(relation) = primitive
+                        && keep_relations.contains(relation.id)
+                        && let Some(ref info) = relation.info
+                        && let Some(version) = info.version
+                        && let Some(changeset) = info.changeset
+                    {
+                        let mut fti = FeatureToIndex::default();
+                        let feature = fti.feature.get_or_insert_with(Feature::default);
+                        feature.id = 10 * relation.id + 3;
+                        feature.version = version;
+                        feature.changeset = changeset;
+                        if let Some(timestamp) = info.timestamp {
+                            feature.timestamp = timestamp;
+                        }
+
+                        // Handle member nodes.
+                        let mut node_coords = Vec::<geo::Coord>::new();
+                        for (_role, id, member_type) in relation.members() {
+                            if member_type == RelationMemberType::Node
+                                && let Some(c) = prunings.coords.get(id)
+                            {
+                                node_coords.push(c);
+                            }
+                        }
+
+                        // TODO: Handle member ways and relations.
+                        let geometry = build_points(node_coords);
+                        let Some(geometry) = geometry else {
+                            continue;
+                        };
+
+                        write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
+                        index_geometry(&geometry, &mut fti.s2_cell_id);
+
+                        // Handle tags.
+                        let mut mask = MatchMask::default();
+                        feature.tags.reserve(relation.tags().count() * 2);
+                        for (key, value) in relation.tags() {
+                            mask.add_tag(key, value);
+                            let key_id = strings.lookup(key).unwrap_or_else(|| {
+                                panic!(
+                                    "OpenStreetMap relation/{} tag key not in StringPool: \"{}\"",
+                                    relation.id, key
+                                )
+                            });
+                            feature.tags.push(key_id as u32);
+                            let value_id = strings.lookup(value).unwrap_or_else(|| {
+                                panic!(
+                                    "OpenStreetMap relation/{} tag value not in StringPool: \"{}\"",
+                                    relation.id, value
+                                )
+                            });
+                            feature.tags.push(value_id as u32);
+                        }
+
+                        if !mask.is_empty() {
+                            fti.match_mask = mask.0 as u32;
+                            feature_tx.send(fti.encode_to_vec())?;
+                        }
+                    }
+                }
+                progress_bar.inc(1);
+                Ok(())
+            })
+        });
+
+        let writer = s.spawn(|| {
+            let mut tmp_path = out_path.clone();
+            tmp_path.add_extension("tmp");
+            let mut out = RecordWriter::create(&tmp_path)?;
+            for f in feature_rx {
+                out.write(&f)?;
+            }
+            out.close()?;
+            std::fs::rename(&tmp_path, &out_path)?;
+            Ok(())
+        });
+
+        writer.join().expect("panic in writer")?;
+        consumer.join().expect("panic in consumer")?;
+        producer.join().expect("panic in producer")?;
+        Ok(())
+    })?;
+    progress_bar.finish();
+    RecordReader::open(&out_path)
+}
+
+fn index_geometry(g: &Geometry, s2_cell_ids: &mut Vec<u64>) {
+    match g {
+        Geometry::Point(p) => {
+            s2_cell_ids.reserve(1);
+            s2_cell_ids.push(s2_cell_id_for_point(p))
+        }
+
+        Geometry::MultiPoint(multipoint) => {
+            s2_cell_ids.reserve(multipoint.len());
+            for p in multipoint.iter() {
+                s2_cell_ids.push(s2_cell_id_for_point(p));
+            }
+        }
+
+        // TODO: Replace this by proper s2 cell coverage once polygons and polylines
+        // are supported in the Rust port of the S2 geometry library.
+        _ => {
+            if let Some(centroid) = g.centroid() {
+                s2_cell_ids.reserve(1);
+                s2_cell_ids.push(s2_cell_id_for_point(&centroid));
+            };
+        }
+    };
+}
+
+fn s2_cell_id_for_point(p: &geo::Point) -> u64 {
+    let s2_lat_lng = s2::latlng::LatLng::from_degrees(p.y(), p.x());
+    s2::cellid::CellID::from(s2_lat_lng).0
 }

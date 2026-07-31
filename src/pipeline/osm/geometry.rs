@@ -22,7 +22,40 @@ use geo::MakeValid;
 use geo::algorithm::line_intersection::{LineIntersection, line_intersection};
 use geo::algorithm::sweep::{Cross, Intersections};
 use geo::algorithm::validation::Validation;
-use geo::{Coord, Geometry, Line, LineString, MultiLineString, MultiPolygon, Point, Polygon};
+use geo::{
+    Coord, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
+};
+use std::cmp::Ordering;
+
+/// Build a valid OGC Simple Features geometry for a set of points.
+pub fn build_points(coords: Vec<Coord<f64>>) -> Option<Geometry<f64>> {
+    let mut coords = coords;
+
+    // Retain only coordinates where both x and y are finite.
+    coords.retain(|c| c.x.is_finite() && c.y.is_finite());
+
+    // Fast path: 0 or 1 points.
+    match coords.len() {
+        0 => return None,
+        1 => return Some(Geometry::from(Point::new(coords[0].x, coords[0].y))),
+        _ => {}
+    }
+
+    // De-duplicate (which needs sorted input).
+    coords.sort_by(|a, b| {
+        a.x.partial_cmp(&b.x)
+            .unwrap_or(Ordering::Equal)
+            .then_with(|| a.y.partial_cmp(&b.y).unwrap_or(Ordering::Equal))
+    });
+    coords.dedup();
+
+    if coords.len() == 1 {
+        Some(Geometry::from(Point::new(coords[0].x, coords[0].y)))
+    } else {
+        let mp: MultiPoint<f64> = coords.into_iter().map(Point::from).collect();
+        Some(Geometry::from(mp))
+    }
+}
 
 /// Build a valid OGC Simple Features geometry from an **open** path of
 /// coordinates.
@@ -333,6 +366,27 @@ mod tests {
 
     fn c(x: f64, y: f64) -> Coord<f64> {
         coord! { x: x, y: y }
+    }
+
+    #[test]
+    fn build_points_no_points_returns_none() {
+        assert!(build_points(vec![]).is_none());
+    }
+
+    #[test]
+    fn build_points_single_point_returns_point() {
+        let geom = build_points(vec![c(0.0, 0.0)]).expect("should build");
+        assert!(matches!(geom, Geometry::Point(_)));
+    }
+
+    #[test]
+    fn build_points_removes_duplicate() {
+        let coords = vec![c(0.0, 0.0), c(1.0, 1.0), c(0.0, 0.0), c(1.0, 1.0)];
+        if let Some(Geometry::MultiPoint(mp)) = build_points(coords) {
+            assert_eq!(mp.len(), 2);
+        } else {
+            panic!("expected MultiPoint");
+        }
     }
 
     #[test]

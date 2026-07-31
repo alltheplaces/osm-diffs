@@ -23,7 +23,7 @@ pub struct Prunings<'a> {
     pub strings: StringCounts<'a>,
     pub keep_nodes: U64Set,
     pub keep_ways: U64Set,
-    keep_relations: U64Set,
+    pub keep_relations: U64Set,
     relation_members: U64Set,
 }
 
