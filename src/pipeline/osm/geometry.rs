@@ -16,14 +16,18 @@
 //! enormous segment spanning most of the globe — see
 //! [`unwrap_antimeridian`].
 
-use std::collections::{HashMap, HashSet};
-
-use geo::MakeValid;
-use geo::algorithm::line_intersection::{LineIntersection, line_intersection};
-use geo::algorithm::sweep::{Cross, Intersections};
-use geo::algorithm::validation::Validation;
-use geo::{Coord, Geometry, Line, LineString, MultiLineString, MultiPoint, Point, Polygon};
+use geo::{
+    Coord, Geometry, Line, LineString, MakeValid, MultiLineString, MultiPoint, MultiPolygon, Point,
+    Polygon,
+    algorithm::{
+        line_intersection::{LineIntersection, line_intersection},
+        sweep::{Cross, Intersections},
+        validation::Validation,
+    },
+    orient::{Direction, Orient},
+};
 use std::cmp::Ordering;
+use std::collections::{HashMap, HashSet};
 
 /// Build a valid OGC Simple Features geometry for a set of points.
 pub fn build_points(coords: Vec<Coord<f64>>) -> Option<Geometry<f64>> {
@@ -133,10 +137,17 @@ pub fn build_line(coords: Vec<Coord<f64>>) -> Option<Geometry<f64>> {
 /// a self-intersection check for closed rings) confirms this.
 ///
 /// # Repair path
-/// If the ring self-intersects (e.g. a "bowtie"), it's repaired using
+/// If the ring self-intersects (e.g. a “bowtie”), it's repaired using
 /// `geo`'s constrained-Delaunay-triangulation-based polygon repair
 /// (`MakeValid`), which can split one self-intersecting ring into multiple
 /// simple polygons. The result is returned as a [`Geometry::MultiPolygon`].
+///
+/// # Ring orientation
+/// OGC Simple Features validity doesn't constrain winding order — a
+/// clockwise exterior ring is just as “valid” as a counterclockwise one —
+/// but many consumers (notably GeoJSON, per RFC 7946) expect a canonical
+/// orientation. Regardless of the input's winding, the returned exterior
+/// ring(s) are always counterclockwise and interior rings clockwise.
 ///
 /// # Antimeridian handling
 /// Before validation, longitudes are unwrapped with
@@ -162,13 +173,18 @@ pub fn build_ring(coords: Vec<Coord<f64>>) -> Option<Geometry<f64>> {
     let polygon = Polygon::new(LineString::new(coords), vec![]);
 
     if polygon.is_valid() {
-        return Some(Geometry::from(polygon));
+        return Some(Geometry::from(polygon.orient(Direction::Default)));
     }
 
     if let Some(repaired) = polygon.make_valid().ok()
         && !repaired.0.is_empty()
     {
-        Some(Geometry::from(repaired))
+        let oriented: Vec<Polygon<f64>> = repaired
+            .0
+            .into_iter()
+            .map(|p| p.orient(Direction::Default))
+            .collect();
+        Some(Geometry::from(MultiPolygon::new(oriented)))
     } else {
         None
     }
@@ -205,7 +221,7 @@ pub fn build_ring(coords: Vec<Coord<f64>>) -> Option<Geometry<f64>> {
 ///   input this function doesn't attempt to handle.
 /// * The output is *not* re-wrapped back into `[-180, 180]`: OGC Simple
 ///   Features geometries have no degree-range constraint, so a continuous
-///   ("unwrapped") sequence like `[170, 175, 185, 190]` is just as valid a
+///   (“unwrapped”) sequence like `[170, 175, 185, 190]` is just as valid a
 ///   geometry as one that stays within `[-180, 180]` — it only needs
 ///   re-wrapping by the caller if a canonical range is required at
 ///   render/serialization time (e.g. for GeoJSON output).
@@ -406,9 +422,20 @@ mod tests {
     }
 
     #[test]
-    fn build_line_single_point_returns_point() {
-        let geom = build_line(vec![c(0.0, 0.0)]).expect("should build");
-        assert!(matches!(geom, Geometry::Point(_)));
+    fn build_line_single_coordinate_returns_point() {
+        let geom = build_line(vec![c(1.5, -2.5)]).expect("should build");
+        match geom {
+            Geometry::Point(p) => {
+                assert_eq!(p.x(), 1.5);
+                assert_eq!(p.y(), -2.5);
+            }
+            other => panic!("expected Point, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_line_single_non_finite_coordinate_returns_none() {
+        assert!(build_line(vec![c(f64::NAN, 0.0)]).is_none());
     }
 
     #[test]
@@ -446,6 +473,24 @@ mod tests {
             assert!(total_points >= 4);
         } else {
             panic!("expected MultiLineString");
+        }
+    }
+
+    #[test]
+    fn build_line_antimeridian_crossing_returns_single_line_string() {
+        // A short hop across the dateline: 179deg -> -179deg is really a
+        // 2-degree segment, not a 358-degree one.
+        let coords = vec![c(179.0, 10.0), c(-179.0, 12.0), c(-177.0, 14.0)];
+        let geom = build_line(coords).expect("should build");
+        match geom {
+            Geometry::LineString(ls) => {
+                // Longitudes should be continuous (unwrapped), not jump by ~358.
+                let xs: Vec<f64> = ls.0.iter().map(|c| c.x).collect();
+                for w in xs.windows(2) {
+                    assert!((w[1] - w[0]).abs() < 180.0);
+                }
+            }
+            other => panic!("expected LineString, got {other:?}"),
         }
     }
 
@@ -494,5 +539,76 @@ mod tests {
     fn build_ring_non_finite_returns_none() {
         let coords = vec![c(0.0, 0.0), c(4.0, 0.0), c(f64::NAN, 4.0)];
         assert!(build_ring(coords).is_none());
+    }
+
+    #[test]
+    fn build_ring_antimeridian_crossing_returns_single_polygon() {
+        // A small ring straddling the dateline, e.g. 179E to 179W-ish.
+        let coords = vec![
+            c(179.0, 10.0),
+            c(-179.0, 10.0),
+            c(-179.0, 12.0),
+            c(179.0, 12.0),
+        ];
+        let geom = build_ring(coords).expect("should build");
+        match geom {
+            Geometry::Polygon(p) => {
+                let xs: Vec<f64> = p.exterior().0.iter().map(|c| c.x).collect();
+                for w in xs.windows(2) {
+                    assert!((w[1] - w[0]).abs() < 180.0);
+                }
+            }
+            other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    /// Shoelace-formula signed area: positive for CCW, negative for CW.
+    fn signed_area(ring: &LineString<f64>) -> f64 {
+        let pts = &ring.0;
+        let mut sum = 0.0;
+        for w in pts.windows(2) {
+            sum += w[0].x * w[1].y - w[1].x * w[0].y;
+        }
+        sum / 2.0
+    }
+
+    #[test]
+    fn build_ring_clockwise_input_is_reoriented_counterclockwise() {
+        // Same square as build_ring_simple_ring_returns_polygon, but wound clockwise.
+        let coords = vec![c(0.0, 0.0), c(0.0, 4.0), c(4.0, 4.0), c(4.0, 0.0)];
+        assert!(signed_area(&LineString::new(coords.clone())) < 0.0); // sanity: input is CW
+
+        let geom = build_ring(coords).expect("should build");
+        if let Geometry::Polygon(p) = geom {
+            assert!(signed_area(p.exterior()) > 0.0);
+        } else {
+            panic!("expected Polygon");
+        }
+    }
+
+    #[test]
+    fn build_ring_counterclockwise_input_stays_counterclockwise() {
+        let coords = vec![c(0.0, 0.0), c(4.0, 0.0), c(4.0, 4.0), c(0.0, 4.0)];
+        assert!(signed_area(&LineString::new(coords.clone())) > 0.0); // sanity: input is CCW
+
+        let geom = build_ring(coords).expect("should build");
+        if let Geometry::Polygon(p) = geom {
+            assert!(signed_area(p.exterior()) > 0.0);
+        } else {
+            panic!("expected Polygon");
+        }
+    }
+
+    #[test]
+    fn build_ring_bowtie_repair_produces_counterclockwise_pieces() {
+        let coords = vec![c(0.0, 0.0), c(0.0, 20.0), c(20.0, 0.0), c(20.0, 20.0)];
+        let geom = build_ring(coords).expect("should build");
+        if let Geometry::MultiPolygon(mp) = geom {
+            for poly in &mp.0 {
+                assert!(signed_area(poly.exterior()) > 0.0);
+            }
+        } else {
+            panic!("expected MultiPolygon");
+        }
     }
 }
