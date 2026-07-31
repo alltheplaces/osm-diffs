@@ -10,11 +10,12 @@ use crate::{
 };
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
-use geo::{Centroid, Geometry};
+use geo::{Centroid, Geometry, InterpolateLine, algorithm::line_measures::Haversine};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use prost::Message;
 use rayon::prelude::*;
+use s2::{cellid::CellID, cellunion::CellUnion};
 use std::{fs::File, path::Path, sync::mpsc::sync_channel, thread};
 use wkb::writer::{write_geometry, write_point};
 
@@ -470,32 +471,76 @@ fn index_relations(
     RecordReader::open(&out_path)
 }
 
+// TODO: Replace this by proper s2 cell coverage once polygons and polylines
+// are supported in the Rust port of the S2 geometry library. However, note
+// that AllThePlaces only cares about small features, so our current approach
+// to approximate LineStrings and Polygons as Points is actually not as bad
+// as it may seem; when looking for OpenStreetMap features near an AllThePlaces
+// feature, we construct an S2 cap (search circle) for several hundred meters
+// to a few kilometers depending on the tags in ATP.
 fn index_geometry(g: &Geometry, s2_cell_ids: &mut Vec<u64>) {
+    s2_cell_ids.clear();
     match g {
         Geometry::Point(p) => {
             s2_cell_ids.reserve(1);
-            s2_cell_ids.push(s2_cell_id_for_point(p))
+            s2_cell_ids.push(s2_cell_id_for_point(p).0)
         }
 
         Geometry::MultiPoint(multipoint) => {
             s2_cell_ids.reserve(multipoint.len());
             for p in multipoint.iter() {
-                s2_cell_ids.push(s2_cell_id_for_point(p));
+                s2_cell_ids.push(s2_cell_id_for_point(p).0);
             }
         }
 
-        // TODO: Replace this by proper s2 cell coverage once polygons and polylines
-        // are supported in the Rust port of the S2 geometry library.
+        Geometry::LineString(line) => {
+            s2_cell_ids.reserve(1);
+            if let Some(p) = Haversine.point_at_ratio_from_start(line, 0.5) {
+                s2_cell_ids.push(s2_cell_id_for_point(&p).0);
+            }
+        }
+
+        Geometry::MultiLineString(mls) => {
+            let mut cell_ids = Vec::<CellID>::with_capacity(mls.0.len());
+            for line in mls.iter() {
+                if let Some(p) = Haversine.point_at_ratio_from_start(line, 0.5) {
+                    cell_ids.push(s2_cell_id_for_point(&p));
+                }
+            }
+            let mut cu = CellUnion(cell_ids);
+            cu.normalize();
+            s2_cell_ids.reserve(cu.0.len());
+            for cell_id in cu.0 {
+                s2_cell_ids.push(cell_id.0);
+            }
+        }
+
+        Geometry::MultiPolygon(mp) => {
+            let mut cell_ids = Vec::<CellID>::with_capacity(mp.0.len());
+            for poly in mp.iter() {
+                if let Some(p) = poly.centroid() {
+                    cell_ids.push(s2_cell_id_for_point(&p));
+                }
+            }
+            let mut cu = CellUnion(cell_ids);
+            cu.normalize();
+            s2_cell_ids.reserve(cu.0.len());
+            for cell_id in cu.0 {
+                s2_cell_ids.push(cell_id.0);
+            }
+        }
+
         _ => {
             if let Some(centroid) = g.centroid() {
                 s2_cell_ids.reserve(1);
-                s2_cell_ids.push(s2_cell_id_for_point(&centroid));
+                s2_cell_ids.push(s2_cell_id_for_point(&centroid).0);
             };
         }
     };
 }
 
-fn s2_cell_id_for_point(p: &geo::Point) -> u64 {
+/// Helper for [index_geometry].
+fn s2_cell_id_for_point(p: &geo::Point) -> CellID {
     let s2_lat_lng = s2::latlng::LatLng::from_degrees(p.y(), p.x());
-    s2::cellid::CellID::from(s2_lat_lng).0
+    s2::cellid::CellID::from(s2_lat_lng)
 }
