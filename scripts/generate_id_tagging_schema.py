@@ -151,12 +151,12 @@ def generate_rust_match_clause(
         elif len(exceptions) == 1:
             # Avoid clippy warnings.
             clauses.append(
-                '"%s" => { has_area_tag = true; if value ==  "%s" { has_line_tag = true } }'
+                '"%s" => { if value != "%s" { has_area_tag = true } }'
                 % (key, list(exceptions)[0])
             )
         else:
             clauses.append(
-                '"%s" => { has_area_tag = true; match value { %s => has_line_tag = true, _ => {} } }'
+                '"%s" if !matches!(value, %s) => { has_area_tag = true }'
                 % (key, join_quoted_strings(exceptions))
             )
     clauses.insert(
@@ -189,7 +189,6 @@ def generate_rust(
             }
 
             let mut has_area_tag = false;
-            let mut has_line_tag = false;
             for (key, value) in tags {
                 if key == "area" {
                     match value {
@@ -205,7 +204,7 @@ def generate_rust(
                 %s
             }
 
-            has_area_tag && !has_line_tag
+            has_area_tag
         }
 
         fn remove_lifecycle_prefix(key: &str) -> &str {
