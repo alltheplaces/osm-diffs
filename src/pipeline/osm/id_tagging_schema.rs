@@ -8,7 +8,6 @@ pub fn is_area<'a>(closed: bool, tags: impl Iterator<Item = (&'a str, &'a str)>)
     }
 
     let mut has_area_tag = false;
-    let mut has_line_tag = false;
     for (key, value) in tags {
         if key == "area" {
             match value {
@@ -50,166 +49,177 @@ pub fn is_area<'a>(closed: bool, tags: impl Iterator<Item = (&'a str, &'a str)>)
             | "seamark:type"
             | "shop"
             | "telecom" => has_area_tag = true,
-            "advertising" => {
-                has_area_tag = true;
-                match value {
-                    "billboard" | "poster_box" | "sign" | "totem" => has_line_tag = true,
-                    _ => {}
-                }
+            "advertising" if !matches!(value, "billboard" | "poster_box" | "sign" | "totem") => {
+                has_area_tag = true
             }
-            "aerialway" => {
-                has_area_tag = true;
-                match value {
-                    "cable_car" | "chair_lift" | "drag_lift" | "gondola" | "goods" | "j-bar"
-                    | "magic_carpet" | "mixed_lift" | "platter" | "rope_tow" | "t-bar"
-                    | "zip_line" => has_line_tag = true,
-                    _ => {}
-                }
+            "aerialway"
+                if !matches!(
+                    value,
+                    "cable_car"
+                        | "chair_lift"
+                        | "drag_lift"
+                        | "gondola"
+                        | "goods"
+                        | "j-bar"
+                        | "magic_carpet"
+                        | "mixed_lift"
+                        | "platter"
+                        | "rope_tow"
+                        | "t-bar"
+                        | "zip_line"
+                ) =>
+            {
+                has_area_tag = true
             }
-            "aeroway" => {
-                has_area_tag = true;
-                match value {
-                    "jet_bridge" | "parking_position" | "runway" | "taxiway" => has_line_tag = true,
-                    _ => {}
-                }
+            "aeroway"
+                if !matches!(
+                    value,
+                    "jet_bridge" | "parking_position" | "runway" | "taxiway"
+                ) =>
+            {
+                has_area_tag = true
             }
-            "amenity" => {
-                has_area_tag = true;
-                match value {
-                    "bench" | "bicycle_parking" | "weighbridge" => has_line_tag = true,
-                    _ => {}
-                }
+            "amenity" if !matches!(value, "bench" | "bicycle_parking" | "weighbridge") => {
+                has_area_tag = true
             }
-            "attraction" => {
-                has_area_tag = true;
-                match value {
-                    "dark_ride" | "log_flume" | "river_rafting" | "summer_toboggan" | "train"
-                    | "water_slide" => has_line_tag = true,
-                    _ => {}
-                }
+            "attraction"
+                if !matches!(
+                    value,
+                    "dark_ride"
+                        | "log_flume"
+                        | "river_rafting"
+                        | "summer_toboggan"
+                        | "train"
+                        | "water_slide"
+                ) =>
+            {
+                has_area_tag = true
             }
             "boundary" => {
-                has_area_tag = true;
-                if value == "administrative" {
-                    has_line_tag = true
+                if value != "administrative" {
+                    has_area_tag = true
                 }
             }
-            "ceremonial_gate" => {
-                has_area_tag = true;
-                match value {
-                    "paifang" | "torii" => has_line_tag = true,
-                    _ => {}
-                }
-            }
-            "golf" => {
-                has_area_tag = true;
-                match value {
-                    "cartpath" | "hole" | "path" => has_line_tag = true,
-                    _ => {}
-                }
-            }
+            "ceremonial_gate" if !matches!(value, "paifang" | "torii") => has_area_tag = true,
+            "golf" if !matches!(value, "cartpath" | "hole" | "path") => has_area_tag = true,
             "historic" => {
-                has_area_tag = true;
-                if value == "ruins" {
-                    has_line_tag = true
+                if value != "ruins" {
+                    has_area_tag = true
                 }
             }
-            "indoor" => {
-                has_area_tag = true;
-                match value {
-                    "corridor" | "wall" => has_line_tag = true,
-                    _ => {}
-                }
-            }
-            "leisure" => {
-                has_area_tag = true;
-                match value {
-                    "slipway" | "track" => has_line_tag = true,
-                    _ => {}
-                }
-            }
-            "man_made" => {
-                has_area_tag = true;
-                match value {
-                    "breakwater" | "carpet_hanger" | "ceremonial_gate" | "crane" | "cutline"
-                    | "dyke" | "embankment" | "gantry" | "geoglyph" | "goods_conveyor"
-                    | "groyne" | "pier" | "pipeline" | "quay" | "video_wall" | "yes" => {
-                        has_line_tag = true
-                    }
-                    _ => {}
-                }
+            "indoor" if !matches!(value, "corridor" | "wall") => has_area_tag = true,
+            "leisure" if !matches!(value, "slipway" | "track") => has_area_tag = true,
+            "man_made"
+                if !matches!(
+                    value,
+                    "breakwater"
+                        | "carpet_hanger"
+                        | "ceremonial_gate"
+                        | "crane"
+                        | "cutline"
+                        | "dyke"
+                        | "embankment"
+                        | "gantry"
+                        | "geoglyph"
+                        | "goods_conveyor"
+                        | "groyne"
+                        | "pier"
+                        | "pipeline"
+                        | "quay"
+                        | "video_wall"
+                        | "yes"
+                ) =>
+            {
+                has_area_tag = true
             }
             "military" => {
-                has_area_tag = true;
-                if value == "trench" {
-                    has_line_tag = true
+                if value != "trench" {
+                    has_area_tag = true
                 }
             }
-            "natural" => {
-                has_area_tag = true;
-                match value {
-                    "arete" | "bay" | "cliff" | "coastline" | "ridge" | "strait" | "tree_row"
-                    | "valley" => has_line_tag = true,
-                    _ => {}
-                }
+            "natural"
+                if !matches!(
+                    value,
+                    "arete"
+                        | "bay"
+                        | "cliff"
+                        | "coastline"
+                        | "ridge"
+                        | "strait"
+                        | "tree_row"
+                        | "valley"
+                ) =>
+            {
+                has_area_tag = true
             }
-            "piste:type" => {
-                has_area_tag = true;
-                match value {
-                    "downhill" | "hike" | "ice_skate" | "nordic" | "ski_jump" | "skitour"
-                    | "sled" | "sleigh" => has_line_tag = true,
-                    _ => {}
-                }
+            "piste:type"
+                if !matches!(
+                    value,
+                    "downhill"
+                        | "hike"
+                        | "ice_skate"
+                        | "nordic"
+                        | "ski_jump"
+                        | "skitour"
+                        | "sled"
+                        | "sleigh"
+                ) =>
+            {
+                has_area_tag = true
             }
-            "playground" => {
-                has_area_tag = true;
-                match value {
-                    "activitypanel" | "balancebeam" | "basketswing" | "bridge" | "climbingwall"
-                    | "hopscotch" | "horizontal_bar" | "seesaw" | "slide" | "structure"
-                    | "swing" | "tunnel_tube" | "water" | "zipwire" => has_line_tag = true,
-                    _ => {}
-                }
+            "playground"
+                if !matches!(
+                    value,
+                    "activitypanel"
+                        | "balancebeam"
+                        | "basketswing"
+                        | "bridge"
+                        | "climbingwall"
+                        | "hopscotch"
+                        | "horizontal_bar"
+                        | "seesaw"
+                        | "slide"
+                        | "structure"
+                        | "swing"
+                        | "tunnel_tube"
+                        | "water"
+                        | "zipwire"
+                ) =>
+            {
+                has_area_tag = true
             }
-            "power" => {
-                has_area_tag = true;
-                match value {
-                    "cable" | "line" | "minor_line" | "portal" => has_line_tag = true,
-                    _ => {}
-                }
+            "power" if !matches!(value, "cable" | "line" | "minor_line" | "portal") => {
+                has_area_tag = true
             }
             "public_transport" => {
-                has_area_tag = true;
-                if value == "platform" {
-                    has_line_tag = true
+                if value != "platform" {
+                    has_area_tag = true
                 }
             }
-            "roller_coaster" => {
-                has_area_tag = true;
-                match value {
-                    "support" | "track" => has_line_tag = true,
-                    _ => {}
-                }
-            }
-            "tourism" => {
-                has_area_tag = true;
-                match value {
-                    "artwork" | "attraction" => has_line_tag = true,
-                    _ => {}
-                }
-            }
-            "waterway" => {
-                has_area_tag = true;
-                match value {
-                    "canal" | "dam" | "ditch" | "drain" | "fish_pass" | "lock_gate" | "river"
-                    | "stream" | "tidal_channel" | "weir" => has_line_tag = true,
-                    _ => {}
-                }
+            "roller_coaster" if !matches!(value, "support" | "track") => has_area_tag = true,
+            "tourism" if !matches!(value, "artwork" | "attraction") => has_area_tag = true,
+            "waterway"
+                if !matches!(
+                    value,
+                    "canal"
+                        | "dam"
+                        | "ditch"
+                        | "drain"
+                        | "fish_pass"
+                        | "lock_gate"
+                        | "river"
+                        | "stream"
+                        | "tidal_channel"
+                        | "weir"
+                ) =>
+            {
+                has_area_tag = true
             }
             _ => {}
         }
     }
 
-    has_area_tag && !has_line_tag
+    has_area_tag
 }
 
 fn remove_lifecycle_prefix(key: &str) -> &str {
