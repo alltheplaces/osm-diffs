@@ -20,6 +20,7 @@ use geo::{
     Coord, Geometry, Line, LineString, MakeValid, MultiLineString, MultiPoint, MultiPolygon, Point,
     Polygon,
     algorithm::{
+        bool_ops::BooleanOps,
         line_intersection::{LineIntersection, line_intersection},
         sweep::{Cross, Intersections},
         validation::Validation,
@@ -369,6 +370,132 @@ fn param_along(line: Line<f64>, pt: Coord<f64>) -> f64 {
     ((pt.x - line.start.x) * dx + (pt.y - line.start.y) * dy) / len_sq
 }
 
+/// Assembles an arbitrarily-ordered collection of closed rings — as would
+/// come from the members of an OSM multipolygon relation — into a valid
+/// `Polygon` or `MultiPolygon`.
+///
+/// Fill is determined purely by geometric nesting (an even-odd
+/// crossing-parity rule, via `geo`'s [`BooleanOps`]), which is direction-
+/// and order-agnostic and naturally handles arbitrary nesting depth —
+/// holes with islands with holes, disjoint outer shells, etc. — without
+/// needing to know which rings are meant to be shells versus holes.
+///
+/// # Antimeridian handling
+/// Rings passed in are assumed to already be internally antimeridian-safe
+/// (e.g. via `build_ring`), but rings added separately may have been
+/// unwrapped relative to *different* reference longitudes. Each new ring
+/// is re-aligned — by whichever multiple of 360° brings its centroid
+/// closest to the first ring's — before being stored, so all rings end up
+/// in one consistent coordinate frame before any geometric operation runs.
+pub struct PolygonAssembler {
+    rings: Vec<LineString<f64>>,
+}
+
+impl PolygonAssembler {
+    pub fn new() -> Self {
+        Self { rings: Vec::new() }
+    }
+
+    /// Add a ring: a closed `LineString`, or a `Polygon`/`MultiPolygon`
+    /// whose exterior and interior rings are flattened in individually.
+    pub fn add_ring(&mut self, ring: &Geometry<f64>) {
+        for mut ls in extract_rings(ring) {
+            self.align_to_reference(&mut ls);
+            self.rings.push(ls);
+        }
+    }
+
+    /// Resolve everything added so far into a valid geometry.
+    /// `None` if nothing was added, or the result has zero area.
+    pub fn finish(self) -> Option<Geometry<f64>> {
+        if self.rings.is_empty() {
+            return None;
+        }
+
+        let soup = RingSoup(self.rings);
+        // Union with an empty MultiPolygon: this doesn't add any area, it
+        // just forces the fill rule to resolve `soup`'s rings by
+        // themselves (see BooleanOps's even-odd crossing-parity docs).
+        let resolved: MultiPolygon<f64> = soup.union(&MultiPolygon::new(vec![]));
+
+        if resolved.0.is_empty() {
+            return None;
+        }
+
+        let oriented: Vec<Polygon<f64>> = resolved
+            .0
+            .into_iter()
+            .map(|p| p.orient(Direction::Default))
+            .collect();
+
+        match oriented.len() {
+            1 => Some(Geometry::from(oriented.into_iter().next().unwrap())),
+            _ => Some(Geometry::from(MultiPolygon::new(oriented))),
+        }
+    }
+
+    fn align_to_reference(&self, ls: &mut LineString<f64>) {
+        let Some(reference_x) = self.rings.first().map(centroid_x) else {
+            return; // first ring added defines the reference frame
+        };
+        let cx = centroid_x(ls);
+        let mut best_shift = 0.0_f64;
+        let mut best_dist = (cx - reference_x).abs();
+        for shift in [360.0, -360.0] {
+            let dist = (cx + shift - reference_x).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best_shift = shift;
+            }
+        }
+        if best_shift != 0.0 {
+            for c in ls.0.iter_mut() {
+                c.x += best_shift;
+            }
+        }
+    }
+}
+
+fn centroid_x(ls: &LineString<f64>) -> f64 {
+    let n = ls.0.len().max(1) as f64;
+    ls.0.iter().map(|c| c.x).sum::<f64>() / n
+}
+
+fn extract_rings(geom: &Geometry<f64>) -> Vec<LineString<f64>> {
+    match geom {
+        Geometry::LineString(ls) => vec![ls.clone()],
+        Geometry::Polygon(p) => {
+            let mut out = vec![p.exterior().clone()];
+            out.extend(p.interiors().iter().cloned());
+            out
+        }
+        Geometry::MultiPolygon(mp) => {
+            let mut out = Vec::new();
+            for p in &mp.0 {
+                out.push(p.exterior().clone());
+                out.extend(p.interiors().iter().cloned());
+            }
+            out
+        }
+        other => {
+            debug_assert!(
+                false,
+                "PolygonAssembler::add_ring called with unsupported geometry: {other:?}"
+            );
+            Vec::new()
+        }
+    }
+}
+
+struct RingSoup(Vec<LineString<f64>>);
+
+impl BooleanOps for RingSoup {
+    type Scalar = f64;
+    fn rings(&self) -> impl Iterator<Item = &LineString<f64>> {
+        self.0.iter()
+    }
+}
+
 // ---------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------
@@ -609,6 +736,118 @@ mod tests {
             }
         } else {
             panic!("expected MultiPolygon");
+        }
+    }
+
+    fn ring(pts: &[(f64, f64)]) -> Geometry<f64> {
+        let mut coords: Vec<_> = pts.iter().map(|&(x, y)| coord! {x: x, y: y}).collect();
+        if coords.first() != coords.last() {
+            coords.push(coords[0]);
+        }
+        Geometry::from(LineString::new(coords))
+    }
+
+    #[test]
+    fn empty_returns_none() {
+        assert!(PolygonAssembler::new().finish().is_none());
+    }
+
+    #[test]
+    fn single_outer_returns_polygon() {
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&ring(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]));
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
+            other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn outer_with_hole_returns_polygon_with_interior() {
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&ring(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]));
+        a.add_ring(&ring(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]));
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+            other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn two_disjoint_outers_return_multi_polygon() {
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&ring(&[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0)]));
+        a.add_ring(&ring(&[
+            (10.0, 10.0),
+            (12.0, 10.0),
+            (12.0, 12.0),
+            (10.0, 12.0),
+        ]));
+        match a.finish() {
+            Some(Geometry::MultiPolygon(mp)) => assert_eq!(mp.0.len(), 2),
+            other => panic!("expected MultiPolygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn island_in_hole_resolves_from_geometry_alone() {
+        // Outer O (0..10), hole I (2..8), island O2 (4..6) inside the hole --
+        // three levels of nesting, resolved purely from geometric parity.
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&ring(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]));
+        a.add_ring(&ring(&[(2.0, 2.0), (8.0, 2.0), (8.0, 8.0), (2.0, 8.0)]));
+        a.add_ring(&ring(&[(4.0, 4.0), (6.0, 4.0), (6.0, 6.0), (4.0, 6.0)]));
+        match a.finish() {
+            Some(Geometry::MultiPolygon(mp)) => {
+                assert_eq!(mp.0.len(), 2);
+                let has_hole = mp.0.iter().any(|p| p.interiors().len() == 1);
+                let has_no_hole = mp.0.iter().any(|p| p.interiors().is_empty());
+                assert!(has_hole && has_no_hole);
+            }
+            other => panic!("expected MultiPolygon (donut + island), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn polygon_input_flattens_exterior_and_holes() {
+        let outer = LineString::new(
+            [
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+                (0.0, 0.0),
+            ]
+            .map(|(x, y)| coord! {x: x, y: y})
+            .to_vec(),
+        );
+        let hole = LineString::new(
+            [(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0), (2.0, 2.0)]
+                .map(|(x, y)| coord! {x: x, y: y})
+                .to_vec(),
+        );
+        let poly = Geometry::from(Polygon::new(outer, vec![hole]));
+
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&poly);
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+            other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn antimeridian_hole_aligns_to_exterior_frame() {
+        let outer = ring(&[(170.0, 0.0), (190.0, 0.0), (190.0, 10.0), (170.0, 10.0)]);
+        let hole = ring(&[(-176.0, 4.0), (-174.0, 4.0), (-174.0, 6.0), (-176.0, 6.0)]);
+
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&outer);
+        a.add_ring(&hole);
+
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+            other => panic!("expected Polygon with a hole, got {other:?}"),
         }
     }
 }
