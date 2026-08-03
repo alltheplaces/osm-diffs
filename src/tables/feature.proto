@@ -15,6 +15,13 @@ message Feature {
     repeated uint32 tags = 5;
     bytes geometry_wkb = 6;
     repeated uint64 way_members = 16;
+    repeated RelationMember relation_members = 17;
+}
+
+message RelationMember {
+  uint32 role = 1;
+  // id = (osm_id * 10) + 1 for nodes; + 2 for ways; + 3 for relations.
+  uint64 id = 2;
 }
 
 // An OpenStreetMap feature to be indexed.

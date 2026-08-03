@@ -3,16 +3,18 @@ use crate::{
     make_progress_bar,
     matchers::MatchMask,
     pipeline::osm::{
-        geometry::{build_line, build_points, build_ring},
+        geometry::{GeometryBuilder, build_line, build_ring},
         id_tagging_schema::is_area,
     },
     tables::{
-        BlobTable, Feature, FeatureToIndex, RecordReader, RecordWriter, StringCounts, StringPool,
+        BlobTable, Feature, FeatureToIndex, RecordReader, RecordWriter, RelationMember,
+        StringCounts, StringPool,
     },
 };
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use geo::{Centroid, Geometry, InterpolateLine, algorithm::line_measures::Haversine};
+use geo_traits::to_geo::ToGeoGeometry;
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use prost::Message;
@@ -27,7 +29,10 @@ use std::{
     },
     thread,
 };
-use wkb::writer::{write_geometry, write_point};
+use wkb::{
+    reader::read_wkb,
+    writer::{write_geometry, write_point},
+};
 
 #[allow(unused)]
 pub struct Index<'a> {
@@ -43,8 +48,9 @@ impl<'a> Index<'a> {
     ) -> Result<Index<'a>> {
         let strings = index_strings(&prunings.strings, progress, workdir)?;
         let _nodes = index_nodes(osm, prunings, &strings, progress, workdir)?;
-        let _ways = index_ways(osm, prunings, &strings, progress, workdir)?;
-        let _relations = index_relations(osm, prunings, &strings, progress, workdir)?;
+        let ways = index_ways(osm, prunings, &strings, progress, workdir)?;
+        let _leaf_relations =
+            index_leaf_relations(osm, prunings, &strings, &ways, progress, workdir)?;
         Ok(Index { strings })
     }
 }
@@ -392,70 +398,85 @@ fn index_ways<'a>(
     Ok(result)
 }
 
-fn index_relations(
+/// The result of [index_leaf_relations].
+#[allow(unused)]
+struct IndexedLeafRelations<'a> {
+    /// Records of FeatureToIndex protos for leaf relations, ready to index.
+    leaf_relations: RecordReader,
+
+    /// WKB geometry of leaf relations that are members in super relations.
+    leaf_relations_geometry: BlobTable<'a>,
+
+    /// A BlobTable of Feature protos for super relations, at this stage without geometry.
+    super_relations: BlobTable<'a>,
+}
+
+fn index_leaf_relations<'a>(
     osm: &mut BlobReader<File>,
     prunings: &Prunings,
     strings: &StringPool,
+    ways: &IndexWaysResult,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<RecordReader> {
-    let out_path = workdir.join("osm-index.relations");
-    if out_path.exists() {
-        return RecordReader::open(&out_path);
+) -> Result<IndexedLeafRelations<'a>> {
+    let leaf_relations_path = workdir.join("osm-index.leaf-relations");
+    let leaf_relations_geometry_path = workdir.join("osm-index.leaf-relations-geometry");
+    let super_relations_path = workdir.join("osm-index.super-relations");
+    if leaf_relations_path.exists()
+        && leaf_relations_geometry_path.exists()
+        && super_relations_path.exists()
+    {
+        return Ok(IndexedLeafRelations {
+            leaf_relations: RecordReader::open(&leaf_relations_path)?,
+            leaf_relations_geometry: BlobTable::open(&leaf_relations_geometry_path)?,
+            super_relations: BlobTable::open(&super_relations_path)?,
+        });
     }
 
+    let leaf_relations_count = AtomicU64::new(0);
     let progress_bar = make_progress_bar(
         progress,
         "osm.index.relations",
         osm.count_relation_blobs() as u64,
-        "blobs → features",
+        "blobs → leaf-rels, leaf-rel geometries, super-rels",
     );
+
+    let mut leaf_geometry: Option<BlobTable> = None;
+    let mut super_relations: Option<BlobTable> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(1024);
+        let (geometry_tx, geometry_rx) = sync_channel::<(u64, Vec<u8>)>(512);
+        let (super_rel_tx, super_rel_rx) = sync_channel::<(u64, Vec<u8>)>(512);
         let producer = s.spawn(|| osm.send_relation_blobs(blob_tx));
 
-        let keep_relations = &prunings.keep_relations;
         let consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Relation(relation) = primitive
-                        && keep_relations.contains(relation.id)
                         && let Some(ref info) = relation.info
                         && let Some(version) = info.version
                         && let Some(changeset) = info.changeset
                     {
+                        let feature_id = 10 * relation.id + 3;
+                        let is_interesting = prunings.keep_relations.contains(relation.id);
+                        let is_relation_member = prunings.relation_members.contains(feature_id);
+                        if !is_interesting && !is_relation_member {
+                            continue;
+                        }
+
                         let mut fti = FeatureToIndex::default();
                         let feature = fti.feature.get_or_insert_with(Feature::default);
-                        feature.id = 10 * relation.id + 3;
+                        feature.id = feature_id;
                         feature.version = version;
                         feature.changeset = changeset;
                         if let Some(timestamp) = info.timestamp {
                             feature.timestamp = timestamp;
                         }
-
-                        // Handle member nodes.
-                        let mut node_coords = Vec::<geo::Coord>::new();
-                        for (_role, id, member_type) in relation.members() {
-                            if member_type == RelationMemberType::Node
-                                && let Some(c) = prunings.coords.get(id)
-                            {
-                                node_coords.push(c);
-                            }
-                        }
-
-                        // TODO: Handle member ways and relations.
-                        let geometry = build_points(node_coords);
-                        let Some(geometry) = geometry else {
-                            continue;
-                        };
-
-                        write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
-                        index_geometry(&geometry, &mut fti.s2_cell_id);
 
                         // Handle tags.
                         let mut mask = MatchMask::default();
@@ -478,6 +499,76 @@ fn index_relations(
                             feature.tags.push(value_id as u32);
                         }
 
+                        // Handle relation members.
+                        feature.relation_members.reserve(relation.members().count());
+                        for (role, id, member_type) in relation.members() {
+                            let role_id = strings.lookup(role).unwrap_or_else(|| {
+                                panic!(
+                                    "OpenStreetMap relation/{} has a member \
+                                     whose role is not in StringPool: \"{}\"",
+                                    relation.id, role
+                                );
+                            });
+                            let member = RelationMember {
+                                role: role_id as u32,
+                                id: match member_type {
+                                    RelationMemberType::Node => id * 10 + 1,
+                                    RelationMemberType::Way => id * 10 + 2,
+                                    RelationMemberType::Relation => id * 10 + 3,
+                                },
+                            };
+                            feature.relation_members.push(member);
+                        }
+
+                        if is_super_relation(&relation) {
+                            super_rel_tx.send((relation.id, feature.encode_to_vec()))?;
+                            continue;
+                        }
+
+                        // Build geometry.
+                        let mut geom_builder = GeometryBuilder::new();
+                        for (_role, id, member_type) in relation.members() {
+                            match member_type {
+                                RelationMemberType::Node => {
+                                    if let Some(c) = prunings.coords.get(id) {
+                                        geom_builder.add(&Geometry::Point(geo::Point::from(c)));
+                                    }
+                                }
+                                RelationMemberType::Way => {
+                                    if let Some(way_wkb) = ways.ways_in_relations.lookup(id) {
+                                        let way_geometry = read_wkb(way_wkb).unwrap_or_else(|_| {
+                                            panic!(
+                                                "ways_in_relations contains invalid WKB for way/{}",
+                                                id
+                                            )
+                                        });
+                                        geom_builder.add(&way_geometry.to_geometry());
+                                    }
+                                }
+                                RelationMemberType::Relation => panic!(
+                                    "found relation/{} as member of relation/{} in first pass \
+                                     of index_relations(), but super-relations should have been \
+                                     filtered out",
+                                    id, relation.id
+                                ),
+                            }
+                        }
+                        let Some(geometry) = geom_builder.finish() else {
+                            continue;
+                        };
+                        write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
+                        if is_relation_member {
+                            geometry_tx.send((relation.id, feature.geometry_wkb.clone()))?;
+                        }
+
+                        // If this relation is needed for a super-relation, but in itself is not
+                        // interesting for our conflation pipeline, we can skip the rest and continue
+                        // with the next OpenStreetMap feature.
+                        if !is_interesting {
+                            continue;
+                        }
+                        index_geometry(&geometry, &mut fti.s2_cell_id);
+
                         if !mask.is_empty() {
                             fti.match_mask = mask.0 as u32;
                             feature_tx.send(fti.encode_to_vec())?;
@@ -489,25 +580,65 @@ fn index_relations(
             })
         });
 
-        let writer = s.spawn(|| {
-            let mut tmp_path = out_path.clone();
+        let leaf_rel_writer = s.spawn(|| {
+            let mut tmp_path = leaf_relations_path.clone();
             tmp_path.add_extension("tmp");
             let mut out = RecordWriter::create(&tmp_path)?;
             for f in feature_rx {
+                leaf_relations_count.fetch_add(1, Ordering::SeqCst);
                 out.write(&f)?;
             }
             out.close()?;
-            std::fs::rename(&tmp_path, &out_path)?;
+            std::fs::rename(&tmp_path, &leaf_relations_path)?;
             Ok(())
         });
 
-        writer.join().expect("panic in writer")?;
+        let super_rel_writer = s.spawn(|| {
+            super_relations = Some(BlobTable::create(
+                super_rel_rx.into_iter(),
+                workdir,
+                &super_relations_path,
+            )?);
+            Ok(())
+        });
+
+        let leaf_geometry_writer = s.spawn(|| {
+            leaf_geometry = Some(BlobTable::create(
+                geometry_rx.into_iter(),
+                workdir,
+                &leaf_relations_geometry_path,
+            )?);
+            Ok(())
+        });
+
+        leaf_rel_writer.join().expect("panic in leaf_rel_writer")?;
+        super_rel_writer
+            .join()
+            .expect("panic in super_rel_writer")?;
+        leaf_geometry_writer
+            .join()
+            .expect("panic in leaf_geometry_writer")?;
         consumer.join().expect("panic in consumer")?;
         producer.join().expect("panic in producer")?;
         Ok(())
     })?;
-    progress_bar.finish();
-    RecordReader::open(&out_path)
+
+    let leaf_relations = RecordReader::open(&leaf_relations_path)?;
+    let leaf_relations_geometry = leaf_geometry.expect("leaf_relations_geometry");
+    let super_relations = super_relations.expect("super_relations");
+
+    progress_bar.finish_with_message(format!(
+        "{} leaf-rels, {} leaf-rel geometries, {} super-rels",
+        leaf_relations_count.load(Ordering::SeqCst),
+        leaf_relations_geometry.len(),
+        super_relations.len(),
+    ));
+
+    Ok(IndexedLeafRelations {
+        leaf_relations,
+        leaf_relations_geometry,
+        super_relations,
+    })
 }
 
 // TODO: Replace this by proper s2 cell coverage once polygons and polylines
@@ -582,4 +713,13 @@ fn index_geometry(g: &Geometry, s2_cell_ids: &mut Vec<u64>) {
 fn s2_cell_id_for_point(p: &geo::Point) -> CellID {
     let s2_lat_lng = s2::latlng::LatLng::from_degrees(p.y(), p.x());
     s2::cellid::CellID::from(s2_lat_lng)
+}
+
+fn is_super_relation(rel: &osm_pbf_iter::Relation<'_>) -> bool {
+    for (_role, _id, member_type) in rel.members() {
+        if member_type == RelationMemberType::Relation {
+            return true;
+        }
+    }
+    false
 }
