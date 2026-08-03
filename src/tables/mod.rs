@@ -22,7 +22,7 @@ mod features {
 #[allow(unused)]
 pub use blob_table::BlobTable;
 pub use coords_map::CoordsMap;
-pub use features::{Feature, FeatureToIndex};
+pub use features::{Feature, FeatureToIndex, RelationMember};
 pub use graph::{Edge, GraphTable};
 #[allow(unused)]
 pub use records::{RecordReader, RecordWriter};
