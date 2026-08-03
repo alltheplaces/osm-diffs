@@ -3,7 +3,7 @@ use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuild
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{BTreeMap, HashSet, VecDeque},
     fs::{File, remove_file, rename},
     io::{BufReader, BufWriter, Seek, SeekFrom, Write},
     ops::Range,
@@ -101,6 +101,65 @@ impl<'a> GraphTable<'a> {
         }
     }
 
+    /// Returns an iterator over every node in the graph, in breadth-first
+    /// order, such that a node is only yielded once all of its children
+    /// have already been yielded. A "child" of `parent` is any node `c`
+    /// for which an edge `Edge { child: c, parent }` was recorded.
+    ///
+    /// In other words, leaves (nodes without children) come first and
+    /// their ancestors follow, which makes this iterator useful for
+    /// bottom-up processing, such as building the geometry of an
+    /// OpenStreetMap relation from the already-built geometries of its
+    /// member relations.
+    ///
+    /// Each node is yielded exactly once. A cycle has no node without
+    /// children to start from, so it is broken by picking its
+    /// numerically smallest node first; nodes reachable only through a
+    /// cycle are therefore yielded in an order that does not necessarily
+    /// put every child before its parent.
+    #[allow(unused)]
+    pub fn nodes(&'a self) -> impl Iterator<Item = u64> + 'a {
+        // `remaining[n]` counts how many of `n`'s children have not been
+        // yielded yet; `n` becomes ready to yield once this reaches 0.
+        // Nodes without children (leaves) are never inserted here, since
+        // their count would always be 0 — they go straight into `queue`
+        // below instead. This keeps memory proportional to the number of
+        // nodes that have at least one child, not to the whole graph,
+        // which matters since `children`/`parents` are memory-mapped
+        // specifically to support graphs too large to fit in RAM.
+        //
+        // In our pipeline, we use this module for the containment graph
+        // of OpenStreetMap relations. With the current implementation,
+        // we only keep a counter for (recursive) super-relations in RAM.
+        // There’s only about 40K super-relations in OSM, so memory
+        // consumption is not an issue.
+        let mut remaining: BTreeMap<u64, u32> = BTreeMap::new();
+        for idx in 0..self.children.len() {
+            *remaining.entry(self.parent_at(idx)).or_insert(0) += 1;
+        }
+
+        // `children` is sorted, so distinct child ids appear as runs of
+        // equal values; picking out the first index of each run gives
+        // every leaf exactly once, in ascending order.
+        let mut queue = VecDeque::new();
+        let mut prev = None;
+        for idx in 0..self.children.len() {
+            let child = self.child_at(idx);
+            if prev != Some(child) {
+                if !remaining.contains_key(&child) {
+                    queue.push_back(child);
+                }
+                prev = Some(child);
+            }
+        }
+
+        NodesIter {
+            graph: self,
+            queue,
+            remaining,
+        }
+    }
+
     /// Reads element `idx` of `children`, correcting for the fact that the
     /// underlying bytes are always little-endian on disk/in the mmap.
     #[inline]
@@ -155,6 +214,45 @@ impl<'a> Iterator for AncestorIter<'a> {
         }
 
         Some(child)
+    }
+}
+
+struct NodesIter<'a> {
+    graph: &'a GraphTable<'a>,
+    queue: VecDeque<u64>,
+    /// Nodes with at least one child, not yet yielded, mapped to the
+    /// number of their children that have not been yielded yet.
+    remaining: BTreeMap<u64, u32>,
+}
+
+impl<'a> Iterator for NodesIter<'a> {
+    type Item = u64;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let node = match self.queue.pop_front() {
+            Some(node) => node,
+            None => {
+                // No node has zero children left, so the graph must
+                // contain a cycle. Break it by picking the smallest
+                // remaining node, treating it as if it were ready.
+                let node = *self.remaining.keys().next()?;
+                self.remaining.remove(&node);
+                node
+            }
+        };
+
+        for idx in self.graph.parent_range(node) {
+            let parent = self.graph.parent_at(idx);
+            if let Some(count) = self.remaining.get_mut(&parent) {
+                *count -= 1;
+                if *count == 0 {
+                    self.remaining.remove(&parent);
+                    self.queue.push_back(parent);
+                }
+            }
+        }
+
+        Some(node)
     }
 }
 
@@ -254,6 +352,37 @@ mod tests {
         assert_eq!(graph.ancestors(22).collect::<Vec<u64>>(), &[22, 23, 21]);
         assert_eq!(graph.ancestors(23).collect::<Vec<u64>>(), &[23, 21, 22]);
         assert_eq!(graph.ancestors(7777).collect::<Vec<u64>>(), &[7777]);
+        assert_eq!(
+            graph.nodes().collect::<Vec<u64>>(),
+            &[1, 2, 3, 4, 5, 6, 21, 22, 23]
+        );
+        Ok(())
+    }
+
+    /// `nodes()` must wait for both branches of a diamond-shaped DAG
+    /// (multiple nodes sharing the same parent) before yielding the
+    /// parent.
+    #[test]
+    fn test_nodes_diamond() -> Result<()> {
+        let edges: Vec<(u64, u64)> = vec![(1, 2), (1, 3), (2, 4), (3, 4)];
+        let edges_iter = edges
+            .into_iter()
+            .map(|(child, parent)| Edge { child, parent });
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let graph = GraphTable::create(edges_iter, &workdir.path(), &path)?;
+        assert_eq!(graph.nodes().collect::<Vec<u64>>(), &[1, 2, 3, 4]);
+        Ok(())
+    }
+
+    /// `nodes()` yields nothing for a graph without edges.
+    #[test]
+    fn test_nodes_empty() -> Result<()> {
+        let edges_iter = std::iter::empty::<Edge>();
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let graph = GraphTable::create(edges_iter, &workdir.path(), &path)?;
+        assert_eq!(graph.nodes().collect::<Vec<u64>>(), Vec::<u64>::new());
         Ok(())
     }
 }
