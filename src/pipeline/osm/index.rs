@@ -6,7 +6,9 @@ use crate::{
         geometry::{build_line, build_points, build_ring},
         id_tagging_schema::is_area,
     },
-    tables::{Feature, FeatureToIndex, RecordReader, RecordWriter, StringCounts, StringPool},
+    tables::{
+        BlobTable, Feature, FeatureToIndex, RecordReader, RecordWriter, StringCounts, StringPool,
+    },
 };
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
@@ -16,7 +18,15 @@ use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use prost::Message;
 use rayon::prelude::*;
 use s2::{cellid::CellID, cellunion::CellUnion};
-use std::{fs::File, path::Path, sync::mpsc::sync_channel, thread};
+use std::{
+    fs::File,
+    path::Path,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc::sync_channel,
+    },
+    thread,
+};
 use wkb::writer::{write_geometry, write_point};
 
 #[allow(unused)]
@@ -208,60 +218,62 @@ fn index_nodes(
     RecordReader::open(&out_path)
 }
 
-// TODO: On behalf of index_relations(), this function should
-// additionally emit a table with just the geometry of the (relatively
-// few, about 5.8 million) ways in prunings.relation_members. This
-// table should be indexed by way ID, so that index_relations() can
-// quickly retrieve the geometry of all member ways when it constructs
-// OGC Simple Features geometry for an OpenStreetMap relation. Note
-// that the same way can (at least in theory) simultaneously be a
-// member of some multipolygon relation, so its coordinates have to be
-// interpreted as a ring, and also be a member of a non-multipolygon
-// relation whose member ways need to be stitched to form (say) a long
-// line string. Perhaps it will be best to emit just the coordinates
-// in sequence from here, so that the consumer (ie., index_relations)
-// can figure out how to best construct geometry. We’ll need to think
-// about this a little more.
-fn index_ways(
+#[allow(unused)]
+struct IndexWaysResult<'a> {
+    ways: RecordReader,
+    ways_in_relations: BlobTable<'a>,
+}
+
+fn index_ways<'a>(
     osm: &mut BlobReader<File>,
     prunings: &Prunings,
     strings: &StringPool,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<RecordReader> {
+) -> Result<IndexWaysResult<'a>> {
     let out_path = workdir.join("osm-index.ways");
-    if out_path.exists() {
-        return RecordReader::open(&out_path);
+    let ways_in_relations_path = workdir.join("osm-index.ways-in-relations");
+    if out_path.exists() && ways_in_relations_path.exists() {
+        return Ok(IndexWaysResult {
+            ways: RecordReader::open(&out_path)?,
+            ways_in_relations: BlobTable::open(&ways_in_relations_path)?,
+        });
     }
 
     let progress_bar = make_progress_bar(
         progress,
         "osm.index.ways     ",
         osm.count_way_blobs() as u64,
-        "blobs → features",
+        "blobs → features, geometries",
     );
+    let feature_count = AtomicU64::new(0);
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(1024);
+        let (wkb_tx, wkb_rx) = sync_channel::<(u64, Vec<u8>)>(1024);
         let producer = s.spawn(|| osm.send_way_blobs(blob_tx));
-
-        let keep_ways = &prunings.keep_ways;
         let consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Way(way) = primitive
-                        && keep_ways.contains(way.id)
                         && let Some(ref info) = way.info
                         && let Some(version) = info.version
                         && let Some(changeset) = info.changeset
                     {
+                        let feature_id = 10 * way.id + 2;
+                        let is_interesting = prunings.keep_ways.contains(way.id);
+                        let is_relation_member = prunings.relation_members.contains(feature_id);
+                        if !is_interesting && !is_relation_member {
+                            continue;
+                        }
+
                         let mut fti = FeatureToIndex::default();
                         let feature = fti.feature.get_or_insert_with(Feature::default);
-                        feature.id = 10 * way.id + 2;
+                        feature.id = feature_id;
                         feature.version = version;
                         feature.changeset = changeset;
                         if let Some(timestamp) = info.timestamp {
@@ -297,7 +309,20 @@ fn index_ways(
                         let Some(geometry) = geometry else {
                             continue;
                         };
+
+                        // Build a WKB (Well-Known Binary) representatino for the way’s
+                        // geometry. If the way geometry is needed for a relation, send
+                        // it to wkb_writer to build a lookup table from way_id -> WKB.
                         write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
+                        if is_relation_member {
+                            wkb_tx.send((way.id, feature.geometry_wkb.clone()))?;
+                        }
+
+                        // If this is just a relation member, but not interesting for conflation,
+                        // we can skip the rest and continue with the next OpenStreetMap feature.
+                        if !is_interesting {
+                            continue;
+                        }
                         index_geometry(&geometry, &mut fti.s2_cell_id);
 
                         // Handle tags.
@@ -332,11 +357,12 @@ fn index_ways(
             })
         });
 
-        let writer = s.spawn(|| {
+        let feature_writer = s.spawn(|| {
             let mut tmp_path = out_path.clone();
             tmp_path.add_extension("tmp");
             let mut out = RecordWriter::create(&tmp_path)?;
             for f in feature_rx {
+                feature_count.fetch_add(1, Ordering::SeqCst);
                 out.write(&f)?;
             }
             out.close()?;
@@ -344,13 +370,26 @@ fn index_ways(
             Ok(())
         });
 
-        writer.join().expect("panic in writer")?;
+        let wkb_writer =
+            s.spawn(|| BlobTable::create(wkb_rx.into_iter(), workdir, &ways_in_relations_path));
+
+        feature_writer.join().expect("panic in feature_writer")?;
+        wkb_writer.join().expect("panic in wkb_writer")?;
         consumer.join().expect("panic in consumer")?;
         producer.join().expect("panic in producer")?;
         Ok(())
     })?;
-    progress_bar.finish();
-    RecordReader::open(&out_path)
+
+    let result = IndexWaysResult {
+        ways: RecordReader::open(&out_path)?,
+        ways_in_relations: BlobTable::open(&ways_in_relations_path)?,
+    };
+    progress_bar.finish_with_message(format!(
+        "{} features, {} geometries",
+        feature_count.load(Ordering::SeqCst),
+        result.ways_in_relations.len()
+    ));
+    Ok(result)
 }
 
 fn index_relations(

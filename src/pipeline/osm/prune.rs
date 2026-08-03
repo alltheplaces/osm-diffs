@@ -24,7 +24,7 @@ pub struct Prunings<'a> {
     pub keep_nodes: U64Set,
     pub keep_ways: U64Set,
     pub keep_relations: U64Set,
-    relation_members: U64Set,
+    pub relation_members: U64Set,
 }
 
 /// Output of [prune_relations], the first  step of pruning.
