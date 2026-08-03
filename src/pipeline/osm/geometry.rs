@@ -10,7 +10,9 @@
 //! * [`PolygonAssembler`] — assembles an arbitrarily-ordered bag of rings
 //!   (as from a multipolygon relation's members) into a `Polygon` or
 //!   `MultiPolygon`, letting geometric nesting (not declared role)
-//!   determine what's a shell and what's a hole
+//!   determine what's a shell and what's a hole, with a bounded coordinate
+//!   budget for very large inputs (e.g. a relation with thousands of
+//!   member ways)
 //! * [`LineStitcher`] — stitches arbitrarily-ordered, arbitrarily-oriented
 //!   `LineString`s into longer paths wherever their endpoints touch, with
 //!   a bounded coordinate budget for very large inputs (e.g. OSM's
@@ -432,6 +434,11 @@ fn param_along(line: Line<f64>, pt: Coord<f64>) -> f64 {
 // PolygonAssembler
 // =======================================================================
 
+/// Default cap on total coordinates (summed across every stored ring) a
+/// [`PolygonAssembler`] will produce; see
+/// [`PolygonAssembler::with_max_coordinates`] to override it.
+const DEFAULT_MAX_RING_COORDINATES: usize = 2000;
+
 /// Assembles an arbitrarily-ordered collection of closed rings — as would
 /// come from the members of an OSM multipolygon relation — into a valid
 /// `Polygon` or `MultiPolygon`.
@@ -450,34 +457,118 @@ fn param_along(line: Line<f64>, pt: Coord<f64>) -> f64 {
 /// 360° brings its centroid closest to the first ring's — before being
 /// stored, so all rings end up in one consistent coordinate frame before
 /// any geometric operation runs.
+///
+/// # Coordinate budget and simplification
+/// The total number of coordinates held across all stored rings is kept
+/// at or under `max_coordinates` (default
+/// [`DEFAULT_MAX_RING_COORDINATES`]) by simplifying stored rings (via
+/// `geo`'s topology-preserving `SimplifyVwPreserve`) whenever `add_ring()`
+/// would otherwise push the running total over budget — not deferred to
+/// `finish()`, for the same reason as [`LineStitcher`]'s budget: a
+/// multipolygon relation with thousands of member ways shouldn't need to
+/// hold the whole un-simplified ring set in memory at once. Each ring is
+/// simplified independently (as a throwaway single-ring `Polygon`, so the
+/// algorithm's own self-intersection guard and its 4-point floor apply),
+/// without checking against any other stored ring — a hole simplified
+/// this way could in principle drift slightly relative to its shell,
+/// analogous to the cross-line caveat already documented for
+/// `LineStitcher`.
+///
+/// `finish()` makes one further simplification pass, this time on the
+/// resolved `Polygon`/`MultiPolygon` pieces (exterior and interiors
+/// together, so it can't introduce a self-intersection between the two),
+/// since the union that resolves fill can introduce new vertices at
+/// ring-to-ring intersections that per-ring simplification during
+/// `add_ring()` couldn't anticipate.
 pub struct PolygonAssembler {
     rings: Vec<LineString<f64>>,
     reference_x: Option<f64>,
+    max_coordinates: usize,
+    total_coords: usize,
+    /// Simplification tolerance, grown monotonically (see
+    /// [`LineStitcher::epsilon`] for why).
+    epsilon: f64,
 }
 
 impl PolygonAssembler {
     pub fn new() -> Self {
+        Self::with_max_coordinates(DEFAULT_MAX_RING_COORDINATES)
+    }
+
+    pub fn with_max_coordinates(max_coordinates: usize) -> Self {
         Self {
             rings: Vec::new(),
             reference_x: None,
+            max_coordinates,
+            total_coords: 0,
+            epsilon: 1e-7,
         }
     }
 
     /// Add a ring: a closed `LineString`, or a `Polygon`/`MultiPolygon`
     /// whose exterior and interior rings are flattened in individually.
+    /// The running coordinate total is enforced here — see `compact`.
     pub fn add_ring(&mut self, ring: &Geometry<f64>) {
         for mut ls in extract_rings(ring) {
             match self.reference_x {
                 Some(rx) => align_to_reference_x(&mut ls, rx),
                 None => self.reference_x = Some(centroid_x(&ls)),
             }
+            self.total_coords += ls.0.len();
             self.rings.push(ls);
+        }
+
+        if self.total_coords > self.max_coordinates {
+            self.compact();
+        }
+    }
+
+    /// Re-simplify every stored ring in place, with progressively larger
+    /// tolerance, until the running coordinate total is back at or under
+    /// budget, or until no ring can be simplified any further without
+    /// shrinking below the 4 coordinates a ring needs (3 distinct vertices
+    /// plus the closing repeat).
+    ///
+    /// Mirrors [`LineStitcher::compact`]: runs during `add_ring()` rather
+    /// than only in `finish()`, so peak memory stays roughly proportional
+    /// to `max_coordinates`, not to the raw input size.
+    fn compact(&mut self) {
+        for _ in 0..40 {
+            if self.total_coords <= self.max_coordinates {
+                return;
+            }
+            let mut new_total = 0;
+            let mut can_still_shrink = false;
+            for ring in &mut self.rings {
+                if ring.0.len() <= 4 {
+                    new_total += ring.0.len();
+                    continue; // already at the floor: a triangle plus its closing repeat
+                }
+                can_still_shrink = true;
+                // A throwaway single-ring Polygon, so SimplifyVwPreserve's
+                // ring-aware 4-point floor applies (the plain LineString
+                // impl's floor is 2, which would let a ring collapse to a
+                // single degenerate point).
+                let poly = Polygon::new(ring.clone(), vec![]);
+                let simplified = poly.simplify_vw_preserve(self.epsilon);
+                let new_ring = simplified.exterior().clone();
+                new_total += new_ring.0.len();
+                *ring = new_ring;
+            }
+            self.total_coords = new_total;
+            if !can_still_shrink {
+                return; // every ring is down to its 4-point floor already
+            }
+            self.epsilon *= 2.0;
         }
     }
 
     /// Resolve everything added so far into a valid geometry.
-    /// `None` if nothing was added, or the result has zero area.
-    pub fn finish(self) -> Option<Geometry<f64>> {
+    /// `None` if nothing was added, or the result has zero area. The total
+    /// coordinate count is brought back under the configured budget if the
+    /// union that resolves fill left headroom that per-ring simplification
+    /// during `add_ring()` couldn't reach.
+    pub fn finish(mut self) -> Option<Geometry<f64>> {
         if self.rings.is_empty() {
             return None;
         }
@@ -492,8 +583,13 @@ impl PolygonAssembler {
             return None;
         }
 
-        let oriented: Vec<Polygon<f64>> = resolved
-            .0
+        let mut polygons = resolved.0;
+        let total: usize = polygons.iter().map(polygon_coord_count).sum();
+        if total > self.max_coordinates {
+            compact_polygons(&mut polygons, self.max_coordinates, &mut self.epsilon);
+        }
+
+        let oriented: Vec<Polygon<f64>> = polygons
             .into_iter()
             .map(|p| p.orient(Direction::Default))
             .collect();
@@ -502,6 +598,41 @@ impl PolygonAssembler {
             1 => Some(Geometry::from(oriented.into_iter().next().unwrap())),
             _ => Some(Geometry::from(MultiPolygon::new(oriented))),
         }
+    }
+}
+
+fn polygon_coord_count(p: &Polygon<f64>) -> usize {
+    p.exterior().0.len() + p.interiors().iter().map(|r| r.0.len()).sum::<usize>()
+}
+
+/// Re-simplify every polygon in place, with progressively larger
+/// tolerance, until the total coordinate count (summed across every
+/// exterior and interior ring) is back at or under budget, or until
+/// nothing can shrink further. Mirrors [`PolygonAssembler::compact`], but
+/// runs on whole `Polygon`s (exterior and interiors together) so it can't
+/// introduce a self-intersection between a polygon and its own holes.
+fn compact_polygons(polygons: &mut [Polygon<f64>], max_coordinates: usize, epsilon: &mut f64) {
+    let mut total: usize = polygons.iter().map(polygon_coord_count).sum();
+    for _ in 0..40 {
+        if total <= max_coordinates {
+            return;
+        }
+        let mut new_total = 0;
+        let mut can_still_shrink = false;
+        for p in polygons.iter_mut() {
+            let shrinkable =
+                p.exterior().0.len() > 4 || p.interiors().iter().any(|r| r.0.len() > 4);
+            if shrinkable {
+                can_still_shrink = true;
+                *p = p.simplify_vw_preserve(*epsilon);
+            }
+            new_total += polygon_coord_count(p);
+        }
+        total = new_total;
+        if !can_still_shrink {
+            return;
+        }
+        *epsilon *= 2.0;
     }
 }
 
@@ -1226,6 +1357,48 @@ mod polygon_assembler_tests {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
             other => panic!("expected Polygon with a hole, got {other:?}"),
         }
+    }
+
+    fn circle_pts(n: usize, cx: f64, cy: f64, radius: f64) -> Vec<(f64, f64)> {
+        (0..n)
+            .map(|i| {
+                let theta = i as f64 / n as f64 * std::f64::consts::TAU;
+                (cx + theta.cos() * radius, cy + theta.sin() * radius)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn stays_under_budget_for_a_single_oversized_ring() {
+        let mut a = PolygonAssembler::with_max_coordinates(100);
+        a.add_ring(&ring(&circle_pts(500, 0.0, 0.0, 100.0)));
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert!(p.exterior().0.len() <= 100),
+            other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn many_short_disjoint_rings_trigger_incremental_compaction() {
+        // 50 separate 50-point circles, far apart -- 2500 coordinates raw,
+        // well over a small budget, added one at a time so `add_ring()`'s
+        // incremental compaction has to kick in repeatedly rather than
+        // only at the end.
+        let mut a = PolygonAssembler::with_max_coordinates(300);
+        for i in 0..50 {
+            let base = (i * 1000) as f64;
+            a.add_ring(&ring(&circle_pts(50, base, 0.0, 10.0)));
+        }
+        let geom = a.finish().expect("should build");
+        let count = match &geom {
+            Geometry::MultiPolygon(mp) => mp.0.iter().map(polygon_coord_count).sum::<usize>(),
+            Geometry::Polygon(p) => polygon_coord_count(p),
+            other => panic!("unexpected geometry: {other:?}"),
+        };
+        // Each of the 50 rings is disjoint and floors out at 4 points, so
+        // we can't get below 200 total -- but we should be much closer to
+        // that floor than the original 2500.
+        assert!(count < 800, "expected substantial reduction, got {count}");
     }
 }
 
