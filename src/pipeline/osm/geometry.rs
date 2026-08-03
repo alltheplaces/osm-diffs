@@ -687,22 +687,20 @@ impl LineStitcher {
                 return;
             }
             let mut new_total = 0;
-            let mut any_changed = false;
+            let mut can_still_shrink = false;
             for chain in &mut self.lines {
                 if chain.len() <= 2 {
                     new_total += chain.len();
                     continue; // already at the floor: just the two endpoints
                 }
+                can_still_shrink = true;
                 let ls = LineString::new(chain.iter().copied().collect());
                 let simplified = ls.simplify_vw_preserve(self.epsilon);
-                if simplified.0.len() < chain.len() {
-                    any_changed = true;
-                }
                 new_total += simplified.0.len();
                 *chain = simplified.0.into_iter().collect();
             }
             self.total_coords = new_total;
-            if !any_changed {
+            if !can_still_shrink {
                 return; // every line is down to its two endpoints already
             }
             self.epsilon *= 2.0;
@@ -1400,7 +1398,6 @@ mod line_stitcher_tests {
     }
 
     #[test]
-    #[ignore = "does not pass"] // TODO: Fix implementation.
     fn stays_under_budget_for_a_single_oversized_line() {
         let pts: Vec<(f64, f64)> = (0..500)
             .map(|i| (i as f64, (i as f64 * 0.1).sin()))
@@ -1418,13 +1415,12 @@ mod line_stitcher_tests {
     }
 
     #[test]
-    #[ignore = "does not pass"] // TODO: Fix implementation.
     fn compaction_during_add_still_allows_correct_stitching() {
         // Two long, wiggly lines meeting exactly at (50, y) -- simplification
         // during add() must not disturb that shared endpoint.
         let mut a = LineStitcher::with_max_coordinates(60);
         let first: Vec<(f64, f64)> = (0..=50).map(|i| (i as f64, (i as f64).sin())).collect();
-        let second: Vec<(f64, f64)> = (50..=100).map(|i| (i as f64, (i as f64).cos())).collect();
+        let second: Vec<(f64, f64)> = (50..=100).map(|i| (i as f64, (i as f64).sin())).collect();
         a.add(&ls(&first));
         a.add(&ls(&second));
         match a.finish() {
@@ -1438,7 +1434,6 @@ mod line_stitcher_tests {
     }
 
     #[test]
-    #[ignore = "does not pass"] // TODO: Fix implementation.
     fn many_short_disjoint_lines_trigger_incremental_compaction() {
         // 50 separate 50-point wiggly lines -- 2500 coordinates raw, well
         // over a small budget, added one at a time so `add()`'s incremental
@@ -1464,7 +1459,6 @@ mod line_stitcher_tests {
     }
 
     #[test]
-    #[ignore = "does not pass"] // TODO: Fix implementation.
     fn budget_is_still_enforced_after_stitching_when_add_time_compaction_could_not_help() {
         // Each of these three lines is already at its 2-point floor during
         // add() (nothing to simplify), but once stitched together into one
