@@ -163,6 +163,27 @@ def add_supplier:
 }] |
 .components += [
   {
+    "type": "data",
+    "bom-ref": "id-tagging-schema",
+    "name": "id-tagging-schema",
+    "description": "OpenStreetMap tagging schema",
+    "version": $ID_TAGGING_SCHEMA_VERSION,
+    "purl": $ID_TAGGING_SCHEMA_PURL,
+    "licenses": [{"license": {"id": $ID_TAGGING_SCHEMA_LICENSE}}],
+    "externalReferences": [{
+        "type": "vcs",
+        "url": "https://github.com/openstreetmap/id-tagging-schema"
+    }],
+    "manufacturer": {
+      "name": "iD Tagging Schema project (OpenStreetMap)",
+      "url": [ "https://github.com/openstreetmap/id-tagging-schema" ]
+    },
+    "supplier": {
+      "name": "iD Tagging Schema project (OpenStreetMap)",
+      "url": [ "https://github.com/openstreetmap/id-tagging-schema" ]
+    }
+  },
+  {
     "type": "library",
     "bom-ref": "pkg/aws-lc",
     "name": "aws-lc",
@@ -228,20 +249,26 @@ ALPINE_VERSION="$(grep "^VERSION_ID=" /etc/os-release | cut -d '=' -f 2)"
 APK_VERSION="$(apk --version | sed -E 's/.* ([0-9]+\.[0-9]+(\.[0-9]+(-r[0-9]+)?)?).*/\1/')"
 AWS_LC_SYS_VERSION="$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')"
 CARGO_CYCLONEDX_VERSION="$(cargo cyclonedx --version | cut -d ' ' -f 2)"
+ID_TAGGING_SCHEMA_LICENSE="$(sed -n 's/.*released under the \(.*\) license.*/\1/p' src/pipeline/osm/id_tagging_schema.rs)"
+ID_TAGGING_SCHEMA_PURL="$(grep pkg: src/pipeline/osm/id_tagging_schema.rs | awk '{print $NF}')"
+ID_TAGGING_SCHEMA_VERSION="$(echo $ID_TAGGING_SCHEMA_PURL | sed 's/.*@//')"
 JQ_VERSION="$(jq --version | sed -n 's/jq-//p')"
 PROTOC_VERSION="$(protoc --version | awk '{print $2}')"   # "31.1" from "libprotoc 31.1"
 RUSTC_VERSION="$(rustc --version --verbose | awk '/^release:/{print $2}')"
 
 # ── post-process and write output ────────────────────────────────────────────
 jq \
-  --arg binary                   "${BINARY_NAME}" \
-  --arg ALPINE_VERSION           "${ALPINE_VERSION}" \
-  --arg ARCH                     "${ARCH}" \
-  --arg AWS_LC_SYS_VERSION       "${AWS_LC_SYS_VERSION}" \
-  --arg CARGO_CYCLONEDX_VERSION  "${CARGO_CYCLONEDX_VERSION}" \
-  --arg JQ_VERSION               "${JQ_VERSION}" \
-  --arg PROTOC_VERSION           "${PROTOC_VERSION}" \
-  --arg RUSTC_VERSION            "${RUSTC_VERSION}" \
+  --arg binary                    "${BINARY_NAME}" \
+  --arg ALPINE_VERSION            "${ALPINE_VERSION}" \
+  --arg ARCH                      "${ARCH}" \
+  --arg AWS_LC_SYS_VERSION        "${AWS_LC_SYS_VERSION}" \
+  --arg CARGO_CYCLONEDX_VERSION   "${CARGO_CYCLONEDX_VERSION}" \
+  --arg ID_TAGGING_SCHEMA_LICENSE "${ID_TAGGING_SCHEMA_LICENSE}" \
+  --arg ID_TAGGING_SCHEMA_PURL    "${ID_TAGGING_SCHEMA_PURL}" \
+  --arg ID_TAGGING_SCHEMA_VERSION "${ID_TAGGING_SCHEMA_LICENSE}" \
+  --arg JQ_VERSION                "${JQ_VERSION}" \
+  --arg PROTOC_VERSION            "${PROTOC_VERSION}" \
+  --arg RUSTC_VERSION             "${RUSTC_VERSION}" \
   "$JQ_PROGRAM" \
   "$RAW_FILE" > "$OUTPUT"
 
