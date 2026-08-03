@@ -2,9 +2,11 @@
 //!
 //! Unlike [crate::tables::CoordsMap], whose values have a fixed size,
 //! `BlobTable` values may be of any length, so it is suited for things
-//! like serialized protobuf messages or other opaque binary payloads.
+//! like serialized protobuf messages, WKB geeometry, or other opaque
+//! binary payloads.
 
 use anyhow::{Ok, Result};
+use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use memmap2::Mmap;
 use std::{
     fs::{File, remove_file, rename},
@@ -27,6 +29,34 @@ pub struct BlobTable<'a> {
 }
 
 impl<'a> BlobTable<'a> {
+    /// Builds a `BlobTable` from `blobs`, which may be in any order.
+    ///
+    /// Since [Writer::write] requires keys in ascending order, `blobs` is
+    /// first sorted by key using external sorting (spilling to `workdir`
+    /// as needed), and only then written to `out`.
+    pub fn create(
+        blobs: impl Iterator<Item = (u64, Vec<u8>)>,
+        workdir: &Path,
+        out: &Path,
+    ) -> Result<BlobTable<'a>> {
+        let mut writer = Writer::create(out)?;
+        let sorter: ExternalSorter<(u64, Vec<u8>), std::io::Error, LimitedBufferBuilder> =
+            ExternalSorterBuilder::new()
+                .with_tmp_dir(workdir)
+                .with_buffer(LimitedBufferBuilder::new(
+                    128 * 1024,
+                    /* preallocate */ true,
+                ))
+                .build()?;
+        let sorted = sorter.sort(blobs.map(std::io::Result::Ok))?;
+        for s in sorted {
+            let (key, blob) = s?;
+            writer.write(key, &blob)?;
+        }
+        writer.close()?;
+        Self::open(out)
+    }
+
     pub fn open(path: &Path) -> Result<BlobTable<'a>> {
         let file = File::open(path)?;
 
@@ -227,7 +257,30 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
+
+    #[test]
+    fn test_create_sorts_unsorted_input() -> Result<()> {
+        let workdir = TempDir::new()?;
+        let file = NamedTempFile::new()?;
+        let blobs = vec![
+            (44, b"melbourne".to_vec()),
+            (17, b"bern".to_vec()),
+            (42, b"ottawa".to_vec()),
+            (41, b"".to_vec()),
+        ];
+
+        let table = BlobTable::create(blobs.into_iter(), workdir.path(), file.path())?;
+        assert_eq!(table.len(), 4);
+        assert_eq!(table.lookup(0), None);
+        assert_eq!(table.lookup(17), Some(b"bern".as_slice()));
+        assert_eq!(table.lookup(41), Some(b"".as_slice()));
+        assert_eq!(table.lookup(42), Some(b"ottawa".as_slice()));
+        assert_eq!(table.lookup(43), None);
+        assert_eq!(table.lookup(44), Some(b"melbourne".as_slice()));
+
+        Ok(())
+    }
 
     #[test]
     fn test_blob_table() -> Result<()> {
