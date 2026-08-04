@@ -84,9 +84,8 @@ fn encode_wkb(geometry: &Geometry) -> Vec<u8> {
 }
 
 fn decode_wkb(key: u64, wkb: &[u8]) -> Geometry {
-    read_wkb(wkb)
-        .unwrap_or_else(|_| panic!("invalid WKB for key {}", key))
-        .to_geometry()
+    let err = format!("invalid WKB for key {}", key);
+    read_wkb(wkb).expect(&err).to_geometry()
 }
 
 #[cfg(test)]
