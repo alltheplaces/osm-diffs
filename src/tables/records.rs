@@ -1,31 +1,83 @@
+//! A spool file for a sequential stream of opaque, length-prefixed records.
+//!
+//! Unlike the other tables in [crate::tables], which are mmap'd for random
+//! access, a record spool is meant to be written once, then read back
+//! sequentially in full, so it uses buffered, streaming I/O throughout.
+//!
+//! # File format
+//!
+//! ```text
+//! byte 0..8:   magic "record_0"
+//! byte 8..16:  record count, u64 little-endian
+//! byte 16..:   lz4 frame, decompressing to a stream of records, each
+//!              encoded as a varint length followed by that many bytes
+//! ```
+//!
+//! The header is written uncompressed, ahead of the lz4 frame, so that
+//! [RecordReader::len] is available without decompressing the file.
+
 use std::fs::File;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use lz4_flex::frame::{FrameDecoder, FrameEncoder};
 
-/// A spool file: an lz4-compressed stream of length-prefixed records.
+/// Magic bytes identifying a record spool file, written as the first
+/// eight bytes of the file header.
+const FILE_SIGNATURE: &[u8; 8] = b"record_0";
+
+/// Size of the file header: an 8-byte magic followed by an 8-byte,
+/// little-endian record count. The header is written uncompressed, ahead
+/// of the lz4 frame, so that [RecordReader::len] is available without
+/// decompressing the file.
+const HEADER_SIZE: usize = 16;
+
+/// A spool file: a file header, followed by an lz4-compressed stream of
+/// length-prefixed records.
 pub struct RecordReader {
     path: PathBuf,
+    count: u64,
 }
 
 impl RecordReader {
-    /// Open a spool file for reading. This validates the file is accessible;
-    /// the actual decompression happens lazily, once per call to `iter()`.
+    /// Open a spool file for reading. This reads and validates the file
+    /// header; the actual decompression happens lazily, once per call to
+    /// `iter()`.
     pub fn open(path: &Path) -> Result<RecordReader> {
-        File::open(path)
+        let mut file = File::open(path)
             .with_context(|| format!("failed to open spool file {}", path.display()))?;
+
+        let mut header = [0u8; HEADER_SIZE];
+        file.read_exact(&mut header)
+            .with_context(|| format!("failed to read header of spool file {}", path.display()))?;
+        if header[0..8] != *FILE_SIGNATURE {
+            anyhow::bail!("not a record spool file: {}", path.display());
+        }
+        let count = u64::from_le_bytes(header[8..16].try_into().unwrap());
 
         Ok(RecordReader {
             path: path.to_path_buf(),
+            count,
         })
+    }
+
+    /// The number of records in this spool file.
+    pub fn len(&self) -> usize {
+        self.count as usize
+    }
+
+    /// Whether this spool file has no records.
+    pub fn is_empty(&self) -> bool {
+        self.count == 0
     }
 
     /// Iterate over the records in this spool file.
     pub fn iter(&self) -> Result<impl Iterator<Item = Result<Vec<u8>>>> {
-        let file = File::open(&self.path)
+        let mut file = File::open(&self.path)
             .with_context(|| format!("failed to open spool file {}", self.path.display()))?;
+        file.seek(SeekFrom::Start(HEADER_SIZE as u64))
+            .with_context(|| format!("failed to seek spool file {}", self.path.display()))?;
         let decoder = FrameDecoder::new(file);
         Ok(RecordIter {
             reader: BufReader::new(decoder),
@@ -99,19 +151,29 @@ impl Iterator for RecordIter {
     }
 }
 
-/// Writer for a spool file: writes an lz4-compressed stream of
-/// length-prefixed records.
+/// Writer for a spool file: writes a file header, followed by an
+/// lz4-compressed stream of length-prefixed records.
 pub struct RecordWriter {
     encoder: FrameEncoder<File>,
+    count: u64,
 }
 
 impl RecordWriter {
     /// Create a new spool file for writing, truncating it if it already exists.
     pub fn create(path: &Path) -> Result<RecordWriter> {
-        let file = File::create(path)
+        let mut file = File::create(path)
             .with_context(|| format!("failed to create spool file {}", path.display()))?;
+
+        // Reserve space for the header; `close()` seeks back to fill in the
+        // real record count once it is known.
+        file.write_all(FILE_SIGNATURE)
+            .context("failed to write spool file magic")?;
+        file.write_all(&0u64.to_le_bytes())
+            .context("failed to write placeholder record count")?;
+
         Ok(RecordWriter {
             encoder: FrameEncoder::new(file),
+            count: 0,
         })
     }
 
@@ -127,18 +189,27 @@ impl RecordWriter {
             .write_all(record)
             .context("failed to write record body")?;
 
+        self.count += 1;
         Ok(())
     }
 
-    /// Flush all buffered data and finish the lz4 frame, ensuring the file
-    /// is complete and readable. Consumes the writer, since no more writes
-    /// are possible after this.
+    /// Flush all buffered data, finish the lz4 frame, and patch the file
+    /// header with the final record count, ensuring the file is complete
+    /// and readable. Consumes the writer, since no more writes are
+    /// possible after this.
     pub fn close(self) -> Result<()> {
         let mut file = self
             .encoder
             .finish()
             .context("failed to finish lz4 frame")?;
         file.flush().context("failed to flush underlying file")?;
+
+        file.seek(SeekFrom::Start(8))
+            .context("failed to seek back to header")?;
+        file.write_all(&self.count.to_le_bytes())
+            .context("failed to write final record count")?;
+        file.flush().context("failed to flush underlying file")?;
+
         Ok(())
     }
 }
@@ -158,12 +229,51 @@ mod tests {
         writer.close()?;
 
         let spool = RecordReader::open(path)?;
+        assert_eq!(spool.len(), 2);
+        assert!(!spool.is_empty());
+
         let records: Result<Vec<Vec<u8>>> = spool.iter()?.collect();
         let records = records?;
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0], b"hello");
         assert_eq!(records[1], b"world, a slightly longer second record");
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_spool_file() -> Result<()> {
+        let tmp = tempfile::NamedTempFile::new()?;
+        let path = tmp.path();
+
+        let writer = RecordWriter::create(path)?;
+        writer.close()?;
+
+        let spool = RecordReader::open(path)?;
+        assert_eq!(spool.len(), 0);
+        assert!(spool.is_empty());
+        assert_eq!(spool.iter()?.count(), 0);
+
+        Ok(())
+    }
+
+    #[test]
+    fn open_rejects_files_with_wrong_magic() -> Result<()> {
+        let mut tmp = tempfile::NamedTempFile::new()?;
+        tmp.write_all(b"not_a_record_spool_file")?;
+
+        assert!(RecordReader::open(tmp.path()).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn open_rejects_truncated_header() -> Result<()> {
+        let mut tmp = tempfile::NamedTempFile::new()?;
+        tmp.write_all(FILE_SIGNATURE)?; // magic, but no count follows
+
+        assert!(RecordReader::open(tmp.path()).is_err());
 
         Ok(())
     }
