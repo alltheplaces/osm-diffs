@@ -143,7 +143,10 @@ mod tests {
         GeometryTable::create(geometries.into_iter(), workdir.path(), file.path())?;
 
         let table = GeometryTable::open(file.path())?;
-        assert_eq!(table.modified()?, std::fs::metadata(file.path())?.modified()?);
+        assert_eq!(
+            table.modified()?,
+            std::fs::metadata(file.path())?.modified()?
+        );
         assert_eq!(table.len(), 1);
         assert_eq!(table.lookup(1), Some(Geometry::Polygon(polygon)));
 
