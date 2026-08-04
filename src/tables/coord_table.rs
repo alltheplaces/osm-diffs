@@ -301,7 +301,7 @@ mod tests {
             y: -37.814,
         };
         let file = NamedTempFile::new()?;
-        let mut writer = Writer::create(&file.path())?;
+        let mut writer = Writer::create(file.path())?;
         writer.write(17, Writer::pack_coord(BERN))?;
         writer.write(41, Writer::pack_coord(OTTAWA))?;
         writer.write(42, Writer::pack_coord(BERN))?;
@@ -310,7 +310,7 @@ mod tests {
         writer.close()?;
         let file_metadata = std::fs::metadata(file.path())?;
 
-        let table = CoordTable::open(&file.path())?;
+        let table = CoordTable::open(file.path())?;
         assert_eq!(table.modified()?, file_metadata.modified()?);
         assert_eq!(table.len(), 5);
 
