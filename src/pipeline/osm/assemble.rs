@@ -77,7 +77,7 @@ fn assemble_strings<'a>(
 
     let read_progress = make_progress_bar(
         progress,
-        "osm.assemble.strings  ",
+        "osm.assemble.strings        ",
         strings.len() as u64,
         "strings",
     );
@@ -140,7 +140,7 @@ fn assemble_nodes(
 
     let progress_bar = make_progress_bar(
         progress,
-        "osm.assemble.nodes",
+        "osm.assemble.nodes          ",
         osm.count_node_blobs() as u64,
         "blobs → features",
     );
@@ -221,7 +221,7 @@ fn assemble_ways<'a>(
 
     let progress_bar = make_progress_bar(
         progress,
-        "osm.assemble.ways",
+        "osm.assemble.ways           ",
         osm.count_way_blobs() as u64,
         "blobs → features, geometries",
     );
@@ -377,7 +377,7 @@ fn assemble_leaf_relations<'a>(
     let leaf_relations_count = AtomicU64::new(0);
     let progress_bar = make_progress_bar(
         progress,
-        "osm.assemble.leaf-rels",
+        "osm.assemble.leaf-relations ",
         osm.count_relation_blobs() as u64,
         "blobs → features, geometries, super-rels",
     );
@@ -530,7 +530,7 @@ fn assemble_super_relations(
         progress,
         "osm.assemble.super-relations",
         super_rels.len() as u64,
-        "features (without geometry) → features (with geometry)",
+        "relations → relations",
     );
     let geometry_store_path = workdir.join("osm-assemble.super-relations.geometry");
     let _geometry_store = GeometryStore::create(&geometry_store_path)?;
@@ -547,8 +547,7 @@ fn assemble_super_relations(
                 };
 
                 // TODO: Assemble relation geometry.
-                // TODO: Check whehter rel_id is * 10 or not.
-                if prunings.keep_relations.contains(rel_id) {
+                if prunings.keep_relations.contains(rel_id / 10) {
                     // assemble_geometry(&geometry, &mut fti.s2_cell_id);
                     feature_tx.send(fti.encode_to_vec())?;
                 }
@@ -574,9 +573,9 @@ fn assemble_super_relations(
         Ok(())
     })?;
 
-    progress_bar.finish();
-
-    RecordReader::open(&super_relations_path)
+    let result = RecordReader::open(&super_relations_path)?;
+    progress_bar.finish_with_message(format!("relations → {} relations", result.len()));
+    Ok(result)
 }
 
 fn assemble_feature(id: u64, info: &Option<osm_pbf_iter::info::Info<'_>>) -> FeatureToIndex {
