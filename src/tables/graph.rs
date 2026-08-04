@@ -106,8 +106,9 @@ impl<'a> GraphTable<'a> {
             anyhow::bail!("not a GraphTable: {}", path.display());
         }
 
-        let edge_count =
-            usize::try_from(u64::from_le_bytes(mmap[8..16].try_into().expect("edge_count")))?;
+        let edge_count = usize::try_from(u64::from_le_bytes(
+            mmap[8..16].try_into().expect("edge_count"),
+        ))?;
         let expected_size = HEADER_SIZE + edge_count * 16;
         if mmap.len() != expected_size {
             anyhow::bail!(
@@ -465,8 +466,14 @@ mod tests {
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
         let mut writer = Writer::create(&path)?;
-        writer.write(Edge { child: 1, parent: 2 })?;
-        writer.write(Edge { child: 2, parent: 3 })?;
+        writer.write(Edge {
+            child: 1,
+            parent: 2,
+        })?;
+        writer.write(Edge {
+            child: 2,
+            parent: 3,
+        })?;
         writer.close()?;
 
         let graph = GraphTable::open(&path)?;
@@ -497,7 +504,10 @@ mod tests {
         let workdir = TempDir::new()?;
         let path = workdir.path().join("wrong-size");
         let mut writer = Writer::create(&path)?;
-        writer.write(Edge { child: 1, parent: 2 })?;
+        writer.write(Edge {
+            child: 1,
+            parent: 2,
+        })?;
         writer.close()?;
 
         // Truncate the file so the edge count in the header no longer
