@@ -7,8 +7,8 @@ use crate::{
         id_tagging_schema::is_area,
     },
     tables::{
-        BlobTable, CoordTable, Feature, FeatureToIndex, GeometryTable, RecordReader, RecordWriter,
-        RelationMember, StringCounts, StringPool,
+        BlobTable, CoordTable, Feature, FeatureToIndex, GeometryStore, GeometryTable, RecordReader,
+        RecordWriter, RelationMember, StringCounts, StringPool,
     },
 };
 use anyhow::{Ok, Result};
@@ -36,6 +36,7 @@ pub struct Assembly<'a> {
     pub nodes: RecordReader,
     pub ways: RecordReader,
     pub leaf_relations: RecordReader,
+    pub super_relations: RecordReader,
 }
 
 pub fn assemble<'a>(
@@ -49,11 +50,14 @@ pub fn assemble<'a>(
     let ways = assemble_ways(osm, prunings, &strings, progress, workdir)?;
     let leaf_relations =
         assemble_leaf_relations(osm, prunings, &strings, &ways, progress, workdir)?;
+    let super_relations =
+        assemble_super_relations(prunings, &ways, &leaf_relations, progress, workdir)?;
     Ok(Assembly {
         strings,
         nodes,
         ways: ways.ways,
         leaf_relations: leaf_relations.leaf_relations,
+        super_relations,
     })
 }
 
@@ -73,7 +77,7 @@ fn assemble_strings<'a>(
 
     let read_progress = make_progress_bar(
         progress,
-        "osm.assemble.strings  ",
+        "osm.assemble.strings        ",
         strings.len() as u64,
         "strings",
     );
@@ -136,7 +140,7 @@ fn assemble_nodes(
 
     let progress_bar = make_progress_bar(
         progress,
-        "osm.assemble.nodes",
+        "osm.assemble.nodes          ",
         osm.count_node_blobs() as u64,
         "blobs → features",
     );
@@ -207,7 +211,7 @@ fn assemble_ways<'a>(
     workdir: &Path,
 ) -> Result<AssembledWays<'a>> {
     let out_path = workdir.join("osm-assemble.ways");
-    let ways_in_relations_path = workdir.join("osm-assemble.ways-in-relations");
+    let ways_in_relations_path = workdir.join("osm-assemble.ways.geometry");
     if out_path.exists() && ways_in_relations_path.exists() {
         return Ok(AssembledWays {
             ways: RecordReader::open(&out_path)?,
@@ -217,7 +221,7 @@ fn assemble_ways<'a>(
 
     let progress_bar = make_progress_bar(
         progress,
-        "osm.assemble.ways",
+        "osm.assemble.ways           ",
         osm.count_way_blobs() as u64,
         "blobs → features, geometries",
     );
@@ -334,15 +338,16 @@ fn assemble_ways<'a>(
 
 /// The result of [assemble_leaf_relations].
 struct AssembledLeafRelations<'a> {
-    /// Records of FeatureToIndex protos for leaf relations, ready to index.
+    /// FeatureToIndex protos for leaf relations, ready to index.
     leaf_relations: RecordReader,
 
-    /// Geometry of leaf relations that are members in super relations.
+    /// Geometry of leaf relations that are members in super relations,
+    /// keyed by osm_id of the relation.
     #[allow(unused)]
     leaf_relations_geometry: GeometryTable<'a>,
 
-    /// A BlobTable of Feature protos for super relations, at this stage without geometry.
-    #[allow(unused)]
+    /// A BlobTable of Feature protos for super relations, at this stage without geometry,
+    /// keyed by osm_id of the relation.
     super_relations: BlobTable<'a>,
 }
 
@@ -354,9 +359,9 @@ fn assemble_leaf_relations<'a>(
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<AssembledLeafRelations<'a>> {
-    let leaf_relations_path = workdir.join("osm-assemble.leaf-rels.leaves");
-    let leaf_relations_geometry_path = workdir.join("osm-assemble.leaf-rels.geometry");
-    let super_relations_path = workdir.join("osm-assemble.leaf-rels.super-rels");
+    let leaf_relations_path = workdir.join("osm-assemble.leaf-relations");
+    let leaf_relations_geometry_path = workdir.join("osm-assemble.leaf-relations.geometry");
+    let super_relations_path = workdir.join("osm-assemble.leaf-relations.super-relations");
     if leaf_relations_path.exists()
         && leaf_relations_geometry_path.exists()
         && super_relations_path.exists()
@@ -372,7 +377,7 @@ fn assemble_leaf_relations<'a>(
     let leaf_relations_count = AtomicU64::new(0);
     let progress_bar = make_progress_bar(
         progress,
-        "osm.assemble.leaf-rels",
+        "osm.assemble.leaf-relations ",
         osm.count_relation_blobs() as u64,
         "blobs → features, geometries, super-rels",
     );
@@ -412,20 +417,14 @@ fn assemble_leaf_relations<'a>(
                             continue;
                         }
 
-                        // Build geometry.
-                        let mut geom_builder = GeometryBuilder::new();
-                        for (_role, id, member_type) in relation.members() {
-                            if let Some(g) = lookup_relation_member_geometry(
-                                member_type,
-                                id,
-                                coords,
-                                &ways.ways_in_relations,
-                                /* leaf_relations_wkb */ None,
-                            ) {
-                                geom_builder.add(&g);
-                            }
-                        }
-                        let Some(geometry) = geom_builder.finish() else {
+                        let Some(geometry) = assemble_relation_geometry(
+                            &relation,
+                            coords,
+                            &ways.ways_in_relations,
+                            /* leaf_relations */ None,
+                            /* super_relations */ None,
+                        )?
+                        else {
                             continue;
                         };
 
@@ -510,6 +509,73 @@ fn assemble_leaf_relations<'a>(
         leaf_relations_geometry,
         super_relations,
     })
+}
+
+fn assemble_super_relations(
+    prunings: &Prunings,
+    _ways: &AssembledWays,
+    leaf_relations: &AssembledLeafRelations,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<RecordReader> {
+    let super_relations_path = workdir.join("osm-assemble.super-relations");
+    if super_relations_path.exists() {
+        return RecordReader::open(&super_relations_path);
+    }
+
+    // AssembledLeafRelations contains super-relations in our format,
+    // but they don't have any geometry yet.
+    let super_rels = &leaf_relations.super_relations;
+    let progress_bar = make_progress_bar(
+        progress,
+        "osm.assemble.super-relations",
+        super_rels.len() as u64,
+        "relations → relations",
+    );
+    let geometry_store_path = workdir.join("osm-assemble.super-relations.geometry");
+    let _geometry_store = GeometryStore::create(&geometry_store_path)?;
+
+    thread::scope(|s| {
+        let progress_bar = &progress_bar;
+        let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(128);
+
+        let producer = s.spawn(move || {
+            for (rel_id, blob) in super_rels.iter() {
+                let fti = FeatureToIndex {
+                    feature: Some(Feature::decode(blob)?),
+                    ..Default::default()
+                };
+
+                // TODO: Assemble relation geometry.
+                if prunings.keep_relations.contains(rel_id / 10) {
+                    // assemble_geometry(&geometry, &mut fti.s2_cell_id);
+                    feature_tx.send(fti.encode_to_vec())?;
+                }
+                progress_bar.inc(1);
+            }
+            Ok(())
+        });
+
+        let writer = s.spawn(|| {
+            let mut tmp_path = super_relations_path.clone();
+            tmp_path.add_extension("tmp");
+            let mut out = RecordWriter::create(&tmp_path)?;
+            for f in feature_rx {
+                out.write(&f)?;
+            }
+            out.close()?;
+            std::fs::rename(&tmp_path, &super_relations_path)?;
+            Ok(())
+        });
+
+        writer.join().expect("panic in writer")?;
+        producer.join().expect("panic in producer")?;
+        Ok(())
+    })?;
+
+    let result = RecordReader::open(&super_relations_path)?;
+    progress_bar.finish_with_message(format!("relations → {} relations", result.len()));
+    Ok(result)
 }
 
 fn assemble_feature(id: u64, info: &Option<osm_pbf_iter::info::Info<'_>>) -> FeatureToIndex {
@@ -692,23 +758,47 @@ fn assemble_relation_members(
     }
 }
 
+fn assemble_relation_geometry<'a>(
+    rel: &osm_pbf_iter::Relation<'_>,
+    coords: &CoordTable,
+    ways: &GeometryTable<'a>,
+    leaf_relations: Option<&GeometryTable<'a>>,
+    super_relations: Option<&GeometryStore>,
+) -> Result<Option<Geometry>> {
+    let mut geom_builder = GeometryBuilder::new();
+    for (_role, id, member_type) in rel.members() {
+        if let Some(g) = lookup_relation_member_geometry(
+            member_type,
+            id,
+            coords,
+            ways,
+            leaf_relations,
+            super_relations,
+        )? {
+            geom_builder.add(&g);
+        }
+    }
+    Ok(geom_builder.finish())
+}
+
 fn lookup_relation_member_geometry<'a>(
     member_type: RelationMemberType,
     id: u64,
     coords: &CoordTable,
     ways: &GeometryTable<'a>,
     leaf_relations: Option<&GeometryTable<'a>>,
-) -> Option<geo::Geometry> {
+    super_relations: Option<&GeometryStore>,
+) -> Result<Option<Geometry>> {
     match member_type {
         RelationMemberType::Node => {
             if let Some(c) = coords.get(id) {
-                return Some(Geometry::Point(geo::Point::from(c)));
+                return Ok(Some(Geometry::Point(geo::Point::from(c))));
             }
         }
 
         RelationMemberType::Way => {
             if let Some(way_geometry) = ways.lookup(id) {
-                return Some(way_geometry);
+                return Ok(Some(way_geometry));
             }
         }
 
@@ -716,10 +806,16 @@ fn lookup_relation_member_geometry<'a>(
             if let Some(leaf_relations) = leaf_relations
                 && let Some(rel_geometry) = leaf_relations.lookup(id)
             {
-                return Some(rel_geometry);
+                return Ok(Some(rel_geometry));
+            }
+
+            if let Some(super_relations) = super_relations
+                && let Some(rel_geometry) = super_relations.lookup(id)?
+            {
+                return Ok(Some(rel_geometry));
             }
         }
     }
 
-    None
+    Ok(None)
 }
