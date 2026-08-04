@@ -1,3 +1,77 @@
+//! Disk-based table of strings that supports both lookup by index and
+//! lookup by value.
+//!
+//! `StringPool` is used to intern the tag keys and values of OpenStreetMap
+//! features: rather than storing the same short strings over and over in
+//! every record, other tables store a `u32` index into a shared
+//! `StringPool` and use [StringPool::get] to resolve it back to text, or
+//! [StringPool::lookup] to go from text to index while building those
+//! records. The pool itself does not deduplicate its input; callers that
+//! rely on `lookup` being a well-defined inverse of `get` must supply
+//! already-unique strings (as `assemble_strings` in
+//! `pipeline/osm/assemble.rs` does). If a string is written more than
+//! once, `lookup` returns the smallest of the indices under which it was
+//! stored.
+//!
+//! # File format
+//!
+//! ```text
+//! byte 0..8:    magic "strpool0"
+//! byte 8..16:   entry count, u64 little-endian
+//! byte 16..24:  offset of the buckets array, u64 little-endian
+//! byte 24..32:  size of the buckets array, u64 little-endian
+//! byte 32..40:  offset of the hash_index array, u64 little-endian
+//! byte 40..48:  size of the hash_index array, u64 little-endian
+//! byte 48..56:  offset of the hash_values array, u64 little-endian
+//! byte 56..64:  size of the hash_values array, u64 little-endian
+//! byte 64..72:  offset of the starts array, u64 little-endian
+//! byte 72..80:  size of the starts array, u64 little-endian
+//! byte 80..88:  offset of the chars array, u64 little-endian
+//! byte 88..96:  size of the chars array, u64 little-endian
+//! byte 96..128: reserved, zero-filled
+//!
+//! buckets array:     65537 buckets, u32 little-endian each, 64-byte
+//!                    aligned. `buckets[b]` is the index into the
+//!                    hash_index/hash_values arrays of the first entry
+//!                    whose 32-bit hash has `b` in its upper 16 bits;
+//!                    `buckets[65536]` is a sentinel equal to `entry
+//!                    count`. Monotonically non-decreasing, so bucket `b`
+//!                    occupies the half-open range
+//!                    `buckets[b]..buckets[b + 1]` in both arrays below.
+//!
+//! hash_index array:  `entry count` entries, u32 little-endian each, in
+//!                    ascending order of the entries' 32-bit hash (and,
+//!                    for equal hashes, ascending original index).
+//!                    `hash_index[p]` is the original insertion index
+//!                    (i.e. an index into the starts array) of the p-th
+//!                    entry in that order.
+//!
+//! hash_values array: `entry count` entries, u16 little-endian each,
+//!                    aligned 1:1 with hash_index. `hash_values[p]` holds
+//!                    the lower 16 bits of the hash of `hash_index[p]`'s
+//!                    string; since entries are grouped by bucket (the
+//!                    upper 16 bits) and then sorted by hash overall,
+//!                    each bucket's slice of this array is itself sorted
+//!                    ascending, which is what makes binary search in
+//!                    [StringPool::lookup] possible.
+//!
+//! starts array:      `entry count + 1` entries, u64 little-endian each.
+//!                    `starts[i]` is the byte offset into the chars array
+//!                    where the string at original index `i` begins;
+//!                    `starts[entry count]` is a sentinel equal to the
+//!                    size of the chars array. The string at index `i`
+//!                    thus occupies `chars[starts[i]..starts[i + 1]]`.
+//!
+//! chars array:       the UTF-8 bytes of every string, concatenated in
+//!                    original insertion order.
+//! ```
+//!
+//! Lookup by value first computes the 32-bit hash of the query string,
+//! uses its upper 16 bits to find the bucket's range in `hash_values` via
+//! `buckets`, then binary-searches that range for the lower 16 bits of
+//! the hash and scans the (usually very short) run of equal values,
+//! comparing full strings to rule out 16-bit hash collisions.
+
 use anyhow::{Context, Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use memmap2::Mmap;
@@ -9,9 +83,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[allow(unused)]
+/// Read-only, memory-mapped table of strings, retrievable both by
+/// original insertion index ([StringPool::get]) and by value
+/// ([StringPool::lookup]). See the "File format" section above.
 pub struct StringPool<'a> {
-    file: File,
+    _file: File,
     _mmap: Mmap,
     len: usize,
     buckets: &'a [u32],
@@ -21,13 +97,24 @@ pub struct StringPool<'a> {
     starts: &'a [u64],
 }
 
+/// Size of the file header, in bytes: see the "File format" section above.
 const HEADER_SIZE: usize = 16 * 8;
+
+/// Magic bytes identifying a `StringPool` file, written as the first
+/// eight bytes of the file header.
 const FILE_SIGNATURE: &[u8; 8] = b"strpool0";
+
+/// Number of hash buckets, keyed by the upper 16 bits of a 32-bit hash.
 const BUCKET_COUNT: usize = 65536;
 
 type Buckets = Vec<u32>;
 
 impl<'a> StringPool<'a> {
+    /// Builds a `StringPool` from `strings`, written to `path` in
+    /// iteration order (`strings.next()` becomes index 0, and so on).
+    ///
+    /// Building requires sorting every entry's hash, which may spill
+    /// intermediate data to `workdir`; see [Writer::close].
     pub fn create(
         strings: impl Iterator<Item = String>,
         workdir: &Path,
@@ -41,6 +128,9 @@ impl<'a> StringPool<'a> {
         Self::open(path)
     }
 
+    /// Opens a `StringPool` previously written by [StringPool::create],
+    /// mapping it into memory rather than reading it into a
+    /// heap-allocated buffer.
     pub fn open(path: &Path) -> Result<StringPool<'a>> {
         let file = File::open(path)?;
 
@@ -164,7 +254,7 @@ impl<'a> StringPool<'a> {
         };
 
         Ok(StringPool {
-            file,
+            _file: file,
             _mmap: mmap,
             len,
             buckets,
@@ -175,6 +265,10 @@ impl<'a> StringPool<'a> {
         })
     }
 
+    /// Returns the string that was written at index `idx` in
+    /// [StringPool::create], in `O(1)`.
+    ///
+    /// Panics if `idx >= self.len()`.
     #[allow(unused)]
     pub fn get(&self, idx: usize) -> &'a str {
         let start = u64::from_le(self.starts[idx]) as usize;
@@ -183,11 +277,19 @@ impl<'a> StringPool<'a> {
         unsafe { str::from_utf8_unchecked(&self.chars[start..end]) }
     }
 
+    /// Returns the number of entries in the table.
     #[allow(unused)]
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns the index under which `key` was stored (as accepted by
+    /// [StringPool::get]), or `None` if `key` is not in the pool.
+    ///
+    /// Looks `key` up via the on-disk hash table described in the "File
+    /// format" section above, rather than scanning every entry, so this
+    /// is close to `O(1)` rather than `O(n)`. If `key` was written more
+    /// than once, the smallest matching index is returned.
     #[allow(unused)]
     pub fn lookup(&self, key: &str) -> Option<usize> {
         let hash_value: u32 = Self::hash(key);
@@ -212,6 +314,10 @@ impl<'a> StringPool<'a> {
         None
     }
 
+    /// Hashes `s` down to 32 bits, using Rust's default (SipHash) hasher.
+    /// The same function is used both when writing entries ([Writer::write])
+    /// and when looking them up ([StringPool::lookup]), so the two agree on
+    /// which bucket and hash value a given string maps to.
     fn hash(s: &str) -> u32 {
         // We did not explore faster hashers (such as xxhash or ahash)
         // because StringPool lookup is not a bottleneck. On a 2026 MacBook
@@ -224,6 +330,16 @@ impl<'a> StringPool<'a> {
     }
 }
 
+/// Writes a [StringPool] file, one string at a time.
+///
+/// Characters, string-start offsets, and hashes are appended to separate
+/// temporary files as entries arrive; [Writer::close] then sorts the
+/// hashes (spilling to `workdir` as needed, see [Writer::sort_hashes]) and
+/// concatenates everything behind a fixed-size header, finally renaming
+/// the result atomically into place. Splitting the files this way avoids
+/// seeking back and forth in the output file, since offsets such as where
+/// the hash-derived arrays begin are not known until all entries have
+/// been written.
 struct Writer {
     path: PathBuf,
     tmp_path: PathBuf,
@@ -243,6 +359,17 @@ struct Writer {
 }
 
 impl Writer {
+    /// Creates the temporary files that back a `Writer`. `path` is the
+    /// final destination of the `StringPool`; `workdir` is where
+    /// [Writer::sort_hashes] may spill intermediate external-sort data.
+    ///
+    /// The output itself is built up in a `path`-with-`.tmp`-suffix file
+    /// in the same directory as `path`, and only [Writer::close] renames
+    /// it into place atomically; until then, `path` is untouched. This
+    /// makes `path` a checkpoint: if the process crashes mid-write, only
+    /// the `.tmp` file is left behind, and restarting the pipeline finds
+    /// `path` absent (or complete) and redoes the work cleanly, rather
+    /// than picking up a half-written file.
     pub fn create(workdir: &Path, path: &Path) -> Result<Writer> {
         let mut tmp_path = PathBuf::from(path);
         tmp_path.add_extension("tmp");
@@ -276,6 +403,8 @@ impl Writer {
         })
     }
 
+    /// Appends `s` as the next entry, at index `self.entry_count` before
+    /// the call.
     pub fn write(&mut self, s: &str) -> Result<()> {
         let start: u64 = self.chars_writer.stream_position()?;
         self.starts_writer.write_all(&start.to_le_bytes())?;
@@ -288,6 +417,11 @@ impl Writer {
         Ok(())
     }
 
+    /// Finishes writing: sorts the accumulated hashes into the
+    /// buckets/hash_index/hash_values arrays, assembles the file (header,
+    /// buckets, hash_index, hash_values, starts, chars, in that order —
+    /// see the "File format" section at the top of this module), and
+    /// atomically renames it into place at `self.path`.
     pub fn close(mut self) -> Result<()> {
         // Sort hashes.
         let (buckets, hash_index_path, hash_values_path) = {
@@ -379,6 +513,13 @@ impl Writer {
         Ok(())
     }
 
+    /// Reads the 32-bit hashes written to `path` (one per entry, in
+    /// original insertion order, via [HashFileIter]), externally sorts
+    /// them by `(hash value, original index)`, and writes the result out
+    /// as two new temporary files: the hash_index array and the
+    /// hash_values array (see the "File format" section at the top of
+    /// this module). Also returns the buckets array, computed as the
+    /// sort progresses from the upper 16 bits of each hash.
     fn sort_hashes(workdir: &Path, path: &Path) -> Result<(Buckets, PathBuf, PathBuf)> {
         let mut buckets = vec![0; BUCKET_COUNT + 1]; // last is sentinel
         let index_path = {
@@ -457,6 +598,9 @@ impl Writer {
         Ok((buckets, index_path, hash_values_path))
     }
 
+    /// Writes zero bytes to `writer` until its position is a multiple of
+    /// `alignment`, so that the array written next can be reinterpreted
+    /// as a slice of its element type directly on the mmap'd bytes.
     fn write_padding(writer: &mut BufWriter<File>, alignment: usize) -> Result<()> {
         if alignment > 1 {
             let pos = writer.stream_position()?;
@@ -471,6 +615,9 @@ impl Writer {
     }
 }
 
+/// Reads back the hashes written by [Writer::write] to the file at
+/// `hashes_path`, pairing each with its original insertion index, for
+/// consumption by the external sorter in [Writer::sort_hashes].
 pub struct HashFileIter {
     reader: BufReader<File>,
     count: usize,
@@ -504,6 +651,9 @@ impl Iterator for HashFileIter {
     }
 }
 
+/// Returns whether `slice`, interpreted as little-endian `u32` values, is
+/// sorted in non-decreasing order. Used to validate the buckets array
+/// when opening a `StringPool` file (see [StringPool::open]).
 fn is_u32_slice_sorted_little_endian(slice: &[u32]) -> bool {
     slice.windows(2).all(|window| {
         let a = u32::from_le(window[0]);
@@ -551,5 +701,91 @@ mod tests {
         assert_eq!(TEST_POOL.lookup("one"), Some(1));
         assert_eq!(TEST_POOL.lookup("two"), Some(2));
         assert_eq!(TEST_POOL.lookup("hello world"), Some(3));
+    }
+
+    fn make_pool(entries: &[&str]) -> StringPool<'static> {
+        let workdir = TempDir::new().expect("TempDir::new() failed");
+        let path = workdir.path().join("test.StringPool");
+        StringPool::create(
+            entries.iter().map(|&s| String::from(s)),
+            workdir.path(),
+            &path,
+        )
+        .expect("StringPool::create() failed")
+    }
+
+    #[test]
+    fn test_empty_pool() {
+        let pool = make_pool(&[]);
+        assert_eq!(pool.len(), 0);
+        assert_eq!(pool.lookup(""), None);
+        assert_eq!(pool.lookup("anything"), None);
+    }
+
+    #[test]
+    fn test_empty_string_entry() {
+        let pool = make_pool(&["", "non-empty", ""]);
+        assert_eq!(pool.get(0), "");
+        assert_eq!(pool.get(1), "non-empty");
+        assert_eq!(pool.get(2), "");
+        // Two entries are "", at indices 0 and 2; lookup must return the
+        // smaller one.
+        assert_eq!(pool.lookup(""), Some(0));
+        assert_eq!(pool.lookup("non-empty"), Some(1));
+    }
+
+    #[test]
+    fn test_duplicate_strings_lookup_returns_smallest_index() {
+        let pool = make_pool(&["a", "b", "a", "c", "a", "b"]);
+        assert_eq!(pool.len(), 6);
+        assert_eq!(pool.lookup("a"), Some(0));
+        assert_eq!(pool.lookup("b"), Some(1));
+        assert_eq!(pool.lookup("c"), Some(3));
+        for (i, s) in ["a", "b", "a", "c", "a", "b"].iter().enumerate() {
+            assert_eq!(pool.get(i), *s);
+        }
+    }
+
+    #[test]
+    fn test_unicode_strings() {
+        let entries = &["café", "北京", "😀🎉", "Straße"];
+        let pool = make_pool(entries);
+        for (i, s) in entries.iter().enumerate() {
+            assert_eq!(pool.get(i), *s);
+            assert_eq!(pool.lookup(s), Some(i));
+        }
+    }
+
+    #[test]
+    fn test_many_strings_exercise_hash_buckets() {
+        // With enough entries spread across BUCKET_COUNT (65536) buckets,
+        // some buckets are very likely to end up with more than one
+        // entry, exercising the binary-search-then-scan path in
+        // `lookup` and the multi-entry bucket ranges in `buckets`,
+        // which the small TEST_POOL above (4 entries) almost never hits.
+        let entries: Vec<String> = (0..5000).map(|i| format!("string-{i}")).collect();
+        let pool = make_pool(&entries.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(pool.len(), 5000);
+        for (i, s) in entries.iter().enumerate() {
+            assert_eq!(pool.get(i), s.as_str());
+            assert_eq!(pool.lookup(s), Some(i));
+        }
+        assert_eq!(pool.lookup("string-5000"), None);
+    }
+
+    #[test]
+    fn test_open_rejects_file_without_signature() {
+        let workdir = TempDir::new().expect("TempDir::new() failed");
+        let path = workdir.path().join("not-a-pool");
+        std::fs::write(&path, [0u8; HEADER_SIZE]).expect("write failed");
+        assert!(StringPool::open(&path).is_err());
+    }
+
+    #[test]
+    fn test_open_rejects_truncated_file() {
+        let workdir = TempDir::new().expect("TempDir::new() failed");
+        let path = workdir.path().join("too-short");
+        std::fs::write(&path, FILE_SIGNATURE).expect("write failed");
+        assert!(StringPool::open(&path).is_err());
     }
 }
