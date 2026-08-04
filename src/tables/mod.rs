@@ -7,7 +7,7 @@
 
 #[allow(unused)]
 mod blob_table;
-mod coords_map;
+mod coord_table;
 mod graph;
 #[allow(unused)]
 mod records;
@@ -21,7 +21,7 @@ mod features {
 
 #[allow(unused)]
 pub use blob_table::BlobTable;
-pub use coords_map::CoordsMap;
+pub use coord_table::CoordTable;
 pub use features::{Feature, FeatureToIndex, RelationMember};
 pub use graph::{Edge, GraphTable};
 #[allow(unused)]

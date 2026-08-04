@@ -1,6 +1,6 @@
 //! Disk-based, potentially very large map with `u64` keys and byte-string values.
 //!
-//! Unlike [crate::tables::CoordsMap], whose values have a fixed size,
+//! Unlike [crate::tables::CoordTable], whose values have a fixed size,
 //! `BlobTable` values may be of any length, so it is suited for things
 //! like serialized protobuf messages, WKB geeometry, or other opaque
 //! binary payloads.

@@ -2,7 +2,7 @@ use super::BlobReader;
 use crate::{
     make_progress_bar,
     matchers::MatchMask,
-    tables::{CoordsMap, Edge, GraphTable, StringCounts, U64Set},
+    tables::{CoordTable, Edge, GraphTable, StringCounts, U64Set},
 };
 use anyhow::{Ok, Result};
 use geo::Coord;
@@ -19,7 +19,7 @@ use std::{
 /// Which parts of OpenStreetMap we need for conflation.
 #[allow(unused)]
 pub struct Prunings<'a> {
-    pub coords: CoordsMap<'a>,
+    pub coords: CoordTable<'a>,
     pub strings: StringCounts<'a>,
     pub keep_nodes: U64Set,
     pub keep_ways: U64Set,
@@ -120,7 +120,7 @@ struct PruneNodesOutput<'a> {
     ///
     /// As of July 2026, this map contains coordinates for 286.7 million nodes,
     /// which is 2.7% of the 10.7 billion node coordinates in OpenStreetMap.
-    coords: CoordsMap<'a>,
+    coords: CoordTable<'a>,
 
     /// The strings we want to keep, and how often each string gets used.
     /// Later down the pipeline, we need these counters to construct a string pool
@@ -521,7 +521,7 @@ fn prune_nodes<'a>(
     let strings_path = PathBuf::from(workdir).join("osm-prune.strings");
     if keep_nodes_path.exists() && coords_path.exists() && strings_path.exists() {
         let keep_nodes = U64Set::open(&keep_nodes_path)?;
-        let coords = CoordsMap::open(&coords_path)?;
+        let coords = CoordTable::open(&coords_path)?;
         let strings = StringCounts::open(&strings_path)?;
         return Ok(PruneNodesOutput {
             keep_nodes,
@@ -598,7 +598,7 @@ fn prune_nodes<'a>(
         let strings_writer =
             s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
         let coords_writer =
-            s.spawn(|| CoordsMap::create(coords_rx.into_iter(), workdir, &coords_path));
+            s.spawn(|| CoordTable::create(coords_rx.into_iter(), workdir, &coords_path));
         let keep_nodes_writer = s.spawn(|| {
             keep_nodes = Some(U64Set::create(
                 keep_rx.into_iter(),
@@ -623,7 +623,7 @@ fn prune_nodes<'a>(
     })?;
 
     let keep_nodes = keep_nodes.expect("keep_nodes");
-    let coords = CoordsMap::open(&coords_path)?;
+    let coords = CoordTable::open(&coords_path)?;
     let strings = StringCounts::open(&strings_path)?;
     progress_bar.finish_with_message(format!(
         "blobs → {} nodes, {} coords, {} strings",
