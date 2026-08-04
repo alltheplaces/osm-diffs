@@ -7,7 +7,7 @@ use crate::{
         id_tagging_schema::is_area,
     },
     tables::{
-        BlobTable, CoordsMap, Feature, FeatureToIndex, RecordReader, RecordWriter, RelationMember,
+        BlobTable, CoordTable, Feature, FeatureToIndex, RecordReader, RecordWriter, RelationMember,
         StringCounts, StringPool,
     },
 };
@@ -698,7 +698,7 @@ fn assemble_relation_members(
 fn lookup_relation_member_geometry<'a>(
     member_type: RelationMemberType,
     id: u64,
-    coords: &CoordsMap,
+    coords: &CoordTable,
     ways: &BlobTable<'a>,
     leaf_relations: Option<&BlobTable<'a>>,
 ) -> Option<geo::Geometry> {

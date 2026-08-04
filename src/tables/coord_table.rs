@@ -1,4 +1,30 @@
 //! Disk-based, potentially very large map with `u64` keys and [geo::Coord] values.
+//!
+//! `CoordTable` is used to look up the geographic position of an OSM node
+//! by its node ID, without having to keep every node's coordinates in RAM.
+//! Coordinates are stored as fixed-size packed integers (see
+//! [Writer::pack_coord]), so `CoordTable` is not suited for values of
+//! varying size; for that, see [crate::tables::BlobTable].
+//!
+//! # File format
+//!
+//! ```text
+//! byte 0..8:   magic "coords_0"
+//! byte 8..16:  entry count, u64 little-endian
+//! byte 16..24: offset of the keys array, u64 little-endian
+//! byte 24..32: offset of the coords array, u64 little-endian
+//! byte 32..64: reserved, zero-filled
+//!
+//! keys array:   `entry count` keys, u64 little-endian each, sorted
+//!               ascending
+//! coords array: `entry count` packed coordinates, u64 little-endian
+//!               each, aligned 1:1 with the keys array (see
+//!               [Writer::pack_coord] for the packing)
+//! ```
+//!
+//! The header is a fixed 64 bytes so that the keys and coords arrays,
+//! which follow it back to back, stay 8-byte aligned and can be
+//! reinterpreted as `&[u64]` slices directly on the mmap'd bytes.
 
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
@@ -13,10 +39,21 @@ use std::{
     time::SystemTime,
 };
 
+/// Size of the file header, in bytes: see the "File format" section above.
 const HEADER_SIZE: usize = 8 * 8;
+
+/// Magic bytes identifying a `CoordTable` file, written as the first
+/// eight bytes of the file header.
 const FILE_SIGNATURE: &[u8; 8] = b"coords_0";
 
-pub struct CoordsMap<'a> {
+/// Read-only, memory-mapped map from `u64` node IDs to [Coord] values.
+///
+/// The table is built once with [CoordTable::create] and then reopened
+/// with [CoordTable::open], possibly by a different process. Keys must be
+/// unique and are looked up with [CoordTable::get] via binary search, so
+/// lookups are `O(log n)` and touch only the pages that are actually
+/// needed, rather than requiring the whole table to be resident in RAM.
+pub struct CoordTable<'a> {
     file: File,
     _mmap: Mmap,
     entries_count: usize,
@@ -24,12 +61,17 @@ pub struct CoordsMap<'a> {
     coords: &'a [u64],
 }
 
-impl<'a> CoordsMap<'a> {
+impl<'a> CoordTable<'a> {
+    /// Builds a `CoordTable` from `coords`, which may be in any order.
+    ///
+    /// Since [Writer::write] requires keys in ascending order, `coords` is
+    /// first sorted by key using external sorting (spilling to `workdir`
+    /// as needed), and only then written to `out`.
     pub fn create(
         coords: impl Iterator<Item = (u64, Coord)>,
         workdir: &Path,
         out: &Path,
-    ) -> Result<CoordsMap<'a>> {
+    ) -> Result<CoordTable<'a>> {
         let mut writer = Writer::create(out)?;
         let coords_count = AtomicU64::new(0);
         let sorter: ExternalSorter<(u64, u64), std::io::Error, LimitedBufferBuilder> =
@@ -52,13 +94,15 @@ impl<'a> CoordsMap<'a> {
         Self::open(out)
     }
 
-    pub fn open(path: &'_ Path) -> Result<CoordsMap<'a>> {
+    /// Opens a `CoordTable` previously written by [CoordTable::create], mapping
+    /// it into memory rather than reading it into a heap-allocated buffer.
+    pub fn open(path: &Path) -> Result<CoordTable<'a>> {
         let file = File::open(path)?;
 
         // SAFETY: We don’t modify the file while it is mapped into memory.
         let mmap = unsafe { Mmap::map(&file)? };
         if mmap.len() < HEADER_SIZE || &mmap[0..8] != FILE_SIGNATURE {
-            anyhow::bail!("not a CoordsMap: {}", path.display());
+            anyhow::bail!("not a CoordTable: {}", path.display());
         }
 
         // SAFETY: mmap.len() checked above; offset 0 is aligned for u64.
@@ -78,7 +122,7 @@ impl<'a> CoordsMap<'a> {
                     std::slice::from_raw_parts(ptr, keys_count)
                 }
             } else {
-                anyhow::bail!("misaligned keys in CoordsMap: {}", path.display());
+                anyhow::bail!("misaligned keys in CoordTable: {}", path.display());
             }
         };
 
@@ -92,11 +136,11 @@ impl<'a> CoordsMap<'a> {
                     std::slice::from_raw_parts(ptr, coords_count)
                 }
             } else {
-                anyhow::bail!("misaligned coords in CoordsMap: {}", path.display());
+                anyhow::bail!("misaligned coords in CoordTable: {}", path.display());
             }
         };
 
-        Ok(CoordsMap {
+        Ok(CoordTable {
             file,
             _mmap: mmap,
             entries_count,
@@ -105,6 +149,7 @@ impl<'a> CoordsMap<'a> {
         })
     }
 
+    /// Returns the coordinate stored for `key`, or `None` if `key` is absent.
     pub fn get(&self, key: u64) -> Option<Coord> {
         let idx = self.keys.partition_point(|&k| u64::from_le(k) < key);
         if idx < self.keys.len() && self.keys[idx] == key {
@@ -118,6 +163,7 @@ impl<'a> CoordsMap<'a> {
         }
     }
 
+    /// Returns the number of entries in the table.
     pub fn len(&self) -> usize {
         self.entries_count
     }
@@ -129,6 +175,14 @@ impl<'a> CoordsMap<'a> {
     }
 }
 
+/// Writes a [CoordTable] file, one ascending key at a time.
+///
+/// Keys and packed coordinates are appended to separate temporary files as
+/// they arrive; [Writer::close] then concatenates them behind a fixed-size
+/// header and atomically renames the result into place. Splitting the
+/// files this way avoids seeking back and forth in the output file, since
+/// the total number of entries — and thus the offset of the coordinates
+/// section — is not known until all entries have been written.
 struct Writer {
     path: PathBuf,
     tmp_path: PathBuf,
@@ -161,6 +215,10 @@ impl Writer {
         })
     }
 
+    /// Packs a [Coord] into a `u64`, as a pair of 1e-7-degree fixed-point
+    /// `i32` values (longitude in the high 32 bits, latitude in the low 32
+    /// bits). This gives sub-centimeter precision while halving the
+    /// storage compared to two `f64` values.
     fn pack_coord(coord: Coord) -> u64 {
         let x_i32 = (coord.x * 1e7) as i32;
         let y_i32 = (coord.y * 1e7) as i32;
@@ -243,7 +301,7 @@ mod tests {
             y: -37.814,
         };
         let file = NamedTempFile::new()?;
-        let mut writer = Writer::create(&file.path())?;
+        let mut writer = Writer::create(file.path())?;
         writer.write(17, Writer::pack_coord(BERN))?;
         writer.write(41, Writer::pack_coord(OTTAWA))?;
         writer.write(42, Writer::pack_coord(BERN))?;
@@ -252,7 +310,7 @@ mod tests {
         writer.close()?;
         let file_metadata = std::fs::metadata(file.path())?;
 
-        let table = CoordsMap::open(&file.path())?;
+        let table = CoordTable::open(file.path())?;
         assert_eq!(table.modified()?, file_metadata.modified()?);
         assert_eq!(table.len(), 5);
 
