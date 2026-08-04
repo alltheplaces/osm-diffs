@@ -1,3 +1,36 @@
+//! Disk-based, memory-mapped directed graph with `u64` node IDs.
+//!
+//! `GraphTable` is used to represent the "is member of" relation between
+//! OpenStreetMap relations: a relation may itself be a member of other,
+//! "super", relations, so the pipeline needs a graph of which relation
+//! (the child) is contained in which other relation (the parent).
+//! [GraphTable::ancestors] walks the transitive closure of that relation
+//! starting at a node; [GraphTable::nodes] yields every node bottom-up,
+//! which is useful for building the geometry of a relation only once the
+//! geometries of every relation it contains have already been built.
+//!
+//! # File format
+//!
+//! ```text
+//! byte 0..8:  magic "graph_v0"
+//! byte 8..16: edge count, u64 little-endian
+//! byte 16..:  children array, `edge count` entries, u64 little-endian
+//!             each
+//! byte ..:    parents array, `edge count` entries, u64 little-endian
+//!             each, aligned 1:1 with the children array
+//! ```
+//!
+//! The children and parents arrays are two parallel columns of one
+//! `(child, parent)` edge list: edge `i` is `(children[i], parents[i])`.
+//! They are sorted ascending by `(child, parent)` (see [Edge]'s derived
+//! [Ord]), which is what makes the binary search in
+//! [GraphTable::parent_range] possible; a node with several outgoing
+//! edges appears several times in `children`.
+//!
+//! The header is a fixed 16 bytes so that the children and parents
+//! arrays, which follow it back to back, stay 8-byte aligned and can be
+//! reinterpreted as `&[u64]` slices directly on the mmap'd bytes.
+
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use memmap2::Mmap;
@@ -12,6 +45,15 @@ use std::{
     time::SystemTime,
 };
 
+/// Size of the file header, in bytes: see the "File format" section above.
+const HEADER_SIZE: usize = 16;
+
+/// Magic bytes identifying a `GraphTable` file, written as the first
+/// eight bytes of the file header.
+const FILE_SIGNATURE: &[u8; 8] = b"graph_v0";
+
+/// Read-only, memory-mapped directed graph of `(child, parent)` edges. See
+/// the "File format" section above.
 pub struct GraphTable<'a> {
     file: File,
     _mmap: Mmap,
@@ -20,6 +62,11 @@ pub struct GraphTable<'a> {
 }
 
 impl<'a> GraphTable<'a> {
+    /// Builds a `GraphTable` from `edges`, which may be in any order.
+    ///
+    /// Since [Writer::write] requires edges in ascending `(child, parent)`
+    /// order, `edges` is first sorted using external sorting (spilling to
+    /// `workdir` as needed), and only then written to `out`.
     pub fn create(
         edges: impl Iterator<Item = Edge>,
         workdir: &Path,
@@ -46,14 +93,22 @@ impl<'a> GraphTable<'a> {
         Self::open(out)
     }
 
+    /// Opens a `GraphTable` previously written by [GraphTable::create],
+    /// mapping it into memory rather than reading it into a
+    /// heap-allocated buffer.
     #[cfg(target_pointer_width = "64")]
     pub fn open(path: &Path) -> Result<GraphTable<'a>> {
         let file = File::open(path)?;
 
         // SAFETY: We don’t truncate the file while it’s mapped into memory.
         let mmap = unsafe { Mmap::map(&file)? };
-        let edge_count = usize::from_le_bytes(mmap[0..8].try_into().expect("edge_count"));
-        let expected_size = 8 + edge_count * 16;
+        if mmap.len() < HEADER_SIZE || mmap[0..8] != *FILE_SIGNATURE {
+            anyhow::bail!("not a GraphTable: {}", path.display());
+        }
+
+        let edge_count =
+            usize::try_from(u64::from_le_bytes(mmap[8..16].try_into().expect("edge_count")))?;
+        let expected_size = HEADER_SIZE + edge_count * 16;
         if mmap.len() != expected_size {
             anyhow::bail!(
                 "{} has wrong file size, expected {}, got {}",
@@ -65,13 +120,13 @@ impl<'a> GraphTable<'a> {
 
         // SAFETY: mmap.len() checked above.
         let children = unsafe {
-            let ptr = mmap.as_ptr().add(8) as *const u64;
+            let ptr = mmap.as_ptr().add(HEADER_SIZE) as *const u64;
             std::slice::from_raw_parts(ptr, edge_count)
         };
 
         // SAFETY: mmap.len() checked above.
         let parents = unsafe {
-            let ptr = mmap.as_ptr().add(8 + edge_count * 8) as *const u64;
+            let ptr = mmap.as_ptr().add(HEADER_SIZE + edge_count * 8) as *const u64;
             std::slice::from_raw_parts(ptr, edge_count)
         };
 
@@ -83,6 +138,7 @@ impl<'a> GraphTable<'a> {
         })
     }
 
+    /// Returns the modification time of the backing file.
     #[allow(unused)]
     pub fn modified(&'a self) -> Result<SystemTime> {
         Ok(self.file.metadata()?.modified()?)
@@ -187,6 +243,12 @@ impl<'a> GraphTable<'a> {
     }
 }
 
+/// One edge of a [GraphTable]: `child` is contained in `parent`.
+///
+/// Derives [Ord] over `(child, parent)` in field-declaration order, which
+/// [GraphTable::create] relies on to sort edges into the ascending order
+/// required by [Writer::write] (see the "File format" section at the top
+/// of this module).
 #[derive(Serialize, Deserialize, Ord, PartialOrd, PartialEq, Eq)]
 pub struct Edge {
     pub child: u64,
@@ -256,6 +318,14 @@ impl<'a> Iterator for NodesIter<'a> {
     }
 }
 
+/// Writes a [GraphTable] file, one edge at a time.
+///
+/// Children and parents are appended to separate files as edges arrive
+/// (parents to a temporary side file); [Writer::close] then concatenates
+/// them behind a fixed-size header and atomically renames the result into
+/// place. Splitting the files this way avoids seeking back and forth in
+/// the output file, since the total number of edges — and thus the offset
+/// of the parents array — is not known until all edges have been written.
 pub struct Writer {
     edge_count: u64,
     path: PathBuf,
@@ -269,7 +339,8 @@ impl Writer {
         let mut tmp_path = PathBuf::from(path);
         tmp_path.add_extension("tmp");
         let mut out = BufWriter::with_capacity(32768, File::create(&tmp_path)?);
-        out.write_all(&0_u64.to_le_bytes())?;
+        out.write_all(FILE_SIGNATURE)?;
+        out.write_all(&0_u64.to_le_bytes())?; // placeholder edge count
 
         let parents_file = File::create(Self::parents_path(path))?;
 
@@ -282,6 +353,9 @@ impl Writer {
         })
     }
 
+    /// Appends `edge`. Edges must be written in ascending `(child, parent)`
+    /// order, so that [GraphTable::parent_range] can binary-search the
+    /// children array.
     pub fn write(&mut self, edge: Edge) -> Result<()> {
         self.edge_count += 1;
         self.out.write_all(&edge.child.to_le_bytes())?;
@@ -301,7 +375,7 @@ impl Writer {
         remove_file(&parents_path)?;
         drop(parents_path);
 
-        self.out.seek(SeekFrom::Start(0))?;
+        self.out.seek(SeekFrom::Start(8))?;
         self.out.write_all(&self.edge_count.to_le_bytes())?;
 
         self.out.flush()?;
@@ -383,6 +457,56 @@ mod tests {
         let path = workdir.path().join("testgraph");
         let graph = GraphTable::create(edges_iter, &workdir.path(), &path)?;
         assert_eq!(graph.nodes().collect::<Vec<u64>>(), Vec::<u64>::new());
+        Ok(())
+    }
+
+    #[test]
+    fn test_writer_used_directly() -> Result<()> {
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let mut writer = Writer::create(&path)?;
+        writer.write(Edge { child: 1, parent: 2 })?;
+        writer.write(Edge { child: 2, parent: 3 })?;
+        writer.close()?;
+
+        let graph = GraphTable::open(&path)?;
+        assert_eq!(graph.ancestors(1).collect::<Vec<u64>>(), &[1, 2, 3]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_rejects_file_without_signature() -> Result<()> {
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("not-a-graph");
+        std::fs::write(&path, [0u8; HEADER_SIZE])?;
+        assert!(GraphTable::open(&path).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_rejects_truncated_file() -> Result<()> {
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("too-short");
+        std::fs::write(&path, FILE_SIGNATURE)?;
+        assert!(GraphTable::open(&path).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_rejects_wrong_file_size() -> Result<()> {
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("wrong-size");
+        let mut writer = Writer::create(&path)?;
+        writer.write(Edge { child: 1, parent: 2 })?;
+        writer.close()?;
+
+        // Truncate the file so the edge count in the header no longer
+        // matches the actual size of the children/parents arrays.
+        let file = std::fs::OpenOptions::new().write(true).open(&path)?;
+        file.set_len(HEADER_SIZE as u64 + 8)?;
+        drop(file);
+
+        assert!(GraphTable::open(&path).is_err());
         Ok(())
     }
 }

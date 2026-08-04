@@ -1,3 +1,48 @@
+//! Disk-based, potentially very large map with `String` keys and `u64`
+//! counter values.
+//!
+//! `StringCounts` is used to tally how often each distinct string occurs
+//! across a large input (for example, how often each tag key appears in
+//! an OpenStreetMap planet dump), without keeping every string in RAM at
+//! once. Entries with the same key passed to [StringCounts::create] are
+//! summed into a single counter; an entry whose total ends up at zero is
+//! dropped rather than written out.
+//!
+//! # File format
+//!
+//! ```text
+//! byte 0..8:   magic "strcnt_0"
+//! byte 8..16:  entry count, u64 little-endian
+//! byte 16..24: offset of the chars array, u64 little-endian
+//! byte 24..32: size of the chars array, u64 little-endian
+//! byte 32..40: offset of the char_offsets array, u64 little-endian
+//!              (always equal to the header size, 64)
+//! byte 40..48: offset of the counter_values array, u64 little-endian
+//! byte 48..64: reserved, zero-filled
+//!
+//! char_offsets array:   `entry count + 1` entries, u64 little-endian
+//!                       each, immediately following the header.
+//!                       `char_offsets[i]` is the byte offset into the
+//!                       chars array where the string of the i-th entry
+//!                       (in ascending order) begins;
+//!                       `char_offsets[entry count]` is a sentinel equal
+//!                       to the size of the chars array.
+//!
+//! counter_values array: `entry count` entries, u64 little-endian each,
+//!                       aligned 1:1 with char_offsets, immediately
+//!                       following it. `counter_values[i]` is the summed
+//!                       count for the i-th entry's string.
+//!
+//! chars array:          the UTF-8 bytes of every string, concatenated in
+//!                       ascending order, immediately following the
+//!                       counter_values array.
+//! ```
+//!
+//! The header is a fixed 64 bytes so that the char_offsets and
+//! counter_values arrays, which follow it back to back, stay 8-byte
+//! aligned and can be reinterpreted as `&[u64]` slices directly on the
+//! mmap'd bytes.
+
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use memmap2::Mmap;
@@ -9,6 +54,9 @@ use std::{
     time::SystemTime,
 };
 
+/// Read-only, memory-mapped map from `String` keys to `u64` counter
+/// values, iterated in ascending order of key by [StringCounts::iter].
+/// See the "File format" section above.
 pub struct StringCounts<'a> {
     file: File,
     _mmap: Mmap,
@@ -19,10 +67,21 @@ pub struct StringCounts<'a> {
     counter_values: &'a [u64],
 }
 
+/// Size of the file header, in bytes: see the "File format" section above.
 const HEADER_SIZE: usize = 8 * 8;
+
+/// Magic bytes identifying a `StringCounts` file, written as the first
+/// eight bytes of the file header.
 const FILE_SIGNATURE: &[u8; 8] = b"strcnt_0";
 
 impl<'a> StringCounts<'a> {
+    /// Builds a `StringCounts` from `counts`, which may be in any order
+    /// and may repeat the same key multiple times; repeated keys are
+    /// summed into a single entry.
+    ///
+    /// Since [Writer::write] requires keys in ascending order, `counts` is
+    /// first sorted by key using external sorting (spilling to `workdir`
+    /// as needed), and only then written to `out`.
     pub fn create(
         counts: impl Iterator<Item = (String, u64)>,
         workdir: &Path,
@@ -50,6 +109,9 @@ impl<'a> StringCounts<'a> {
         Self::open(out)
     }
 
+    /// Opens a `StringCounts` previously written by
+    /// [StringCounts::create], mapping it into memory rather than reading
+    /// it into a heap-allocated buffer.
     pub fn open(path: &Path) -> Result<StringCounts<'a>> {
         let file = File::open(path)?;
 
@@ -137,10 +199,13 @@ impl<'a> StringCounts<'a> {
         })
     }
 
+    /// Returns the number of entries in the table.
     pub fn len(&self) -> usize {
         self.entries_count
     }
 
+    /// Returns an iterator over all entries, as `(key, count)` pairs, in
+    /// ascending order of key.
     pub fn iter(&self) -> impl Iterator<Item = (&'a str, u64)> + '_ {
         (0..self.len()).map(move |i| {
             let start = usize::try_from(u64::from_le(self.char_offsets[i])).expect("char_offset");
@@ -154,6 +219,7 @@ impl<'a> StringCounts<'a> {
         })
     }
 
+    /// Returns the modification time of the backing file.
     pub fn modified(&self) -> Result<SystemTime> {
         Ok(self.file.metadata()?.modified()?)
     }
@@ -298,5 +364,38 @@ mod tests {
     #[test]
     fn test_len() {
         assert_eq!(TEST_COUNTER.len(), 2);
+    }
+
+    #[test]
+    fn test_modified() -> Result<()> {
+        let entries = &[("hello", 1_u64)];
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("test.StringCounts");
+        StringCounts::create(
+            entries.map(|(s, n)| (String::from(s), n)).into_iter(),
+            workdir.path(),
+            &path,
+        )?;
+
+        let table = StringCounts::open(&path)?;
+        let file_metadata = std::fs::metadata(&path)?;
+        assert_eq!(table.modified()?, file_metadata.modified()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_open_rejects_file_without_signature() {
+        let workdir = TempDir::new().expect("TempDir::new() failed");
+        let path = workdir.path().join("not-a-counter");
+        std::fs::write(&path, [0u8; HEADER_SIZE]).expect("write failed");
+        assert!(StringCounts::open(&path).is_err());
+    }
+
+    #[test]
+    fn test_open_rejects_truncated_file() {
+        let workdir = TempDir::new().expect("TempDir::new() failed");
+        let path = workdir.path().join("too-short");
+        std::fs::write(&path, FILE_SIGNATURE).expect("write failed");
+        assert!(StringCounts::open(&path).is_err());
     }
 }

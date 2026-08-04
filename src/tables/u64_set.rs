@@ -1,22 +1,42 @@
+//! Disk-based, memory-mapped set of `u64` values.
+//!
+//! `U64Set` is used in the pipeline to represent large sets of identifiers
+//! that may not entirely fit into the available memory. For example, the
+//! set of all OpenStreetMap nodes that are geographically near an
+//! AllThePlaces feature.
+//!
+//! Containment test ([U64Set::contains]) is currently implemented as a
+//! regular binary search. If performance ever becomes an issue, consider
+//! Cache-Sensitive Skip Lists, but this would make the file format
+//! slightly more complicated.
+//!
+//! # File format
+//!
+//! ```text
+//! byte 0..:  the set's elements, sorted ascending, deduplicated, u64
+//!            little-endian each, with no header
+//! ```
+//!
+//! There is no magic signature or header: any file whose size is a
+//! multiple of 8 bytes is accepted by [U64Set::open].
+
 use anyhow::{Ok, Result, anyhow};
 use memmap2::Mmap;
 use std::{fs::File, path::Path, time::SystemTime};
 
-/// A memory-mapped file with sorted 64-bit integers in little-endian encoding.
-///
-/// Used in the pipeline to represent large sets of identifiers that may not
-/// entirely fit into the available memory. For examle, the set of all OpenStreetMap
-/// nodes that are geographically near an AllThePlaces feature.
-///
-/// Containment test is currently implemented as a regular binary search.
-/// If performance ever becomes an issue, consider Cache-Sensitive Skip Lines,
-/// but this would make the file format slightly more complicated.
+/// Read-only, memory-mapped set of `u64` values. See the "File format"
+/// section above.
 pub struct U64Set {
     file: File, // The file that backs mmap.
     mmap: Mmap,
 }
 
 impl U64Set {
+    /// Builds a `U64Set` from `elements`, which may be in any order and
+    /// may contain duplicates.
+    ///
+    /// `elements` is sorted and deduplicated using external sorting
+    /// (spilling to `workdir` as needed), and only then written to `out`.
     pub fn create(
         elements: impl Iterator<Item = u64>,
         workdir: &Path,
@@ -26,6 +46,8 @@ impl U64Set {
         Self::open(out)
     }
 
+    /// Opens a `U64Set` previously written by [U64Set::create], mapping it
+    /// into memory rather than reading it into a heap-allocated buffer.
     pub fn open(path: &Path) -> Result<U64Set> {
         let file_size: u64 = std::fs::metadata(path)?.len();
         if !file_size.is_multiple_of(8) {
@@ -39,6 +61,7 @@ impl U64Set {
         Ok(U64Set { file, mmap })
     }
 
+    /// Returns whether `n` is in the set.
     pub fn contains(&self, n: u64) -> bool {
         // SAFETY: We check in `open()` that the file size is a multiple of eight.
         // Alignment to page size, which is typically 4K or larger and
@@ -56,10 +79,12 @@ impl U64Set {
         }
     }
 
+    /// Returns the number of elements in the set.
     pub fn len(&self) -> usize {
         self.mmap.len() / 8
     }
 
+    /// Returns an iterator over all elements, in ascending order.
     pub fn iter(&self) -> impl Iterator<Item = u64> + '_ {
         // SAFETY: We check in `open()` that the file size is a multiple of eight.
         // Alignment to page size, which is typically 4K or larger and
@@ -83,7 +108,7 @@ impl U64Set {
 mod tests {
     use super::*;
     use std::{io::Write, sync::LazyLock};
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     const TEST_TABLE: LazyLock<U64Set> = LazyLock::new(|| {
         let mut file = NamedTempFile::new().expect("NamedTempFile");
@@ -147,6 +172,23 @@ mod tests {
     fn test_open_inexistent_file() {
         let path = Path::new("file/does/not/exist");
         assert!(U64Set::open(&path).is_err());
+    }
+
+    #[test]
+    fn test_create() -> Result<()> {
+        let workdir = TempDir::new()?;
+        let out = workdir.path().join("test.u64set");
+
+        let set = U64Set::create([42, 7, 23, 7].into_iter(), workdir.path(), &out)?;
+        assert_eq!(set.len(), 3);
+        assert_eq!(set.contains(0), false);
+        assert_eq!(set.contains(7), true);
+        assert_eq!(set.contains(23), true);
+        assert_eq!(set.contains(42), true);
+        assert_eq!(set.contains(99), false);
+        assert_eq!(set.iter().collect::<Vec<u64>>(), &[7, 23, 42]);
+
+        Ok(())
     }
 }
 

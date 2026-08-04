@@ -274,11 +274,41 @@ impl Writer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
+    use tempfile::{NamedTempFile, TempDir};
 
     fn almost_equal(a: Coord, b: Coord) -> bool {
         const EPSILON: f64 = 1e-10;
         (a.x - b.x).abs() < EPSILON && (a.y - b.y).abs() < EPSILON
+    }
+
+    #[test]
+    fn test_create_sorts_unsorted_input() -> Result<()> {
+        let workdir = TempDir::new()?;
+        let file = NamedTempFile::new()?;
+        let coords = vec![
+            (44, Coord { x: 144.96332, y: -37.814 }),
+            (17, Coord { x: 7.44744, y: 46.94809 }),
+            (42, Coord { x: -75.69812, y: 45.41117 }),
+        ];
+
+        let table = CoordTable::create(coords.into_iter(), workdir.path(), file.path())?;
+        assert_eq!(table.len(), 3);
+        assert_eq!(table.get(0), None);
+        assert!(almost_equal(
+            table.get(17).unwrap(),
+            Coord { x: 7.44744, y: 46.94809 }
+        ));
+        assert!(almost_equal(
+            table.get(42).unwrap(),
+            Coord { x: -75.69812, y: 45.41117 }
+        ));
+        assert!(almost_equal(
+            table.get(44).unwrap(),
+            Coord { x: 144.96332, y: -37.814 }
+        ));
+        assert_eq!(table.get(99), None);
+
+        Ok(())
     }
 
     #[test]
