@@ -7,14 +7,13 @@ use crate::{
         id_tagging_schema::is_area,
     },
     tables::{
-        BlobTable, CoordTable, Feature, FeatureToIndex, RecordReader, RecordWriter, RelationMember,
-        StringCounts, StringPool,
+        BlobTable, CoordTable, Feature, FeatureToIndex, GeometryTable, RecordReader, RecordWriter,
+        RelationMember, StringCounts, StringPool,
     },
 };
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
 use geo::{Centroid, Geometry, InterpolateLine, algorithm::line_measures::Haversine};
-use geo_traits::to_geo::ToGeoGeometry;
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use prost::Message;
@@ -29,10 +28,7 @@ use std::{
     },
     thread,
 };
-use wkb::{
-    reader::read_wkb,
-    writer::{write_geometry, write_point},
-};
+use wkb::writer::{write_geometry, write_point};
 
 #[allow(unused)]
 pub struct Assembly<'a> {
@@ -200,7 +196,7 @@ fn assemble_nodes(
 /// The result of [assemble_ways].
 struct AssembledWays<'a> {
     ways: RecordReader,
-    ways_in_relations: BlobTable<'a>,
+    ways_in_relations: GeometryTable<'a>,
 }
 
 fn assemble_ways<'a>(
@@ -215,7 +211,7 @@ fn assemble_ways<'a>(
     if out_path.exists() && ways_in_relations_path.exists() {
         return Ok(AssembledWays {
             ways: RecordReader::open(&out_path)?,
-            ways_in_relations: BlobTable::open(&ways_in_relations_path)?,
+            ways_in_relations: GeometryTable::open(&ways_in_relations_path)?,
         });
     }
 
@@ -231,7 +227,7 @@ fn assemble_ways<'a>(
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(1024);
-        let (wkb_tx, wkb_rx) = sync_channel::<(u64, Vec<u8>)>(1024);
+        let (geometry_tx, geometry_rx) = sync_channel::<(u64, Geometry)>(1024);
         let producer = s.spawn(|| osm.send_way_blobs(blob_tx));
         let consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -286,7 +282,7 @@ fn assemble_ways<'a>(
                         // it to wkb_writer to build a lookup table from way_id -> WKB.
                         write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
                         if is_relation_member {
-                            wkb_tx.send((way.id, feature.geometry_wkb.clone()))?;
+                            geometry_tx.send((way.id, geometry.clone()))?;
                         }
 
                         if is_interesting && assemble_tags(way.tags(), strings, &mut fti) {
@@ -313,11 +309,12 @@ fn assemble_ways<'a>(
             Ok(())
         });
 
-        let wkb_writer =
-            s.spawn(|| BlobTable::create(wkb_rx.into_iter(), workdir, &ways_in_relations_path));
+        let geometry_writer = s.spawn(|| {
+            GeometryTable::create(geometry_rx.into_iter(), workdir, &ways_in_relations_path)
+        });
 
         feature_writer.join().expect("panic in feature_writer")?;
-        wkb_writer.join().expect("panic in wkb_writer")?;
+        geometry_writer.join().expect("panic in geometry_writer")?;
         consumer.join().expect("panic in consumer")?;
         producer.join().expect("panic in producer")?;
         Ok(())
@@ -325,7 +322,7 @@ fn assemble_ways<'a>(
 
     let result = AssembledWays {
         ways: RecordReader::open(&out_path)?,
-        ways_in_relations: BlobTable::open(&ways_in_relations_path)?,
+        ways_in_relations: GeometryTable::open(&ways_in_relations_path)?,
     };
     progress_bar.finish_with_message(format!(
         "{} features, {} geometries",
@@ -340,9 +337,9 @@ struct AssembledLeafRelations<'a> {
     /// Records of FeatureToIndex protos for leaf relations, ready to index.
     leaf_relations: RecordReader,
 
-    /// WKB geometry of leaf relations that are members in super relations.
+    /// Geometry of leaf relations that are members in super relations.
     #[allow(unused)]
-    leaf_relations_geometry: BlobTable<'a>,
+    leaf_relations_geometry: GeometryTable<'a>,
 
     /// A BlobTable of Feature protos for super relations, at this stage without geometry.
     #[allow(unused)]
@@ -366,7 +363,7 @@ fn assemble_leaf_relations<'a>(
     {
         return Ok(AssembledLeafRelations {
             leaf_relations: RecordReader::open(&leaf_relations_path)?,
-            leaf_relations_geometry: BlobTable::open(&leaf_relations_geometry_path)?,
+            leaf_relations_geometry: GeometryTable::open(&leaf_relations_geometry_path)?,
             super_relations: BlobTable::open(&super_relations_path)?,
         });
     }
@@ -380,14 +377,14 @@ fn assemble_leaf_relations<'a>(
         "blobs → features, geometries, super-rels",
     );
 
-    let mut leaf_geometry: Option<BlobTable> = None;
+    let mut leaf_geometry: Option<GeometryTable> = None;
     let mut super_relations: Option<BlobTable> = None;
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
         let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(1024);
-        let (geometry_tx, geometry_rx) = sync_channel::<(u64, Vec<u8>)>(512);
+        let (geometry_tx, geometry_rx) = sync_channel::<(u64, Geometry)>(512);
         let (super_rel_tx, super_rel_rx) = sync_channel::<(u64, Vec<u8>)>(512);
         let producer = s.spawn(|| osm.send_relation_blobs(blob_tx));
 
@@ -439,7 +436,7 @@ fn assemble_leaf_relations<'a>(
                                 &WKB_WRITE_OPTIONS,
                             )?;
                             if is_relation_member {
-                                geometry_tx.send((relation.id, feature.geometry_wkb.clone()))?;
+                                geometry_tx.send((relation.id, geometry.clone()))?;
                             }
                         }
 
@@ -477,7 +474,7 @@ fn assemble_leaf_relations<'a>(
         });
 
         let leaf_geometry_writer = s.spawn(|| {
-            leaf_geometry = Some(BlobTable::create(
+            leaf_geometry = Some(GeometryTable::create(
                 geometry_rx.into_iter(),
                 workdir,
                 &leaf_relations_geometry_path,
@@ -699,8 +696,8 @@ fn lookup_relation_member_geometry<'a>(
     member_type: RelationMemberType,
     id: u64,
     coords: &CoordTable,
-    ways: &BlobTable<'a>,
-    leaf_relations: Option<&BlobTable<'a>>,
+    ways: &GeometryTable<'a>,
+    leaf_relations: Option<&GeometryTable<'a>>,
 ) -> Option<geo::Geometry> {
     match member_type {
         RelationMemberType::Node => {
@@ -710,20 +707,16 @@ fn lookup_relation_member_geometry<'a>(
         }
 
         RelationMemberType::Way => {
-            if let Some(way_wkb) = ways.lookup(id) {
-                let way_geometry =
-                    read_wkb(way_wkb).unwrap_or_else(|_| panic!("invalid WKB for way/{}", id));
-                return Some(way_geometry.to_geometry());
+            if let Some(way_geometry) = ways.lookup(id) {
+                return Some(way_geometry);
             }
         }
 
         RelationMemberType::Relation => {
             if let Some(leaf_relations) = leaf_relations
-                && let Some(rel_wkb) = leaf_relations.lookup(id)
+                && let Some(rel_geometry) = leaf_relations.lookup(id)
             {
-                let rel_geometry =
-                    read_wkb(rel_wkb).unwrap_or_else(|_| panic!("invalid WKB for relation/{}", id));
-                return Some(rel_geometry.to_geometry());
+                return Some(rel_geometry);
             }
         }
     }
