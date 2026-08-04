@@ -8,6 +8,8 @@
 #[allow(unused)]
 mod blob_table;
 mod coord_table;
+#[allow(unused)]
+mod geometry_store;
 mod geometry_table;
 mod graph;
 #[allow(unused)]
@@ -24,6 +26,8 @@ mod features {
 pub use blob_table::BlobTable;
 pub use coord_table::CoordTable;
 pub use features::{Feature, FeatureToIndex, RelationMember};
+#[allow(unused)]
+pub use geometry_store::GeometryStore;
 pub use geometry_table::GeometryTable;
 pub use graph::{Edge, GraphTable};
 #[allow(unused)]
