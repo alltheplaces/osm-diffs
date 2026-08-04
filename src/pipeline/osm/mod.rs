@@ -24,11 +24,10 @@ mod filter;
 #[allow(unused)]
 mod geometry;
 mod id_tagging_schema;
-mod index;
+mod old_assemble;
 mod prune;
 
 use filter::FilteredFeatureStore;
-use index::Index;
 use prune::Prunings;
 
 pub fn import_osm(
@@ -50,7 +49,7 @@ pub fn import_osm(
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
 
     let prunings = Prunings::create(&mut reader, progress, workdir)?;
-    let _index = Index::create(&mut reader, &prunings, progress, workdir)?;
+    let _assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
     if false {
         todo!();
     }
@@ -102,7 +101,7 @@ pub fn import_osm(
     )?;
 
     let feature_store = filter::FilteredFeatureStore::new(nodes, ways, relations);
-    assemble::assemble(&feature_store, progress, workdir, &out_path)?;
+    old_assemble::assemble(&feature_store, progress, workdir, &out_path)?;
 
     Ok((out_path, Box::new(feature_store)))
 }
