@@ -7,7 +7,7 @@ use crate::{
         id_tagging_schema::is_area,
     },
     tables::{
-        BlobTable, Feature, FeatureToIndex, RecordReader, RecordWriter, RelationMember,
+        BlobTable, CoordsMap, Feature, FeatureToIndex, RecordReader, RecordWriter, RelationMember,
         StringCounts, StringPool,
     },
 };
@@ -37,7 +37,9 @@ use wkb::{
 #[allow(unused)]
 pub struct Assembly<'a> {
     pub strings: StringPool<'a>,
+    pub nodes: RecordReader,
     pub ways: RecordReader,
+    pub leaf_relations: RecordReader,
 }
 
 pub fn assemble<'a>(
@@ -47,13 +49,15 @@ pub fn assemble<'a>(
     workdir: &Path,
 ) -> Result<Assembly<'a>> {
     let strings = assemble_strings(&prunings.strings, progress, workdir)?;
-    let _nodes = assemble_nodes(osm, prunings, &strings, progress, workdir)?;
+    let nodes = assemble_nodes(osm, prunings, &strings, progress, workdir)?;
     let ways = assemble_ways(osm, prunings, &strings, progress, workdir)?;
-    let _leaf_relations =
+    let leaf_relations =
         assemble_leaf_relations(osm, prunings, &strings, &ways, progress, workdir)?;
     Ok(Assembly {
         strings,
+        nodes,
         ways: ways.ways,
+        leaf_relations: leaf_relations.leaf_relations,
     })
 }
 
@@ -155,47 +159,14 @@ fn assemble_nodes(
                 for primitive in block.primitives() {
                     if let Primitive::Node(node) = primitive
                         && keep_nodes.contains(node.id)
-                        && let Some(ref info) = node.info
-                        && let Some(version) = info.version
-                        && let Some(changeset) = info.changeset
                     {
-                        let mut fti = FeatureToIndex::default();
-                        let feature = fti.feature.get_or_insert_with(Feature::default);
-                        feature.id = 10 * node.id + 1;
-                        feature.version = version;
-                        feature.changeset = changeset;
-                        if let Some(timestamp) = info.timestamp {
-                            feature.timestamp = timestamp;
-                        }
-
-                        // Handle geometry.
+                        let mut fti = assemble_feature(10 * node.id + 1, &node.info);
                         let point = geo::Point::new(node.lon, node.lat); // x = longitude, y = latitude
-                        write_point(&mut feature.geometry_wkb, &point, &WKB_WRITE_OPTIONS)?;
-                        assemble_geometry(&Geometry::Point(point), &mut fti.s2_cell_id);
-
-                        // Handle tags.
-                        let mut mask = MatchMask::default();
-                        feature.tags.reserve(node.tags.len() * 2);
-                        for (key, value) in node.tags.iter() {
-                            mask.add_tag(key, value);
-                            let key_id = strings.lookup(key).unwrap_or_else(|| {
-                                panic!(
-                                    "OpenStreetMap node/{} tag key not in StringPool: \"{}\"",
-                                    node.id, key
-                                )
-                            });
-                            feature.tags.push(key_id as u32);
-                            let value_id = strings.lookup(value).unwrap_or_else(|| {
-                                panic!(
-                                    "OpenStreetMap node/{} tag value not in StringPool: \"{}\"",
-                                    node.id, value
-                                )
-                            });
-                            feature.tags.push(value_id as u32);
+                        if let Some(feature) = &mut fti.feature {
+                            write_point(&mut feature.geometry_wkb, &point, &WKB_WRITE_OPTIONS)?;
                         }
-
-                        if !mask.is_empty() {
-                            fti.match_mask = mask.0 as u32;
+                        assemble_geometry(&Geometry::Point(point), &mut fti.s2_cell_id);
+                        if assemble_tags(node.tags.iter().cloned(), strings, &mut fti) {
                             feature_tx.send(fti.encode_to_vec())?;
                         }
                     }
@@ -227,7 +198,6 @@ fn assemble_nodes(
 }
 
 /// The result of [assemble_ways].
-#[allow(unused)]
 struct AssembledWays<'a> {
     ways: RecordReader,
     ways_in_relations: BlobTable<'a>,
@@ -268,11 +238,7 @@ fn assemble_ways<'a>(
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
-                    if let Primitive::Way(way) = primitive
-                        && let Some(ref info) = way.info
-                        && let Some(version) = info.version
-                        && let Some(changeset) = info.changeset
-                    {
+                    if let Primitive::Way(way) = primitive {
                         let feature_id = 10 * way.id + 2;
                         let is_interesting = prunings.keep_ways.contains(way.id);
                         let is_relation_member = prunings.relation_members.contains(feature_id);
@@ -280,14 +246,10 @@ fn assemble_ways<'a>(
                             continue;
                         }
 
-                        let mut fti = FeatureToIndex::default();
-                        let feature = fti.feature.get_or_insert_with(Feature::default);
-                        feature.id = feature_id;
-                        feature.version = version;
-                        feature.changeset = changeset;
-                        if let Some(timestamp) = info.timestamp {
-                            feature.timestamp = timestamp;
-                        }
+                        let mut fti = assemble_feature(feature_id, &way.info);
+                        let Some(feature) = &mut fti.feature else {
+                            panic!("missing fti.feature");
+                        };
 
                         // Handle way members, look up their coordinates.
                         let way_members_count = way.refs().count();
@@ -327,36 +289,8 @@ fn assemble_ways<'a>(
                             wkb_tx.send((way.id, feature.geometry_wkb.clone()))?;
                         }
 
-                        // If this is just a relation member, but not interesting for conflation,
-                        // we can skip the rest and continue with the next OpenStreetMap feature.
-                        if !is_interesting {
-                            continue;
-                        }
-                        assemble_geometry(&geometry, &mut fti.s2_cell_id);
-
-                        // Handle tags.
-                        let mut mask = MatchMask::default();
-                        feature.tags.reserve(way.tags().count() * 2);
-                        for (key, value) in way.tags() {
-                            mask.add_tag(key, value);
-                            let key_id = strings.lookup(key).unwrap_or_else(|| {
-                                panic!(
-                                    "OpenStreetMap way/{} tag key not in StringPool: \"{}\"",
-                                    way.id, key
-                                )
-                            });
-                            feature.tags.push(key_id as u32);
-                            let value_id = strings.lookup(value).unwrap_or_else(|| {
-                                panic!(
-                                    "OpenStreetMap way/{} tag value not in StringPool: \"{}\"",
-                                    way.id, value
-                                )
-                            });
-                            feature.tags.push(value_id as u32);
-                        }
-
-                        if !mask.is_empty() {
-                            fti.match_mask = mask.0 as u32;
+                        if is_interesting && assemble_tags(way.tags(), strings, &mut fti) {
+                            assemble_geometry(&geometry, &mut fti.s2_cell_id);
                             feature_tx.send(fti.encode_to_vec())?;
                         }
                     }
@@ -402,15 +336,16 @@ fn assemble_ways<'a>(
 }
 
 /// The result of [assemble_leaf_relations].
-#[allow(unused)]
 struct AssembledLeafRelations<'a> {
     /// Records of FeatureToIndex protos for leaf relations, ready to index.
     leaf_relations: RecordReader,
 
     /// WKB geometry of leaf relations that are members in super relations.
+    #[allow(unused)]
     leaf_relations_geometry: BlobTable<'a>,
 
     /// A BlobTable of Feature protos for super relations, at this stage without geometry.
+    #[allow(unused)]
     super_relations: BlobTable<'a>,
 }
 
@@ -436,6 +371,7 @@ fn assemble_leaf_relations<'a>(
         });
     }
 
+    let coords = &prunings.coords;
     let leaf_relations_count = AtomicU64::new(0);
     let progress_bar = make_progress_bar(
         progress,
@@ -460,11 +396,7 @@ fn assemble_leaf_relations<'a>(
                 let data = blob.into_data(); // decompress
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
-                    if let Primitive::Relation(relation) = primitive
-                        && let Some(ref info) = relation.info
-                        && let Some(version) = info.version
-                        && let Some(changeset) = info.changeset
-                    {
+                    if let Primitive::Relation(relation) = primitive {
                         let feature_id = 10 * relation.id + 3;
                         let is_interesting = prunings.keep_relations.contains(relation.id);
                         let is_relation_member = prunings.relation_members.contains(feature_id);
@@ -472,58 +404,13 @@ fn assemble_leaf_relations<'a>(
                             continue;
                         }
 
-                        let mut fti = FeatureToIndex::default();
-                        let feature = fti.feature.get_or_insert_with(Feature::default);
-                        feature.id = feature_id;
-                        feature.version = version;
-                        feature.changeset = changeset;
-                        if let Some(timestamp) = info.timestamp {
-                            feature.timestamp = timestamp;
-                        }
+                        let mut fti = assemble_feature(feature_id, &relation.info);
+                        let got_tags = assemble_tags(relation.tags(), strings, &mut fti);
+                        assemble_relation_members(&relation, strings, &mut fti);
 
-                        // Handle tags.
-                        let mut mask = MatchMask::default();
-                        feature.tags.reserve(relation.tags().count() * 2);
-                        for (key, value) in relation.tags() {
-                            mask.add_tag(key, value);
-                            let key_id = strings.lookup(key).unwrap_or_else(|| {
-                                panic!(
-                                    "OpenStreetMap relation/{} tag key not in StringPool: \"{}\"",
-                                    relation.id, key
-                                )
-                            });
-                            feature.tags.push(key_id as u32);
-                            let value_id = strings.lookup(value).unwrap_or_else(|| {
-                                panic!(
-                                    "OpenStreetMap relation/{} tag value not in StringPool: \"{}\"",
-                                    relation.id, value
-                                )
-                            });
-                            feature.tags.push(value_id as u32);
-                        }
-
-                        // Handle relation members.
-                        feature.relation_members.reserve(relation.members().count());
-                        for (role, id, member_type) in relation.members() {
-                            let role_id = strings.lookup(role).unwrap_or_else(|| {
-                                panic!(
-                                    "OpenStreetMap relation/{} has a member \
-                                     whose role is not in StringPool: \"{}\"",
-                                    relation.id, role
-                                );
-                            });
-                            let member = RelationMember {
-                                role: role_id as u32,
-                                id: match member_type {
-                                    RelationMemberType::Node => id * 10 + 1,
-                                    RelationMemberType::Way => id * 10 + 2,
-                                    RelationMemberType::Relation => id * 10 + 3,
-                                },
-                            };
-                            feature.relation_members.push(member);
-                        }
-
-                        if is_super_relation(&relation) {
+                        if is_super_relation(&relation)
+                            && let Some(feature) = &fti.feature
+                        {
                             super_rel_tx.send((relation.id, feature.encode_to_vec()))?;
                             continue;
                         }
@@ -531,49 +418,33 @@ fn assemble_leaf_relations<'a>(
                         // Build geometry.
                         let mut geom_builder = GeometryBuilder::new();
                         for (_role, id, member_type) in relation.members() {
-                            match member_type {
-                                RelationMemberType::Node => {
-                                    if let Some(c) = prunings.coords.get(id) {
-                                        geom_builder.add(&Geometry::Point(geo::Point::from(c)));
-                                    }
-                                }
-                                RelationMemberType::Way => {
-                                    if let Some(way_wkb) = ways.ways_in_relations.lookup(id) {
-                                        let way_geometry = read_wkb(way_wkb).unwrap_or_else(|_| {
-                                            panic!(
-                                                "ways_in_relations contains invalid WKB for way/{}",
-                                                id
-                                            )
-                                        });
-                                        geom_builder.add(&way_geometry.to_geometry());
-                                    }
-                                }
-                                RelationMemberType::Relation => panic!(
-                                    "found relation/{} as member of relation/{} in first pass \
-                                     of assemble_relations(), but super-relations should have been \
-                                     filtered out",
-                                    id, relation.id
-                                ),
+                            if let Some(g) = lookup_relation_member_geometry(
+                                member_type,
+                                id,
+                                coords,
+                                &ways.ways_in_relations,
+                                /* leaf_relations_wkb */ None,
+                            ) {
+                                geom_builder.add(&g);
                             }
                         }
                         let Some(geometry) = geom_builder.finish() else {
                             continue;
                         };
-                        write_geometry(&mut feature.geometry_wkb, &geometry, &WKB_WRITE_OPTIONS)?;
-                        if is_relation_member {
-                            geometry_tx.send((relation.id, feature.geometry_wkb.clone()))?;
+
+                        if let Some(feature) = &mut fti.feature {
+                            write_geometry(
+                                &mut feature.geometry_wkb,
+                                &geometry,
+                                &WKB_WRITE_OPTIONS,
+                            )?;
+                            if is_relation_member {
+                                geometry_tx.send((relation.id, feature.geometry_wkb.clone()))?;
+                            }
                         }
 
-                        // If this relation is needed for a super-relation, but in itself is not
-                        // interesting for our conflation pipeline, we can skip the rest and continue
-                        // with the next OpenStreetMap feature.
-                        if !is_interesting {
-                            continue;
-                        }
-                        assemble_geometry(&geometry, &mut fti.s2_cell_id);
-
-                        if !mask.is_empty() {
-                            fti.match_mask = mask.0 as u32;
+                        if is_interesting && got_tags {
+                            assemble_geometry(&geometry, &mut fti.s2_cell_id);
                             feature_tx.send(fti.encode_to_vec())?;
                         }
                     }
@@ -642,6 +513,24 @@ fn assemble_leaf_relations<'a>(
         leaf_relations_geometry,
         super_relations,
     })
+}
+
+fn assemble_feature(id: u64, info: &Option<osm_pbf_iter::info::Info<'_>>) -> FeatureToIndex {
+    let mut fti = FeatureToIndex::default();
+    let feature = fti.feature.get_or_insert_with(Feature::default);
+    feature.id = id;
+    if let Some(info) = info {
+        if let Some(version) = info.version {
+            feature.version = version;
+        }
+        if let Some(changeset) = info.changeset {
+            feature.changeset = changeset;
+        }
+        if let Some(timestamp) = info.timestamp {
+            feature.timestamp = timestamp;
+        }
+    }
+    fti
 }
 
 // TODO: Replace this by proper s2 cell coverage once polygons and polylines
@@ -718,6 +607,52 @@ fn s2_cell_id_for_point(p: &geo::Point) -> CellID {
     s2::cellid::CellID::from(s2_lat_lng)
 }
 
+/// Helper for [assemble_tags].
+fn debug_id_str(id: u64) -> String {
+    match id % 10 {
+        1 => format!("node/{}", id / 10),
+        2 => format!("way/{}", id / 10),
+        3 => format!("relation/{}", id / 10),
+        _ => format!("unknown-feature-type/{}", id),
+    }
+}
+
+fn assemble_tags<'a, I>(tags: I, strings: &StringPool, fti: &mut FeatureToIndex) -> bool
+where
+    I: Iterator<Item = (&'a str, &'a str)> + Clone,
+{
+    let Some(feature) = &mut fti.feature else {
+        panic!("missing fti.feature");
+    };
+    let mut mask = MatchMask::default();
+    feature.tags.reserve(tags.clone().count() * 2);
+    for (key, value) in tags {
+        mask.add_tag(key, value);
+        let key_id = strings.lookup(key).unwrap_or_else(|| {
+            panic!(
+                "tag \"{}\" of {} not in StringPool",
+                key,
+                debug_id_str(feature.id),
+            )
+        });
+        feature.tags.push(key_id as u32);
+
+        let value_id = strings.lookup(value).unwrap_or_else(|| {
+            panic!(
+                "value \"{}\" for tag \"{}\" of {} not in StringPool",
+                value,
+                key,
+                debug_id_str(feature.id),
+            )
+        });
+
+        feature.tags.push(value_id as u32);
+    }
+
+    fti.match_mask = mask.0 as u32;
+    !mask.is_empty()
+}
+
 fn is_super_relation(rel: &osm_pbf_iter::Relation<'_>) -> bool {
     for (_role, _id, member_type) in rel.members() {
         if member_type == RelationMemberType::Relation {
@@ -725,4 +660,73 @@ fn is_super_relation(rel: &osm_pbf_iter::Relation<'_>) -> bool {
         }
     }
     false
+}
+
+fn member_feature_id(member_type: RelationMemberType, id: u64) -> u64 {
+    match member_type {
+        RelationMemberType::Node => id * 10 + 1,
+        RelationMemberType::Way => id * 10 + 2,
+        RelationMemberType::Relation => id * 10 + 3,
+    }
+}
+
+fn assemble_relation_members(
+    rel: &osm_pbf_iter::Relation<'_>,
+    strings: &StringPool,
+    fti: &mut FeatureToIndex,
+) {
+    let Some(feature) = &mut fti.feature else {
+        panic!("missing fti.feature");
+    };
+    feature.relation_members.reserve(rel.members().count());
+    for (role, id, member_type) in rel.members() {
+        let role_id = strings.lookup(role).unwrap_or_else(|| {
+            panic!(
+                "OpenStreetMap relation/{} has a member \
+                 whose role \"{}\" is not in StringPool",
+                rel.id, role
+            );
+        });
+        let member = RelationMember {
+            role: role_id as u32,
+            id: member_feature_id(member_type, id),
+        };
+        feature.relation_members.push(member);
+    }
+}
+
+fn lookup_relation_member_geometry<'a>(
+    member_type: RelationMemberType,
+    id: u64,
+    coords: &CoordsMap,
+    ways: &BlobTable<'a>,
+    leaf_relations: Option<&BlobTable<'a>>,
+) -> Option<geo::Geometry> {
+    match member_type {
+        RelationMemberType::Node => {
+            if let Some(c) = coords.get(id) {
+                return Some(Geometry::Point(geo::Point::from(c)));
+            }
+        }
+
+        RelationMemberType::Way => {
+            if let Some(way_wkb) = ways.lookup(id) {
+                let way_geometry =
+                    read_wkb(way_wkb).unwrap_or_else(|_| panic!("invalid WKB for way/{}", id));
+                return Some(way_geometry.to_geometry());
+            }
+        }
+
+        RelationMemberType::Relation => {
+            if let Some(leaf_relations) = leaf_relations
+                && let Some(rel_wkb) = leaf_relations.lookup(id)
+            {
+                let rel_geometry =
+                    read_wkb(rel_wkb).unwrap_or_else(|_| panic!("invalid WKB for relation/{}", id));
+                return Some(rel_geometry.to_geometry());
+            }
+        }
+    }
+
+    None
 }
