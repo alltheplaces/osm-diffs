@@ -153,7 +153,6 @@ impl<'a> GraphTable<'a> {
     /// Returns the number of distinct nodes in the graph, i.e. every id
     /// that appears as a child or a parent of at least one edge, counted
     /// once.
-    #[allow(unused)]
     pub fn node_count(&self) -> usize {
         // `parents` is not sorted, so there's no way around collecting its
         // distinct values into a set to count them; `remaining` in `nodes`
@@ -213,7 +212,6 @@ impl<'a> GraphTable<'a> {
     /// numerically smallest node first; nodes reachable only through a
     /// cycle are therefore yielded in an order that does not necessarily
     /// put every child before its parent.
-    #[allow(unused)]
     pub fn nodes(&'a self) -> impl Iterator<Item = u64> + 'a {
         // `remaining[n]` counts how many of `n`'s children have not been
         // yielded yet; `n` becomes ready to yield once this reaches 0.

@@ -417,8 +417,11 @@ fn assemble_leaf_relations<'a>(
                             continue;
                         }
 
+                        let members = relation
+                            .members()
+                            .map(|(_role, member_id, member_type)| (member_type, member_id));
                         let Some(geometry) = assemble_relation_geometry(
-                            &relation,
+                            members,
                             coords,
                             &ways.ways_in_relations,
                             /* leaf_relations */ None,
@@ -513,7 +516,7 @@ fn assemble_leaf_relations<'a>(
 
 fn assemble_super_relations(
     prunings: &Prunings,
-    _ways: &AssembledWays,
+    ways: &AssembledWays,
     leaf_relations: &AssembledLeafRelations,
     progress: &MultiProgress,
     workdir: &Path,
@@ -523,33 +526,74 @@ fn assemble_super_relations(
         return RecordReader::open(&super_relations_path);
     }
 
-    // AssembledLeafRelations contains super-relations in our format,
-    // but they don't have any geometry yet.
-    let super_rels = &leaf_relations.super_relations;
+    let coords = &prunings.coords;
+    let ways_geometry = &ways.ways_in_relations;
+    let leaf_relations_geometry = &leaf_relations.leaf_relations_geometry;
+    let relation_graph = &prunings.relation_graph;
+
+    // We already extracted super-relations in [assemble_leaf_relations],
+    // but at this stage we don’t have any geometry yet.
+    let super_relations_without_geometry = &leaf_relations.super_relations;
+
     let progress_bar = make_progress_bar(
         progress,
         "osm.assemble.super-relations",
-        super_rels.len() as u64,
+        relation_graph.node_count() as u64,
         "relations → relations",
     );
     let geometry_store_path = workdir.join("osm-assemble.super-relations.geometry");
-    let _geometry_store = GeometryStore::create(&geometry_store_path)?;
+    let mut geometry_store = GeometryStore::create(&geometry_store_path)?;
 
     thread::scope(|s| {
         let progress_bar = &progress_bar;
         let (feature_tx, feature_rx) = sync_channel::<Vec<u8>>(128);
 
         let producer = s.spawn(move || {
-            for (rel_id, blob) in super_rels.iter() {
-                let fti = FeatureToIndex::decode(blob)?;
-
-                // TODO: Assemble relation geometry.
-                if prunings.keep_relations.contains(rel_id / 10) {
-                    // assemble_geometry(&geometry, &mut fti.s2_cell_id);
-                    feature_tx.send(fti.encode_to_vec())?;
-                }
+            // We traverse the relation graph in breath-first order, children to parents.
+            // Therefore, by the time we visit a parent, we've alread seen all its children,
+            // and could insert the children's geometry into geometry_store.
+            for rel_id in relation_graph.nodes() {
                 progress_bar.inc(1);
+                let Some(blob) = super_relations_without_geometry.lookup(rel_id) else {
+                    // For the vast majority of relations in OpenStreetMap, which are
+                    // *not* super-relations, `super_relations_without_geometry.lookup()`
+                    // returns None, and we continue with the next node in the relation
+                    // graph.
+                    continue;
+                };
+
+                let fti = FeatureToIndex::decode(blob)?;
+                let rel_geometry = {
+                    let feature = fti.feature.expect("feature");
+                    let rel_members = feature
+                        .relation_members
+                        .iter()
+                        .map(|m| feature_to_osm_id(m.id));
+                    assemble_relation_geometry(
+                        rel_members,
+                        coords,
+                        ways_geometry,
+                        Some(leaf_relations_geometry),
+                        Some(&geometry_store),
+                    )?
+                };
+
+                let Some(rel_geometry) = rel_geometry else {
+                    // TODO: Write to a proper log file, perhaps via rust logging framework.
+                    println!(
+                        "assemble_super_relations could not build geometry for relation/{}",
+                        rel_id
+                    );
+                    continue;
+                };
+
+                // Store this relation’s geometry, so we can access it when traversing
+                // the parents.
+                geometry_store.insert(rel_id, &rel_geometry)?;
+
+                // TODO: Modify fti: Store rel_geometry, s2 cells, s2 cell of centroid (for sort key).
             }
+            drop(feature_tx);
             Ok(())
         });
 
@@ -730,6 +774,16 @@ fn member_feature_id(member_type: RelationMemberType, id: u64) -> u64 {
     }
 }
 
+fn feature_to_osm_id(fid: u64) -> (RelationMemberType, u64) {
+    let osm_id = fid / 10;
+    match fid % 10 {
+        1 => (RelationMemberType::Node, osm_id),
+        2 => (RelationMemberType::Way, osm_id),
+        3 => (RelationMemberType::Relation, osm_id),
+        _ => panic!("unexpected osm_type for feature_id={}", fid),
+    }
+}
+
 fn assemble_relation_members(
     rel: &osm_pbf_iter::Relation<'_>,
     strings: &StringPool,
@@ -756,21 +810,21 @@ fn assemble_relation_members(
 }
 
 fn assemble_relation_geometry<'a>(
-    rel: &osm_pbf_iter::Relation<'_>,
+    members: impl Iterator<Item = (RelationMemberType, u64)>,
     coords: &CoordTable,
     ways: &GeometryTable<'a>,
-    leaf_relations: Option<&GeometryTable<'a>>,
-    super_relations: Option<&GeometryStore>,
+    leaf_relations_geometry: Option<&GeometryTable<'a>>,
+    super_relations_geometry: Option<&GeometryStore>,
 ) -> Result<Option<Geometry>> {
     let mut geom_builder = GeometryBuilder::new();
-    for (_role, id, member_type) in rel.members() {
+    for (member_type, id) in members {
         if let Some(g) = lookup_relation_member_geometry(
             member_type,
             id,
             coords,
             ways,
-            leaf_relations,
-            super_relations,
+            leaf_relations_geometry,
+            super_relations_geometry,
         )? {
             geom_builder.add(&g);
         }
