@@ -346,8 +346,10 @@ struct AssembledLeafRelations<'a> {
     #[allow(unused)]
     leaf_relations_geometry: GeometryTable<'a>,
 
-    /// A BlobTable of Feature protos for super relations, at this stage without geometry,
-    /// keyed by osm_id of the relation.
+    /// FeatureToIndex protos for super relations, *not* yet ready
+    /// to index because at this stage of the pipeline they do not
+    /// have geometry (or anything derived from geometry, such as
+    /// s2 cell coverage). Keyed by osm_id of the relation.
     super_relations: BlobTable<'a>,
 }
 
@@ -410,10 +412,8 @@ fn assemble_leaf_relations<'a>(
                         let got_tags = assemble_tags(relation.tags(), strings, &mut fti);
                         assemble_relation_members(&relation, strings, &mut fti);
 
-                        if is_super_relation(&relation)
-                            && let Some(feature) = &fti.feature
-                        {
-                            super_rel_tx.send((relation.id, feature.encode_to_vec()))?;
+                        if is_super_relation(&relation) {
+                            super_rel_tx.send((relation.id, fti.encode_to_vec()))?;
                             continue;
                         }
 
@@ -541,10 +541,7 @@ fn assemble_super_relations(
 
         let producer = s.spawn(move || {
             for (rel_id, blob) in super_rels.iter() {
-                let fti = FeatureToIndex {
-                    feature: Some(Feature::decode(blob)?),
-                    ..Default::default()
-                };
+                let fti = FeatureToIndex::decode(blob)?;
 
                 // TODO: Assemble relation geometry.
                 if prunings.keep_relations.contains(rel_id / 10) {
