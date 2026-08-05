@@ -145,6 +145,12 @@ impl<'a> GraphTable<'a> {
         Ok(self.file.metadata()?.modified()?)
     }
 
+    /// Returns the number of `(child, parent)` edges in the graph.
+    #[allow(unused)]
+    pub fn edge_count(&self) -> usize {
+        self.children.len()
+    }
+
     /// Returns an iterator over the reflexive transitive closure of the
     /// child-parent relation, starting at `start`. Each node is yielded at
     /// most once, so the iterator terminates even if the graph is cyclic.
@@ -415,7 +421,7 @@ mod tests {
             .map(|(child, parent)| Edge { child, parent });
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, &workdir.path(), &path)?;
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
         assert_eq!(graph.modified()?, std::fs::metadata(&path)?.modified()?);
         assert_eq!(
             graph.ancestors(1).collect::<Vec<u64>>(),
@@ -445,7 +451,7 @@ mod tests {
             .map(|(child, parent)| Edge { child, parent });
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, &workdir.path(), &path)?;
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
         assert_eq!(graph.nodes().collect::<Vec<u64>>(), &[1, 2, 3, 4]);
         Ok(())
     }
@@ -456,7 +462,7 @@ mod tests {
         let edges_iter = std::iter::empty::<Edge>();
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, &workdir.path(), &path)?;
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
         assert_eq!(graph.nodes().collect::<Vec<u64>>(), Vec::<u64>::new());
         Ok(())
     }
@@ -496,6 +502,29 @@ mod tests {
         let path = workdir.path().join("too-short");
         std::fs::write(&path, FILE_SIGNATURE)?;
         assert!(GraphTable::open(&path).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn test_edge_count() -> Result<()> {
+        let edges: Vec<(u64, u64)> = vec![(1, 2), (2, 3), (2, 4)];
+        let edges_iter = edges
+            .into_iter()
+            .map(|(child, parent)| Edge { child, parent });
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        assert_eq!(graph.edge_count(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_edge_count_empty() -> Result<()> {
+        let edges_iter = std::iter::empty::<Edge>();
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        assert_eq!(graph.edge_count(), 0);
         Ok(())
     }
 
