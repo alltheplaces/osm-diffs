@@ -150,6 +150,40 @@ impl<'a> GraphTable<'a> {
         self.children.len()
     }
 
+    /// Returns the number of distinct nodes in the graph, i.e. every id
+    /// that appears as a child or a parent of at least one edge, counted
+    /// once.
+    #[allow(unused)]
+    pub fn node_count(&self) -> usize {
+        // `parents` is not sorted, so there's no way around collecting its
+        // distinct values into a set to count them; `remaining` in `nodes`
+        // above relies on the same assumption that this stays small.
+        let mut parents: HashSet<u64> = HashSet::new();
+        for idx in 0..self.parents.len() {
+            parents.insert(self.parent_at(idx));
+        }
+
+        // `children`, in contrast, is sorted, so distinct values form
+        // contiguous runs: counting the runs gives the distinct count in
+        // one O(edge_count) pass, without building a set for it. Values
+        // that are both a child and a parent must only be counted once,
+        // so drop them from `parents` as they're encountered here.
+        let mut distinct_children = 0usize;
+        let mut prev = None;
+        for idx in 0..self.children.len() {
+            let child = self.child_at(idx);
+            if prev != Some(child) {
+                distinct_children += 1;
+                parents.remove(&child);
+                prev = Some(child);
+            }
+        }
+
+        // What's left in `parents` are nodes that never appear as a
+        // child, i.e. roots of the graph.
+        distinct_children + parents.len()
+    }
+
     /// Returns an iterator over the reflexive transitive closure of the
     /// child-parent relation, starting at `start`. Each node is yielded at
     /// most once, so the iterator terminates even if the graph is cyclic.
@@ -524,6 +558,55 @@ mod tests {
         let path = workdir.path().join("testgraph");
         let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
         assert_eq!(graph.edge_count(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_node_count() -> Result<()> {
+        let edges: Vec<(u64, u64)> = vec![
+            (1, 2),
+            (2, 3),
+            (2, 4),
+            (4, 5),
+            (4, 6),
+            // Cycle: 21 -> 22 -> 23 -> 21.
+            (21, 22),
+            (22, 23),
+            (23, 21),
+        ];
+        let edges_iter = edges
+            .into_iter()
+            .map(|(child, parent)| Edge { child, parent });
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        // Nodes 1..6 and 21..23, nine in total.
+        assert_eq!(graph.node_count(), 9);
+        Ok(())
+    }
+
+    #[test]
+    fn test_node_count_empty() -> Result<()> {
+        let edges_iter = std::iter::empty::<Edge>();
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        assert_eq!(graph.node_count(), 0);
+        Ok(())
+    }
+
+    /// A node that is both a child (of one edge) and a parent (of another)
+    /// must be counted only once.
+    #[test]
+    fn test_node_count_shared_node() -> Result<()> {
+        let edges: Vec<(u64, u64)> = vec![(1, 2), (2, 3)];
+        let edges_iter = edges
+            .into_iter()
+            .map(|(child, parent)| Edge { child, parent });
+        let workdir = TempDir::new()?;
+        let path = workdir.path().join("testgraph");
+        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        assert_eq!(graph.node_count(), 3);
         Ok(())
     }
 
