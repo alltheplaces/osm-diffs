@@ -146,7 +146,6 @@ impl<'a> GraphTable<'a> {
     }
 
     /// Returns the number of `(child, parent)` edges in the graph.
-    #[allow(unused)]
     pub fn edge_count(&self) -> usize {
         self.children.len()
     }

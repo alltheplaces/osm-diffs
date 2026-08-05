@@ -25,6 +25,7 @@ pub struct Prunings<'a> {
     pub keep_ways: U64Set,
     pub keep_relations: U64Set,
     pub relation_members: U64Set,
+    pub relation_graph: GraphTable<'a>,
 }
 
 /// Output of [prune_relations], the first  step of pruning.
@@ -51,6 +52,12 @@ struct PruneRelationsOutput<'a> {
     /// As of July 2026, this set contains 5.8 million IDs, which is
     /// 0.05% of the 11.9 billion features in OpenStreetMap.
     relation_members: U64Set, // 2413085 nodes, 3368795 ways, 47213 relations
+
+    /// The containment graph between OpenStreetMap relations: Which “child”
+    /// relation is itself a member of another, “parent” or
+    /// [“super“](https://wiki.openstreetmap.org/wiki/Super-relation),
+    /// relation.
+    relation_graph: GraphTable<'a>,
 
     /// The strings that appear the ways and relations we want to keep, and how
     /// often each string gets used. Later down the pipeline, we need these
@@ -151,6 +158,7 @@ impl<'a> Prunings<'a> {
             keep_ways: ways_output.keep_ways,
             keep_relations: rels_output.keep_relations,
             relation_members: rels_output.relation_members,
+            relation_graph: rels_output.relation_graph,
         })
     }
 
@@ -176,17 +184,6 @@ fn prune_relations<'a>(
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<PruneRelationsOutput<'a>> {
-    let rel_path = PathBuf::from(workdir).join("osm-prune.keep-relations");
-    let rel_members_path = PathBuf::from(workdir).join("osm-prune.relation-members");
-    let strings_path = PathBuf::from(workdir).join("osm-prune-rels.strings");
-    if rel_path.exists() && rel_members_path.exists() && strings_path.exists() {
-        return Ok(PruneRelationsOutput {
-            keep_relations: U64Set::open(&rel_path)?,
-            relation_members: U64Set::open(&rel_members_path)?,
-            strings: StringCounts::open(&strings_path)?,
-        });
-    }
-
     let progress_bar = make_progress_bar(
         progress,
         "osm.prune.rels  ",
@@ -194,29 +191,22 @@ fn prune_relations<'a>(
         "blobs",
     );
 
-    // First pass.
-    let (relations, graph) = prune_relations_pass_1(reader, &progress_bar, workdir, &rel_path)?;
-
-    // Second pass.
-    let (rel_members, strings) = prune_relations_pass_2(
-        reader,
-        &relations,
-        &graph,
-        &progress_bar,
-        workdir,
-        &rel_members_path,
-    )?;
+    let (relations, rel_graph) = prune_relations_pass_1(reader, &progress_bar, workdir)?;
+    let (rel_members, strings) =
+        prune_relations_pass_2(reader, &relations, &rel_graph, &progress_bar, workdir)?;
 
     progress_bar.finish_with_message(format!(
-        "blobs → {} relations with {} members, {} strings",
+        "blobs → {} relations with {} members, {} graph edges, {} strings",
         relations.len(),
         rel_members.len(),
+        rel_graph.edge_count(),
         strings.len(),
     ));
 
     Ok(PruneRelationsOutput {
         keep_relations: relations,
         relation_members: rel_members,
+        relation_graph: rel_graph,
         strings,
     })
 }
@@ -226,11 +216,11 @@ fn prune_relations_pass_1<'a>(
     reader: &mut BlobReader<File>,
     progress_bar: &ProgressBar,
     workdir: &Path,
-    keep_relations_path: &Path,
 ) -> Result<(U64Set, GraphTable<'a>)> {
-    let relation_graph_path = PathBuf::from(workdir).join("osm-prune.relation-graph");
+    let keep_relations_path = workdir.join("osm-prune.keep-relations");
+    let relation_graph_path = workdir.join("osm-prune.relation-graph");
     if keep_relations_path.exists() && relation_graph_path.exists() {
-        let keep_relations = U64Set::open(keep_relations_path)?;
+        let keep_relations = U64Set::open(&keep_relations_path)?;
         let relations_graph = GraphTable::open(&relation_graph_path)?;
         return Ok((keep_relations, relations_graph));
     }
@@ -240,8 +230,8 @@ fn prune_relations_pass_1<'a>(
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
-        let (edge_tx, edge_rx) = sync_channel::<Edge>(64 * 1024);
+        let (keep_tx, keep_rx) = sync_channel::<u64>(1024);
+        let (edge_tx, edge_rx) = sync_channel::<Edge>(1024);
         let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
         let blob_consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -274,7 +264,7 @@ fn prune_relations_pass_1<'a>(
             })
         });
         let keep_writer =
-            s.spawn(|| U64Set::create(keep_rx.into_iter(), workdir, keep_relations_path));
+            s.spawn(|| U64Set::create(keep_rx.into_iter(), workdir, &keep_relations_path));
         let graph_writer = s.spawn(|| {
             relations_graph = Some(GraphTable::create(
                 edge_rx.into_iter(),
@@ -290,7 +280,7 @@ fn prune_relations_pass_1<'a>(
         Ok(())
     })?;
 
-    let keep_relations = U64Set::open(keep_relations_path)?;
+    let keep_relations = U64Set::open(&keep_relations_path)?;
     Ok((keep_relations, relations_graph.expect("graph")))
 }
 
@@ -301,11 +291,11 @@ fn prune_relations_pass_2<'a>(
     graph: &GraphTable<'_>,
     progress_bar: &ProgressBar,
     workdir: &Path,
-    out: &Path,
 ) -> Result<(U64Set, StringCounts<'a>)> {
+    let rel_members_path = workdir.join("osm-prune.relation-members");
     let strings_path = workdir.join("osm-prune-rels.strings");
-    if out.exists() && strings_path.exists() {
-        let rel_members = U64Set::open(out)?;
+    if rel_members_path.exists() && strings_path.exists() {
+        let rel_members = U64Set::open(&rel_members_path)?;
         let strings = StringCounts::open(&strings_path)?;
         return Ok((rel_members, strings));
     }
@@ -315,8 +305,8 @@ fn prune_relations_pass_2<'a>(
         let progress_bar = &progress_bar;
         let num_workers = usize::from(thread::available_parallelism()?);
         let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let (strings_tx, strings_rx) = sync_channel::<(String, u64)>(32 * 1024);
-        let (keep_tx, keep_rx) = sync_channel::<u64>(64 * 1024);
+        let (strings_tx, strings_rx) = sync_channel::<(String, u64)>(1024);
+        let (keep_tx, keep_rx) = sync_channel::<u64>(1024);
         let blob_producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
         let blob_consumer = s.spawn(move || {
             blob_rx.into_iter().par_bridge().try_for_each(|blob| {
@@ -347,7 +337,11 @@ fn prune_relations_pass_2<'a>(
         });
 
         let keep_writer = s.spawn(|| {
-            rel_members = Some(U64Set::create(keep_rx.into_iter(), workdir, out)?);
+            rel_members = Some(U64Set::create(
+                keep_rx.into_iter(),
+                workdir,
+                &rel_members_path,
+            )?);
             Ok(())
         });
 
