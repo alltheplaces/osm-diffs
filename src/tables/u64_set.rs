@@ -2,20 +2,21 @@
 //!
 //! `U64Set` is used in the pipeline to represent large sets of identifiers
 //! that may not entirely fit into the available memory. For example, the
-//! set of all OpenStreetMap nodes that are geographically near an
-//! AllThePlaces feature.
+//! set of all OpenStreetMap nodes that are members of ways whose tags
+//! indicate potential conflation candidates.
 //!
 //! Containment test ([U64Set::contains]) is currently implemented as a
-//! regular binary search. If performance ever becomes an issue, consider
-//! Cache-Sensitive Skip Lists, but this would make the file format
-//! slightly more complicated.
+//! regular binary search. To make it faster, we could use hashing or
+//! Cache-Sensitive Skip Lists. However, this would complicate the code,
+//! so let’s keep it simple as long as we don’t have an actual performance
+//! problem.
 //!
 //! # File format
 //!
 //! ```text
 //! byte 0..8:  magic "u64set_0"
 //! byte 8..16: entry count, u64 little-endian
-//! byte 16..:  the set's elements, sorted ascending, deduplicated, u64
+//! byte 16..:  the set’s elements, sorted ascending, deduplicated, u64
 //!             little-endian each
 //! ```
 //!
