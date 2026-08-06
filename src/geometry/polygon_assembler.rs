@@ -174,7 +174,7 @@ impl PolygonAssembler {
     }
 }
 
-fn polygon_coord_count(p: &Polygon<f64>) -> usize {
+pub(super) fn polygon_coord_count(p: &Polygon<f64>) -> usize {
     p.exterior().0.len() + p.interiors().iter().map(|r| r.0.len()).sum::<usize>()
 }
 
@@ -184,7 +184,11 @@ fn polygon_coord_count(p: &Polygon<f64>) -> usize {
 /// nothing can shrink further. Mirrors [`PolygonAssembler::compact`], but
 /// runs on whole `Polygon`s (exterior and interiors together) so it can't
 /// introduce a self-intersection between a polygon and its own holes.
-fn compact_polygons(polygons: &mut [Polygon<f64>], max_coordinates: usize, epsilon: &mut f64) {
+pub(super) fn compact_polygons(
+    polygons: &mut [Polygon<f64>],
+    max_coordinates: usize,
+    epsilon: &mut f64,
+) {
     let mut total: usize = polygons.iter().map(polygon_coord_count).sum();
     for _ in 0..40 {
         if total <= max_coordinates {

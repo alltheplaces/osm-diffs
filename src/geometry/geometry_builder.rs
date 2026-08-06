@@ -5,7 +5,7 @@ use geo::algorithm::bool_ops::BooleanOps;
 use geo::algorithm::intersects::Intersects;
 use geo::{Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPolygon, Point};
 
-use super::{LineStitcher, PolygonAssembler, build_points};
+use super::{LineStitcher, PolygonAssembler, PolygonUnion, build_points};
 
 /// Accumulates an arbitrarily-typed, arbitrarily-ordered stream of `geo`
 /// geometries — as would come from resolving the members of an OSM
@@ -17,8 +17,11 @@ use super::{LineStitcher, PolygonAssembler, build_points};
 ///   internal [`LineStitcher`], which stitches touching endpoints into
 ///   longer paths.
 /// * `Polygon`/`MultiPolygon` (and, degenerately, `Rect`/`Triangle`) go to
-///   an internal [`PolygonAssembler`], which resolves fill from geometric
-///   nesting.
+///   an internal polygon accumulator — either a [`PolygonAssembler`],
+///   which resolves fill from geometric nesting, or a [`PolygonUnion`],
+///   which just unions whole polygons together ignoring containment.
+///   Which one is picked via the [`PolygonFill`] passed to
+///   [`new`](Self::new).
 /// * `Point`/`MultiPoint` coordinates are simply collected; there's
 ///   nothing to stitch or nest, so no assembler is needed for them.
 /// * `GeometryCollection` is flattened: each member is added individually.
@@ -49,24 +52,77 @@ use super::{LineStitcher, PolygonAssembler, build_points};
 /// case.
 ///
 /// # Antimeridian handling
-/// Delegated entirely to the inner [`LineStitcher`] and [`PolygonAssembler`],
-/// each of which aligns everything it receives to its own first-added
-/// reference longitude. Points are not antimeridian-aligned: OSM node
-/// coordinates are never split across the dateline the way a way's
-/// vertices can be, so there's nothing to align them *to*.
+/// Delegated entirely to the inner [`LineStitcher`] and polygon
+/// accumulator, each of which aligns everything it receives to its own
+/// first-added reference longitude. Points are not antimeridian-aligned:
+/// OSM node coordinates are never split across the dateline the way a
+/// way's vertices can be, so there's nothing to align them *to*.
 pub struct GeometryBuilder {
     lines: LineStitcher,
-    polygons: PolygonAssembler,
+    polygons: PolygonAccumulator,
     points: Vec<Coord<f64>>,
     has_lines: bool,
     has_polygons: bool,
 }
 
+/// How [`GeometryBuilder`] should combine `Polygon`/`MultiPolygon`
+/// members into one shape; see [`GeometryBuilder::new`]. Purely a
+/// geometric choice -- callers are expected to have already decided, from
+/// whatever domain-specific knowledge applies (e.g. an OSM relation's
+/// `type` tag), which one describes their input.
+pub enum PolygonFill {
+    /// Resolve fill by geometric nesting (a member contained in another
+    /// becomes a hole) -- naturally handles arbitrary nesting depth (holes
+    /// with islands with holes, disjoint outer shells, ...) without
+    /// needing to know which member is meant to be a shell versus a hole.
+    /// Correct when every member is meant to jointly describe one area via
+    /// containment (e.g. OSM's `multipolygon`/`boundary` relations, where
+    /// declared roles are advisory and nesting is what actually decides
+    /// shell vs. hole).
+    Containment,
+    /// Union every member together, ignoring containment: a member fully
+    /// inside another contributes nothing new, rather than becoming a
+    /// hole. Correct when members simply *are* the area rather than
+    /// jointly describing it via nesting (e.g. an OSM `building` relation,
+    /// whose `outline` member is the exact union of its `part` members --
+    /// containment fill would wrongly punch the parts out as holes).
+    Union,
+}
+
+/// Which of the two polygon accumulators [`GeometryBuilder`] routes
+/// `Polygon`/`MultiPolygon` input to, per the requested [`PolygonFill`].
+enum PolygonAccumulator {
+    Containment(PolygonAssembler),
+    Union(PolygonUnion),
+}
+
+impl PolygonAccumulator {
+    fn add(&mut self, g: &Geometry<f64>) {
+        match self {
+            PolygonAccumulator::Containment(a) => a.add_ring(g),
+            PolygonAccumulator::Union(u) => u.add(g),
+        }
+    }
+
+    fn finish(self) -> Option<Geometry<f64>> {
+        match self {
+            PolygonAccumulator::Containment(a) => a.finish(),
+            PolygonAccumulator::Union(u) => u.finish(),
+        }
+    }
+}
+
 impl GeometryBuilder {
-    pub fn new() -> Self {
+    /// `fill` picks how `Polygon`/`MultiPolygon` members are combined --
+    /// see [`PolygonFill`].
+    pub fn new(fill: PolygonFill) -> Self {
+        let polygons = match fill {
+            PolygonFill::Containment => PolygonAccumulator::Containment(PolygonAssembler::new()),
+            PolygonFill::Union => PolygonAccumulator::Union(PolygonUnion::new()),
+        };
         Self {
             lines: LineStitcher::new(),
-            polygons: PolygonAssembler::new(),
+            polygons,
             points: Vec::new(),
             has_lines: false,
             has_polygons: false,
@@ -84,7 +140,7 @@ impl GeometryBuilder {
             }
             Geometry::Polygon(_) | Geometry::MultiPolygon(_) => {
                 self.has_polygons = true;
-                self.polygons.add_ring(g);
+                self.polygons.add(g);
             }
             Geometry::Point(p) => self.points.push(p.0),
             Geometry::MultiPoint(mp) => self.points.extend(mp.0.iter().map(|p| p.0)),
@@ -95,11 +151,11 @@ impl GeometryBuilder {
             }
             Geometry::Triangle(t) => {
                 self.has_polygons = true;
-                self.polygons.add_ring(&Geometry::from((*t).to_polygon()));
+                self.polygons.add(&Geometry::from((*t).to_polygon()));
             }
             Geometry::Rect(r) => {
                 self.has_polygons = true;
-                self.polygons.add_ring(&Geometry::from((*r).to_polygon()));
+                self.polygons.add(&Geometry::from((*r).to_polygon()));
             }
             Geometry::GeometryCollection(gc) => {
                 for geom in &gc.0 {
@@ -230,12 +286,16 @@ mod tests {
 
     #[test]
     fn empty_returns_none() {
-        assert!(GeometryBuilder::new().finish().is_none());
+        assert!(
+            GeometryBuilder::new(PolygonFill::Containment)
+                .finish()
+                .is_none()
+        );
     }
 
     #[test]
     fn only_lines_takes_the_line_stitcher_fast_path() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&ls(&[(0.0, 0.0), (1.0, 0.0)]));
         b.add(&ls(&[(1.0, 0.0), (2.0, 0.0)]));
         match b.finish() {
@@ -246,7 +306,7 @@ mod tests {
 
     #[test]
     fn only_polygons_takes_the_polygon_assembler_fast_path() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]));
         match b.finish() {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
@@ -256,7 +316,7 @@ mod tests {
 
     #[test]
     fn only_points_returns_multi_point() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&point(0.0, 0.0));
         b.add(&point(1.0, 1.0));
         match b.finish() {
@@ -271,7 +331,7 @@ mod tests {
             Point::new(0.0, 0.0),
             Point::new(1.0, 1.0),
         ]));
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&mp);
         match b.finish() {
             Some(Geometry::MultiPoint(mp)) => assert_eq!(mp.len(), 2),
@@ -285,7 +345,7 @@ mod tests {
             LineString::new(vec![c(0.0, 0.0), c(1.0, 0.0)]),
             LineString::new(vec![c(5.0, 5.0), c(6.0, 5.0)]),
         ]));
-        let mut lines_only = GeometryBuilder::new();
+        let mut lines_only = GeometryBuilder::new(PolygonFill::Containment);
         lines_only.add(&mls);
         match lines_only.finish() {
             Some(Geometry::MultiLineString(m)) => assert_eq!(m.0.len(), 2),
@@ -314,7 +374,7 @@ mod tests {
                 vec![],
             ),
         ]));
-        let mut polys_only = GeometryBuilder::new();
+        let mut polys_only = GeometryBuilder::new(PolygonFill::Containment);
         polys_only.add(&mpoly);
         match polys_only.finish() {
             Some(Geometry::MultiPolygon(mp)) => assert_eq!(mp.0.len(), 2),
@@ -324,7 +384,7 @@ mod tests {
 
     #[test]
     fn disjoint_line_and_polygon_combine_into_geometry_collection() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]));
         b.add(&ls(&[(10.0, 10.0), (11.0, 10.0)]));
         match b.finish() {
@@ -339,7 +399,7 @@ mod tests {
 
     #[test]
     fn line_fully_inside_polygon_is_clipped_away_entirely() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -358,7 +418,7 @@ mod tests {
 
     #[test]
     fn line_crossing_polygon_boundary_keeps_only_its_outside_portion() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -405,7 +465,7 @@ mod tests {
 
     #[test]
     fn point_inside_polygon_is_omitted() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -421,7 +481,7 @@ mod tests {
 
     #[test]
     fn point_outside_polygon_is_kept() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -441,7 +501,7 @@ mod tests {
 
     #[test]
     fn point_on_line_is_omitted() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&ls(&[(0.0, 0.0), (10.0, 0.0)]));
         b.add(&point(5.0, 0.0)); // sits exactly on the line
         match b.finish() {
@@ -452,7 +512,7 @@ mod tests {
 
     #[test]
     fn point_off_line_is_kept() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&ls(&[(0.0, 0.0), (10.0, 0.0)]));
         b.add(&point(5.0, 5.0));
         match b.finish() {
@@ -471,7 +531,7 @@ mod tests {
             ls(&[(10.0, 10.0), (11.0, 10.0)]),
             polygon(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]),
         ]));
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&gc);
         match b.finish() {
             Some(Geometry::GeometryCollection(gc)) => {
@@ -485,7 +545,7 @@ mod tests {
 
     #[test]
     fn line_variant_is_routed_to_line_stitcher() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&Geometry::from(Line::new(c(0.0, 0.0), c(1.0, 0.0))));
         b.add(&Geometry::from(Line::new(c(1.0, 0.0), c(2.0, 0.0))));
         match b.finish() {
@@ -496,7 +556,7 @@ mod tests {
 
     #[test]
     fn rect_variant_is_routed_to_polygon_assembler() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&Geometry::from(Rect::new(c(0.0, 0.0), c(4.0, 4.0))));
         match b.finish() {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
@@ -506,7 +566,7 @@ mod tests {
 
     #[test]
     fn triangle_variant_is_routed_to_polygon_assembler() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&Geometry::from(Triangle::new(
             c(0.0, 0.0),
             c(4.0, 0.0),
@@ -515,6 +575,58 @@ mod tests {
         match b.finish() {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
             other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn containment_fill_nests_the_inner_polygon() {
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
+        b.add(&polygon(&[
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ]));
+        b.add(&polygon(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]));
+        match b.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+            other => panic!("expected Polygon with a hole, got {other:?}"),
+        }
+    }
+
+    /// The https://github.com/alltheplaces/osm-diffs/issues/533 scenario,
+    /// end to end through `GeometryBuilder`: an "outline" member that's
+    /// the exact union of the other members should reconstruct the full
+    /// outline under `PolygonFill::Union`, not (as `Containment` would)
+    /// come back empty.
+    #[test]
+    fn union_fill_reconstructs_tiling_parts() {
+        let mut b = GeometryBuilder::new(PolygonFill::Union);
+        b.add(&polygon(&[
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ])); // outline
+        b.add(&polygon(&[
+            (0.0, 0.0),
+            (5.0, 0.0),
+            (5.0, 10.0),
+            (0.0, 10.0),
+        ])); // part 1
+        b.add(&polygon(&[
+            (5.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (5.0, 10.0),
+        ])); // part 2
+        match b.finish() {
+            Some(Geometry::Polygon(p)) => {
+                assert_eq!(p.interiors().len(), 0);
+                use geo::Area;
+                assert!((p.unsigned_area() - 100.0).abs() < 1e-9);
+            }
+            other => panic!("expected the reconstructed outline, got {other:?}"),
         }
     }
 }

@@ -210,7 +210,7 @@ fn build_area(data: &GridData, from_type: &str, from_id: i64) -> Option<Geometry
         "way" => build_way_geometry(data, from_id),
         "relation" => {
             let relation = data.relations.get(&from_id)?;
-            let mut builder = GeometryBuilder::new();
+            let mut builder = GeometryBuilder::new(PolygonFill::Containment);
             for member in &relation.members {
                 if member.member_type == "way"
                     && let Some(geometry) = build_way_geometry(data, member.member_ref)
