@@ -320,13 +320,16 @@ fn areas_match(actual: &Geometry<f64>, expected: &MultiPolygon<f64>) -> bool {
 const KNOWN_MISMATCHES: &[u32] = &[
     // Ring stitched from 2+ open member ways isn't promoted to a
     // Polygon/hole (see module docs' "stitched closed loops" caveat).
+    // https://github.com/alltheplaces/osm-diffs/issues/531
     701, 702, 703, 704, 705, 706, 707, 708, 709, 711, 725, 731, 742, 743, 782, 795, 901, 902, 904,
     912, 913, 920, 921, 924, 925, 930, 931, 950,
     // Duplicate/overlapping ring members self-cancel under the even-odd
     // nesting rule (see module docs' "duplicate/overlapping" caveat).
+    // https://github.com/alltheplaces/osm-diffs/issues/532
     790, 791, 792,
     // No default/fix/location entry parses to a real polygon at all --
-    // nothing to check `GeometryBuilder`'s output against yet.
+    // nothing to check `GeometryBuilder`'s output against yet. Not a filed
+    // bug: these fixtures are meant to have no lenient interpretation.
     710, 714, 715, 740, 741, 744, 745, 746, 768, 771, 773,
 ];
 
