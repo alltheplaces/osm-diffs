@@ -1,11 +1,9 @@
 use super::{BlobReader, Prunings};
 use crate::{
+    geometry::{GeometryBuilder, build_line, build_ring},
     make_progress_bar,
     matchers::MatchMask,
-    pipeline::osm::{
-        geometry::{GeometryBuilder, build_line, build_ring},
-        id_tagging_schema::is_area,
-    },
+    pipeline::osm::id_tagging_schema::is_area,
     tables::{
         BlobTable, CoordTable, Feature, FeatureToIndex, GeometryStore, GeometryTable, RecordReader,
         RecordWriter, RelationMember, StringCounts, StringPool,
