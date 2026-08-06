@@ -5,7 +5,7 @@ use geo::algorithm::bool_ops::BooleanOps;
 use geo::algorithm::intersects::Intersects;
 use geo::{Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPolygon, Point};
 
-use super::{LineStitcher, PolygonAssembler, build_points};
+use super::{LineStitcher, PolygonAssembler, PolygonUnion, build_points};
 
 /// Accumulates an arbitrarily-typed, arbitrarily-ordered stream of `geo`
 /// geometries — as would come from resolving the members of an OSM
@@ -17,8 +17,12 @@ use super::{LineStitcher, PolygonAssembler, build_points};
 ///   internal [`LineStitcher`], which stitches touching endpoints into
 ///   longer paths.
 /// * `Polygon`/`MultiPolygon` (and, degenerately, `Rect`/`Triangle`) go to
-///   an internal [`PolygonAssembler`], which resolves fill from geometric
-///   nesting.
+///   an internal polygon accumulator — either a [`PolygonAssembler`],
+///   which resolves fill from geometric nesting, or a [`PolygonUnion`],
+///   which just unions whole polygons together ignoring containment.
+///   Which one is picked at construction time via [`PolygonFill`] (see
+///   [`with_polygon_fill`](Self::with_polygon_fill)); containment is the
+///   default and the only option plain `new()` gives you.
 /// * `Point`/`MultiPoint` coordinates are simply collected; there's
 ///   nothing to stitch or nest, so no assembler is needed for them.
 /// * `GeometryCollection` is flattened: each member is added individually.
@@ -49,24 +53,83 @@ use super::{LineStitcher, PolygonAssembler, build_points};
 /// case.
 ///
 /// # Antimeridian handling
-/// Delegated entirely to the inner [`LineStitcher`] and [`PolygonAssembler`],
-/// each of which aligns everything it receives to its own first-added
-/// reference longitude. Points are not antimeridian-aligned: OSM node
-/// coordinates are never split across the dateline the way a way's
-/// vertices can be, so there's nothing to align them *to*.
+/// Delegated entirely to the inner [`LineStitcher`] and polygon
+/// accumulator, each of which aligns everything it receives to its own
+/// first-added reference longitude. Points are not antimeridian-aligned:
+/// OSM node coordinates are never split across the dateline the way a
+/// way's vertices can be, so there's nothing to align them *to*.
 pub struct GeometryBuilder {
     lines: LineStitcher,
-    polygons: PolygonAssembler,
+    polygons: PolygonAccumulator,
     points: Vec<Coord<f64>>,
     has_lines: bool,
     has_polygons: bool,
 }
 
+/// How [`GeometryBuilder`] should combine `Polygon`/`MultiPolygon`
+/// members into one shape; see
+/// [`GeometryBuilder::with_polygon_fill`]. Purely a geometric choice --
+/// callers are expected to have already decided, from whatever
+/// domain-specific knowledge applies (e.g. an OSM relation's `type` tag),
+/// which one describes their input.
+pub enum PolygonFill {
+    /// Resolve fill by geometric nesting (a member contained in another
+    /// becomes a hole) -- naturally handles arbitrary nesting depth (holes
+    /// with islands with holes, disjoint outer shells, ...) without
+    /// needing to know which member is meant to be a shell versus a hole.
+    /// Correct when every member is meant to jointly describe one area via
+    /// containment (e.g. OSM's `multipolygon`/`boundary` relations, where
+    /// declared roles are advisory and nesting is what actually decides
+    /// shell vs. hole).
+    Containment,
+    /// Union every member together, ignoring containment: a member fully
+    /// inside another contributes nothing new, rather than becoming a
+    /// hole. Correct when members simply *are* the area rather than
+    /// jointly describing it via nesting (e.g. an OSM `building` relation,
+    /// whose `outline` member is the exact union of its `part` members --
+    /// containment fill would wrongly punch the parts out as holes).
+    Union,
+}
+
+/// Which of the two polygon accumulators [`GeometryBuilder`] routes
+/// `Polygon`/`MultiPolygon` input to, per the requested [`PolygonFill`].
+enum PolygonAccumulator {
+    Containment(PolygonAssembler),
+    Union(PolygonUnion),
+}
+
+impl PolygonAccumulator {
+    fn add(&mut self, g: &Geometry<f64>) {
+        match self {
+            PolygonAccumulator::Containment(a) => a.add_ring(g),
+            PolygonAccumulator::Union(u) => u.add(g),
+        }
+    }
+
+    fn finish(self) -> Option<Geometry<f64>> {
+        match self {
+            PolygonAccumulator::Containment(a) => a.finish(),
+            PolygonAccumulator::Union(u) => u.finish(),
+        }
+    }
+}
+
 impl GeometryBuilder {
+    /// Same as [`with_polygon_fill`](Self::with_polygon_fill)`(`[`PolygonFill::Containment`]`)`.
     pub fn new() -> Self {
+        Self::with_polygon_fill(PolygonFill::Containment)
+    }
+
+    /// Like [`new`](Self::new), but lets the caller pick how
+    /// `Polygon`/`MultiPolygon` members are combined -- see [`PolygonFill`].
+    pub fn with_polygon_fill(fill: PolygonFill) -> Self {
+        let polygons = match fill {
+            PolygonFill::Containment => PolygonAccumulator::Containment(PolygonAssembler::new()),
+            PolygonFill::Union => PolygonAccumulator::Union(PolygonUnion::new()),
+        };
         Self {
             lines: LineStitcher::new(),
-            polygons: PolygonAssembler::new(),
+            polygons,
             points: Vec::new(),
             has_lines: false,
             has_polygons: false,
@@ -84,7 +147,7 @@ impl GeometryBuilder {
             }
             Geometry::Polygon(_) | Geometry::MultiPolygon(_) => {
                 self.has_polygons = true;
-                self.polygons.add_ring(g);
+                self.polygons.add(g);
             }
             Geometry::Point(p) => self.points.push(p.0),
             Geometry::MultiPoint(mp) => self.points.extend(mp.0.iter().map(|p| p.0)),
@@ -95,11 +158,11 @@ impl GeometryBuilder {
             }
             Geometry::Triangle(t) => {
                 self.has_polygons = true;
-                self.polygons.add_ring(&Geometry::from((*t).to_polygon()));
+                self.polygons.add(&Geometry::from((*t).to_polygon()));
             }
             Geometry::Rect(r) => {
                 self.has_polygons = true;
-                self.polygons.add_ring(&Geometry::from((*r).to_polygon()));
+                self.polygons.add(&Geometry::from((*r).to_polygon()));
             }
             Geometry::GeometryCollection(gc) => {
                 for geom in &gc.0 {
@@ -515,6 +578,79 @@ mod tests {
         match b.finish() {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
             other => panic!("expected Polygon, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn with_polygon_fill_containment_nests_the_inner_polygon() {
+        let mut b = GeometryBuilder::with_polygon_fill(PolygonFill::Containment);
+        b.add(&polygon(&[
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ]));
+        b.add(&polygon(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]));
+        match b.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+            other => panic!("expected Polygon with a hole, got {other:?}"),
+        }
+    }
+
+    /// The https://github.com/alltheplaces/osm-diffs/issues/533 scenario,
+    /// end to end through `GeometryBuilder`: an "outline" member that's
+    /// the exact union of the other members should reconstruct the full
+    /// outline under `PolygonFill::Union`, not (as `Containment` would)
+    /// come back empty.
+    #[test]
+    fn with_polygon_fill_union_reconstructs_tiling_parts() {
+        let mut b = GeometryBuilder::with_polygon_fill(PolygonFill::Union);
+        b.add(&polygon(&[
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ])); // outline
+        b.add(&polygon(&[
+            (0.0, 0.0),
+            (5.0, 0.0),
+            (5.0, 10.0),
+            (0.0, 10.0),
+        ])); // part 1
+        b.add(&polygon(&[
+            (5.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (5.0, 10.0),
+        ])); // part 2
+        match b.finish() {
+            Some(Geometry::Polygon(p)) => {
+                assert_eq!(p.interiors().len(), 0);
+                use geo::Area;
+                assert!((p.unsigned_area() - 100.0).abs() < 1e-9);
+            }
+            other => panic!("expected the reconstructed outline, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn new_matches_with_polygon_fill_containment() {
+        let mut a = GeometryBuilder::new();
+        let mut b = GeometryBuilder::with_polygon_fill(PolygonFill::Containment);
+        for builder in [&mut a, &mut b] {
+            builder.add(&polygon(&[
+                (0.0, 0.0),
+                (10.0, 0.0),
+                (10.0, 10.0),
+                (0.0, 10.0),
+            ]));
+            builder.add(&polygon(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]));
+        }
+        for b in [a, b] {
+            match b.finish() {
+                Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+                other => panic!("expected Polygon with a hole, got {other:?}"),
+            }
         }
     }
 }

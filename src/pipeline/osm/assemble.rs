@@ -1,6 +1,6 @@
 use super::{BlobReader, Prunings};
 use crate::{
-    geometry::{GeometryBuilder, build_line, build_ring},
+    geometry::{GeometryBuilder, PolygonFill, build_line, build_ring},
     make_progress_bar,
     matchers::MatchMask,
     pipeline::osm::id_tagging_schema::is_area,
@@ -48,8 +48,14 @@ pub fn assemble<'a>(
     let ways = assemble_ways(osm, prunings, &strings, progress, workdir)?;
     let leaf_relations =
         assemble_leaf_relations(osm, prunings, &strings, &ways, progress, workdir)?;
-    let super_relations =
-        assemble_super_relations(prunings, &ways, &leaf_relations, progress, workdir)?;
+    let super_relations = assemble_super_relations(
+        prunings,
+        &strings,
+        &ways,
+        &leaf_relations,
+        progress,
+        workdir,
+    )?;
     Ok(Assembly {
         strings,
         nodes,
@@ -418,7 +424,9 @@ fn assemble_leaf_relations<'a>(
                         let members = relation
                             .members()
                             .map(|(_role, member_id, member_type)| (member_type, member_id));
+                        let relation_type = relation_type_tag(relation.tags());
                         let Some(geometry) = assemble_relation_geometry(
+                            relation_type,
                             members,
                             coords,
                             &ways.ways_in_relations,
@@ -514,6 +522,7 @@ fn assemble_leaf_relations<'a>(
 
 fn assemble_super_relations(
     prunings: &Prunings,
+    strings: &StringPool,
     ways: &AssembledWays,
     leaf_relations: &AssembledLeafRelations,
     progress: &MultiProgress,
@@ -563,11 +572,13 @@ fn assemble_super_relations(
                 let fti = FeatureToIndex::decode(blob)?;
                 let rel_geometry = {
                     let feature = fti.feature.expect("feature");
+                    let relation_type = relation_type_from_feature_tags(&feature.tags, strings);
                     let rel_members = feature
                         .relation_members
                         .iter()
                         .map(|m| feature_to_osm_id(m.id));
                     assemble_relation_geometry(
+                        relation_type,
                         rel_members,
                         coords,
                         ways_geometry,
@@ -807,14 +818,66 @@ fn assemble_relation_members(
     }
 }
 
+/// The value of a relation's `type` tag, if any -- e.g. `Some("multipolygon")`
+/// for `type=multipolygon` -- read straight from a PBF block's raw
+/// `(key, value)` tag pairs (as `osm_pbf_iter::Relation::tags()` yields).
+fn relation_type_tag<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Option<&'a str> {
+    tags.into_iter()
+        .find(|&(key, _)| key == "type")
+        .map(|(_, value)| value)
+}
+
+/// Same as [`relation_type_tag`], but for a relation whose tags have
+/// already been resolved into `Feature.tags`' flat `[key_id, value_id,
+/// ...]` string-pool-id pairs (as they are for a super-relation, which by
+/// the time [`assemble_super_relations`] runs has already gone through
+/// [`assemble_tags`] once, in [`assemble_leaf_relations`]).
+fn relation_type_from_feature_tags<'a>(tags: &[u32], strings: &'a StringPool) -> Option<&'a str> {
+    tags.chunks_exact(2)
+        .find(|pair| strings.get(pair[0] as usize) == "type")
+        .map(|pair| strings.get(pair[1] as usize))
+}
+
+/// OSM documents `type=multipolygon` and `type=boundary` relations as
+/// using containment (nesting) to decide shell vs. hole, irrespective of
+/// declared member roles -- see [`PolygonFill::Containment`]. Every other
+/// relation type's polygon-typed members should instead just be unioned
+/// (see [`PolygonFill::Union`]): e.g. a `type=building` relation's
+/// `outline` member is the exact union of its `part` members, and
+/// containment fill would wrongly punch the parts out as holes. Applies
+/// equally to untagged relations, since containment fill isn't correct
+/// for a relation whose members weren't authored with that convention in
+/// mind.
+///
+/// See the OSM wiki: <https://wiki.openstreetmap.org/wiki/Relation:multipolygon>
+/// ("outer" role: "the ways ... making up the required outer ring(s)
+/// delimiting the area"; "inner" role: "the ways ... making up the
+/// optional inner ring(s) delimiting the excluded holes that must be
+/// fully inside the area delimited by outer ring(s)") and
+/// <https://wiki.openstreetmap.org/wiki/Relation:boundary> ("They are
+/// defined in a similar manner as multipolygons: they must contain at
+/// least one outer way, and additional ways can be used to define
+/// enclaves or exclaves"). See also
+/// <https://github.com/alltheplaces/osm-diffs/issues/533> and
+/// <https://github.com/alltheplaces/osm-diffs/issues/534> for the bug this
+/// function fixes.
+fn polygon_fill_for_relation_type(relation_type: Option<&str>) -> PolygonFill {
+    match relation_type {
+        Some("multipolygon") | Some("boundary") => PolygonFill::Containment,
+        _ => PolygonFill::Union,
+    }
+}
+
 fn assemble_relation_geometry<'a>(
+    relation_type: Option<&str>,
     members: impl Iterator<Item = (RelationMemberType, u64)>,
     coords: &CoordTable,
     ways: &GeometryTable<'a>,
     leaf_relations_geometry: Option<&GeometryTable<'a>>,
     super_relations_geometry: Option<&GeometryStore>,
 ) -> Result<Option<Geometry>> {
-    let mut geom_builder = GeometryBuilder::new();
+    let mut geom_builder =
+        GeometryBuilder::with_polygon_fill(polygon_fill_for_relation_type(relation_type));
     for (member_type, id) in members {
         if let Some(g) = lookup_relation_member_geometry(
             member_type,

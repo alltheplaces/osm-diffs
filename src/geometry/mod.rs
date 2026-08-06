@@ -45,10 +45,12 @@ mod geometry_builder;
 mod grid_tests;
 mod line_stitcher;
 mod polygon_assembler;
+mod polygon_union;
 
-pub use geometry_builder::GeometryBuilder;
+pub use geometry_builder::{GeometryBuilder, PolygonFill};
 pub use line_stitcher::LineStitcher;
 pub use polygon_assembler::PolygonAssembler;
+pub use polygon_union::PolygonUnion;
 
 // =======================================================================
 // build_points
