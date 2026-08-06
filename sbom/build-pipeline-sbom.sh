@@ -197,7 +197,7 @@ def add_supplier:
     "description": "OSM grid test fixtures, vendored for unit/integration tests only",
     "version": $OSM_TESTDATA_COMMIT,
     "scope": "excluded",
-    "purl": "pkg:github/osmcode/osm-testdata@" + $OSM_TESTDATA_COMMIT + "#grid",
+    "purl": "pkg:github/osmcode/osm-testdata@" + $OSM_TESTDATA_COMMIT + "#grid/data",
     "licenses": [{
       "license": {
         "name": "Public Domain",
@@ -206,7 +206,7 @@ def add_supplier:
     }],
     "externalReferences": [{
       "type": "vcs",
-      "url": "https://github.com/osmcode/osm-testdata/tree/" + $OSM_TESTDATA_COMMIT + "/grid"
+      "url": "https://github.com/osmcode/osm-testdata/tree/" + $OSM_TESTDATA_COMMIT + "/grid/data"
     }],
     "manufacturer": {
       "name": "osmcode / Jochen Topf",
