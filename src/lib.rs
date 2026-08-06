@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 mod atp;
 mod coverage;
+mod geometry;
 mod matchers;
 mod pipeline;
 mod places;

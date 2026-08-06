@@ -3,7 +3,7 @@ use std::{path::Path, time::SystemTime};
 
 mod conflate;
 mod edits;
-mod geostats;
+mod geostats; // TODO: Move into crate::geometry?
 mod osm;
 mod tiles;
 mod upload;
