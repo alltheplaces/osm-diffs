@@ -71,6 +71,7 @@ use std::{collections::HashMap, fs, path::PathBuf};
 use geo::Area;
 use geo::algorithm::bool_ops::BooleanOps;
 use serde::Deserialize;
+use wkt::TryFromWkt;
 
 use super::*;
 
@@ -227,69 +228,15 @@ fn build_area(data: &GridData, from_type: &str, from_id: i64) -> Option<Geometry
 }
 
 // =======================================================================
-// Minimal WKT parsing, tailored to test.json's `MULTIPOLYGON(...)` values
+// WKT parsing, via the `wkt` crate, for test.json's `MULTIPOLYGON(...)`
+// expected-geometry values
 // =======================================================================
 
-/// Splits `s`, a flat sequence of one or more top-level `(...)` groups
-/// (e.g. `"(a),(b,(c))"`), into each group's inner content (`["a",
-/// "b,(c)"]`) — i.e. peels exactly one level of parens off each group.
-fn split_groups(s: &str) -> Vec<&str> {
-    let mut groups = Vec::new();
-    let mut depth = 0i32;
-    let mut start = 0usize;
-    for (i, ch) in s.char_indices() {
-        match ch {
-            '(' => {
-                if depth == 0 {
-                    start = i + 1;
-                }
-                depth += 1;
-            }
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    groups.push(&s[start..i]);
-                }
-            }
-            _ => {}
-        }
-    }
-    groups
-}
-
-fn parse_ring(s: &str) -> LineString<f64> {
-    LineString::new(
-        s.split(',')
-            .map(|pair| {
-                let mut it = pair.split_whitespace();
-                let x: f64 = it.next().expect("ring point needs x").parse().unwrap();
-                let y: f64 = it.next().expect("ring point needs y").parse().unwrap();
-                Coord { x, y }
-            })
-            .collect(),
-    )
-}
-
-/// Parses a `MULTIPOLYGON(((x y,x y,...),(x y,...)),((x y,...)))` string,
-/// the only WKT shape that appears in the grid fixtures' `test.json` files.
+/// Parses a `MULTIPOLYGON(...)` string, the only WKT shape that appears in
+/// the grid fixtures' `test.json` files.
 fn parse_multipolygon_wkt(wkt: &str) -> MultiPolygon<f64> {
-    let body = wkt
-        .strip_prefix("MULTIPOLYGON")
-        .expect("grid fixtures only use MULTIPOLYGON wkt")
-        .trim();
-    let polygon_list = split_groups(body)
-        .into_iter()
-        .next()
-        .expect("MULTIPOLYGON(...) must have an outer paren pair");
-    let polygons = split_groups(polygon_list)
-        .into_iter()
-        .map(|ring_list| {
-            let mut rings = split_groups(ring_list).into_iter().map(parse_ring);
-            let exterior = rings.next().expect("polygon must have an exterior ring");
-            Polygon::new(exterior, rings.collect())
-        })
-        .collect();
-    MultiPolygon::new(polygons)
+    MultiPolygon::<f64>::try_from_wkt_str(wkt)
+        .unwrap_or_else(|e| panic!("failed to parse grid fixture wkt {wkt:?}: {e}"))
 }
 
 // =======================================================================
