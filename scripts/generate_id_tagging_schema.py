@@ -208,11 +208,26 @@ def generate_rust(
                 }
 
                 // For any tags other than `area`, we don’t return immediately.
-                // At this point, we don’t know if the iteration will yield
+                // At this point, we don’t know if the iteration will later yield
                 // `area=no`, which should win over any tag heuristics.
-                // Alternatively, we could do two separate passes over the tags,
+                //
+                // Alternatively, we could do _two_ separate passes over the tags,
                 // like the iD editor does in its JavaScript sources. However,
-                // this has a (small) performance cost, which we avoid here.
+                // this has a (small) performance cost, which we can avoid by deciding
+                // on area-ness in a single pass over the tags.
+
+                // Surprisingly, it looks like not all keys in the `areaKeys` dictionary
+                // of the iD editor are strictly _keys_ in the OSM sense. One single
+                // entry is actually a _pattern_, for `addr:*`. From the  iD source code,
+                // it’s not obvious if iD actually checks for prefixes; this might get
+                // silently ignored (because looking up `addr:street` in a JavaScript
+                // dictionary containing something for `addr:*` will not find anything).
+                //
+                // From a real-world perspective, it seems reasonable to interpret
+                // OSM features with addresses as areas, not lines. Therefore, we test
+                // for `addr:` prefixes, thus deviating from iD’s behavior, assuming
+                // this is actually a bug in the iD editor.
+                // https://github.com/openstreetmap/id-tagging-schema/issues/2623#issuecomment-5202324005
                 if key.starts_with("addr:") {  // `addr:*` in exception table
                     has_area_tag = true;
                     continue;
