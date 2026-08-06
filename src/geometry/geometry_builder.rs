@@ -20,9 +20,8 @@ use super::{LineStitcher, PolygonAssembler, PolygonUnion, build_points};
 ///   an internal polygon accumulator — either a [`PolygonAssembler`],
 ///   which resolves fill from geometric nesting, or a [`PolygonUnion`],
 ///   which just unions whole polygons together ignoring containment.
-///   Which one is picked at construction time via [`PolygonFill`] (see
-///   [`with_polygon_fill`](Self::with_polygon_fill)); containment is the
-///   default and the only option plain `new()` gives you.
+///   Which one is picked via the [`PolygonFill`] passed to
+///   [`new`](Self::new).
 /// * `Point`/`MultiPoint` coordinates are simply collected; there's
 ///   nothing to stitch or nest, so no assembler is needed for them.
 /// * `GeometryCollection` is flattened: each member is added individually.
@@ -67,11 +66,10 @@ pub struct GeometryBuilder {
 }
 
 /// How [`GeometryBuilder`] should combine `Polygon`/`MultiPolygon`
-/// members into one shape; see
-/// [`GeometryBuilder::with_polygon_fill`]. Purely a geometric choice --
-/// callers are expected to have already decided, from whatever
-/// domain-specific knowledge applies (e.g. an OSM relation's `type` tag),
-/// which one describes their input.
+/// members into one shape; see [`GeometryBuilder::new`]. Purely a
+/// geometric choice -- callers are expected to have already decided, from
+/// whatever domain-specific knowledge applies (e.g. an OSM relation's
+/// `type` tag), which one describes their input.
 pub enum PolygonFill {
     /// Resolve fill by geometric nesting (a member contained in another
     /// becomes a hole) -- naturally handles arbitrary nesting depth (holes
@@ -115,14 +113,9 @@ impl PolygonAccumulator {
 }
 
 impl GeometryBuilder {
-    /// Same as [`with_polygon_fill`](Self::with_polygon_fill)`(`[`PolygonFill::Containment`]`)`.
-    pub fn new() -> Self {
-        Self::with_polygon_fill(PolygonFill::Containment)
-    }
-
-    /// Like [`new`](Self::new), but lets the caller pick how
-    /// `Polygon`/`MultiPolygon` members are combined -- see [`PolygonFill`].
-    pub fn with_polygon_fill(fill: PolygonFill) -> Self {
+    /// `fill` picks how `Polygon`/`MultiPolygon` members are combined --
+    /// see [`PolygonFill`].
+    pub fn new(fill: PolygonFill) -> Self {
         let polygons = match fill {
             PolygonFill::Containment => PolygonAccumulator::Containment(PolygonAssembler::new()),
             PolygonFill::Union => PolygonAccumulator::Union(PolygonUnion::new()),
@@ -293,12 +286,16 @@ mod tests {
 
     #[test]
     fn empty_returns_none() {
-        assert!(GeometryBuilder::new().finish().is_none());
+        assert!(
+            GeometryBuilder::new(PolygonFill::Containment)
+                .finish()
+                .is_none()
+        );
     }
 
     #[test]
     fn only_lines_takes_the_line_stitcher_fast_path() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&ls(&[(0.0, 0.0), (1.0, 0.0)]));
         b.add(&ls(&[(1.0, 0.0), (2.0, 0.0)]));
         match b.finish() {
@@ -309,7 +306,7 @@ mod tests {
 
     #[test]
     fn only_polygons_takes_the_polygon_assembler_fast_path() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]));
         match b.finish() {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
@@ -319,7 +316,7 @@ mod tests {
 
     #[test]
     fn only_points_returns_multi_point() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&point(0.0, 0.0));
         b.add(&point(1.0, 1.0));
         match b.finish() {
@@ -334,7 +331,7 @@ mod tests {
             Point::new(0.0, 0.0),
             Point::new(1.0, 1.0),
         ]));
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&mp);
         match b.finish() {
             Some(Geometry::MultiPoint(mp)) => assert_eq!(mp.len(), 2),
@@ -348,7 +345,7 @@ mod tests {
             LineString::new(vec![c(0.0, 0.0), c(1.0, 0.0)]),
             LineString::new(vec![c(5.0, 5.0), c(6.0, 5.0)]),
         ]));
-        let mut lines_only = GeometryBuilder::new();
+        let mut lines_only = GeometryBuilder::new(PolygonFill::Containment);
         lines_only.add(&mls);
         match lines_only.finish() {
             Some(Geometry::MultiLineString(m)) => assert_eq!(m.0.len(), 2),
@@ -377,7 +374,7 @@ mod tests {
                 vec![],
             ),
         ]));
-        let mut polys_only = GeometryBuilder::new();
+        let mut polys_only = GeometryBuilder::new(PolygonFill::Containment);
         polys_only.add(&mpoly);
         match polys_only.finish() {
             Some(Geometry::MultiPolygon(mp)) => assert_eq!(mp.0.len(), 2),
@@ -387,7 +384,7 @@ mod tests {
 
     #[test]
     fn disjoint_line_and_polygon_combine_into_geometry_collection() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]));
         b.add(&ls(&[(10.0, 10.0), (11.0, 10.0)]));
         match b.finish() {
@@ -402,7 +399,7 @@ mod tests {
 
     #[test]
     fn line_fully_inside_polygon_is_clipped_away_entirely() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -421,7 +418,7 @@ mod tests {
 
     #[test]
     fn line_crossing_polygon_boundary_keeps_only_its_outside_portion() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -468,7 +465,7 @@ mod tests {
 
     #[test]
     fn point_inside_polygon_is_omitted() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -484,7 +481,7 @@ mod tests {
 
     #[test]
     fn point_outside_polygon_is_kept() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -504,7 +501,7 @@ mod tests {
 
     #[test]
     fn point_on_line_is_omitted() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&ls(&[(0.0, 0.0), (10.0, 0.0)]));
         b.add(&point(5.0, 0.0)); // sits exactly on the line
         match b.finish() {
@@ -515,7 +512,7 @@ mod tests {
 
     #[test]
     fn point_off_line_is_kept() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&ls(&[(0.0, 0.0), (10.0, 0.0)]));
         b.add(&point(5.0, 5.0));
         match b.finish() {
@@ -534,7 +531,7 @@ mod tests {
             ls(&[(10.0, 10.0), (11.0, 10.0)]),
             polygon(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]),
         ]));
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&gc);
         match b.finish() {
             Some(Geometry::GeometryCollection(gc)) => {
@@ -548,7 +545,7 @@ mod tests {
 
     #[test]
     fn line_variant_is_routed_to_line_stitcher() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&Geometry::from(Line::new(c(0.0, 0.0), c(1.0, 0.0))));
         b.add(&Geometry::from(Line::new(c(1.0, 0.0), c(2.0, 0.0))));
         match b.finish() {
@@ -559,7 +556,7 @@ mod tests {
 
     #[test]
     fn rect_variant_is_routed_to_polygon_assembler() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&Geometry::from(Rect::new(c(0.0, 0.0), c(4.0, 4.0))));
         match b.finish() {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
@@ -569,7 +566,7 @@ mod tests {
 
     #[test]
     fn triangle_variant_is_routed_to_polygon_assembler() {
-        let mut b = GeometryBuilder::new();
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&Geometry::from(Triangle::new(
             c(0.0, 0.0),
             c(4.0, 0.0),
@@ -582,8 +579,8 @@ mod tests {
     }
 
     #[test]
-    fn with_polygon_fill_containment_nests_the_inner_polygon() {
-        let mut b = GeometryBuilder::with_polygon_fill(PolygonFill::Containment);
+    fn containment_fill_nests_the_inner_polygon() {
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -603,8 +600,8 @@ mod tests {
     /// outline under `PolygonFill::Union`, not (as `Containment` would)
     /// come back empty.
     #[test]
-    fn with_polygon_fill_union_reconstructs_tiling_parts() {
-        let mut b = GeometryBuilder::with_polygon_fill(PolygonFill::Union);
+    fn union_fill_reconstructs_tiling_parts() {
+        let mut b = GeometryBuilder::new(PolygonFill::Union);
         b.add(&polygon(&[
             (0.0, 0.0),
             (10.0, 0.0),
@@ -630,27 +627,6 @@ mod tests {
                 assert!((p.unsigned_area() - 100.0).abs() < 1e-9);
             }
             other => panic!("expected the reconstructed outline, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn new_matches_with_polygon_fill_containment() {
-        let mut a = GeometryBuilder::new();
-        let mut b = GeometryBuilder::with_polygon_fill(PolygonFill::Containment);
-        for builder in [&mut a, &mut b] {
-            builder.add(&polygon(&[
-                (0.0, 0.0),
-                (10.0, 0.0),
-                (10.0, 10.0),
-                (0.0, 10.0),
-            ]));
-            builder.add(&polygon(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]));
-        }
-        for b in [a, b] {
-            match b.finish() {
-                Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
-                other => panic!("expected Polygon with a hole, got {other:?}"),
-            }
         }
     }
 }

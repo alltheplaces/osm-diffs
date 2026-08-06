@@ -876,8 +876,7 @@ fn assemble_relation_geometry<'a>(
     leaf_relations_geometry: Option<&GeometryTable<'a>>,
     super_relations_geometry: Option<&GeometryStore>,
 ) -> Result<Option<Geometry>> {
-    let mut geom_builder =
-        GeometryBuilder::with_polygon_fill(polygon_fill_for_relation_type(relation_type));
+    let mut geom_builder = GeometryBuilder::new(polygon_fill_for_relation_type(relation_type));
     for (member_type, id) in members {
         if let Some(g) = lookup_relation_member_geometry(
             member_type,

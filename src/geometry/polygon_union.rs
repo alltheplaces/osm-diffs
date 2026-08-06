@@ -29,10 +29,10 @@ const DEFAULT_MAX_UNION_COORDINATES: usize = 2000;
 /// inside another contributes nothing new (rather than becoming a hole)
 /// and a member that only partially overlaps extends the total area, same
 /// as any other union. See
-/// [`GeometryBuilder::with_polygon_fill`](super::GeometryBuilder::with_polygon_fill)
-/// for how a caller picks between the two (this module doesn't know
-/// anything about OSM relation types itself -- that's decided by the
-/// caller, e.g. from a relation's `type` tag).
+/// [`GeometryBuilder::new`](super::GeometryBuilder::new) for how a caller
+/// picks between the two (this module doesn't know anything about OSM
+/// relation types itself -- that's decided by the caller, e.g. from a
+/// relation's `type` tag).
 ///
 /// Unlike `PolygonAssembler`, this never flattens a polygon into loose
 /// rings: each added `Polygon`'s own holes stay attached to it (they were
