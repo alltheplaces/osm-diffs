@@ -70,6 +70,13 @@ def add_supplier:
 .metadata.component."bom-ref" = $root_ref |
 .dependencies[0].ref = $root_ref |
 
+# Declare the root component's dependency on our two vendored, non-crate
+# "data" components, so the dependency graph has a single root instead of
+# three (the FOSSA NTIA validator flags orphaned components -- ones no
+# other component depends on -- as extra roots).
+.dependencies[0].dependsOn =
+  ((.dependencies[0].dependsOn // []) + ["id-tagging-schema", "osm-testdata-grid"]) |
+
 .bomFormat = "CycloneDX" |
 .specVersion = "1.7" |
 .metadata.lifecycles = [{phase: "build"}] |
@@ -184,6 +191,33 @@ def add_supplier:
     }
   },
   {
+    "type": "data",
+    "bom-ref": "osm-testdata-grid",
+    "name": "osm-testdata-grid",
+    "description": "OSM grid test fixtures, vendored for unit/integration tests only",
+    "version": $OSM_TESTDATA_COMMIT,
+    "scope": "excluded",
+    "purl": "pkg:github/osmcode/osm-testdata@" + $OSM_TESTDATA_COMMIT + "#grid/data",
+    "licenses": [{
+      "license": {
+        "name": "Public Domain",
+        "acknowledgement": "declared"
+      }
+    }],
+    "externalReferences": [{
+      "type": "vcs",
+      "url": "https://github.com/osmcode/osm-testdata/tree/" + $OSM_TESTDATA_COMMIT + "/grid/data"
+    }],
+    "manufacturer": {
+      "name": "osmcode / Jochen Topf",
+      "url": ["https://github.com/osmcode/osm-testdata"]
+    },
+    "supplier": {
+      "name": "osmcode / Jochen Topf",
+      "url": ["https://github.com/osmcode/osm-testdata"]
+    }
+  },
+  {
     "type": "library",
     "bom-ref": "pkg/aws-lc",
     "name": "aws-lc",
@@ -253,6 +287,7 @@ ID_TAGGING_SCHEMA_LICENSE="$(sed -n 's/.*released under the \(.*\) license.*/\1/
 ID_TAGGING_SCHEMA_PURL="$(grep pkg: src/pipeline/osm/id_tagging_schema.rs | awk '{print $NF}')"
 ID_TAGGING_SCHEMA_VERSION="$(echo $ID_TAGGING_SCHEMA_PURL | sed 's/.*@//')"
 JQ_VERSION="$(jq --version | sed -n 's/jq-//p')"
+OSM_TESTDATA_COMMIT="$(sed -n 's/^Commit:  *//p' "${PROJECT_ROOT}/tests/test_data/osm-testdata-grid/VENDORED.md")"
 PROTOC_VERSION="$(protoc --version | awk '{print $2}')"   # "31.1" from "libprotoc 31.1"
 RUSTC_VERSION="$(rustc --version --verbose | awk '/^release:/{print $2}')"
 
@@ -267,6 +302,7 @@ jq \
   --arg ID_TAGGING_SCHEMA_PURL    "${ID_TAGGING_SCHEMA_PURL}" \
   --arg ID_TAGGING_SCHEMA_VERSION "${ID_TAGGING_SCHEMA_LICENSE}" \
   --arg JQ_VERSION                "${JQ_VERSION}" \
+  --arg OSM_TESTDATA_COMMIT       "${OSM_TESTDATA_COMMIT}" \
   --arg PROTOC_VERSION            "${PROTOC_VERSION}" \
   --arg RUSTC_VERSION             "${RUSTC_VERSION}" \
   "$JQ_PROGRAM" \
