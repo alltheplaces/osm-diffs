@@ -41,6 +41,8 @@ use geo::{
 };
 
 mod geometry_builder;
+#[cfg(test)]
+mod grid_tests;
 mod line_stitcher;
 mod polygon_assembler;
 
