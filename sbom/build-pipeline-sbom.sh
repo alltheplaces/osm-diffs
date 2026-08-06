@@ -70,6 +70,13 @@ def add_supplier:
 .metadata.component."bom-ref" = $root_ref |
 .dependencies[0].ref = $root_ref |
 
+# Declare the root component's dependency on our two vendored, non-crate
+# "data" components, so the dependency graph has a single root instead of
+# three (the FOSSA NTIA validator flags orphaned components -- ones no
+# other component depends on -- as extra roots).
+.dependencies[0].dependsOn =
+  ((.dependencies[0].dependsOn // []) + ["id-tagging-schema", "osm-testdata-grid"]) |
+
 .bomFormat = "CycloneDX" |
 .specVersion = "1.7" |
 .metadata.lifecycles = [{phase: "build"}] |
