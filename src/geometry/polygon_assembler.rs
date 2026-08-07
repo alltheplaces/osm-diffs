@@ -280,23 +280,31 @@ fn extract_rings(geom: &Geometry<f64>) -> Vec<LineString<f64>> {
 /// verbatim, not a recomputed approximation of them), so this doesn't
 /// give up any real matches.
 fn ring_key(ls: &LineString<f64>) -> Vec<(u64, u64)> {
-    let mut points = ls.0.clone();
-    if points.len() > 1 && points.first() == points.last() {
-        points.pop(); // the closing repeat; rotation re-closes it either way
-    }
-    if points.is_empty() {
+    let all = &ls.0;
+    let n = if all.len() > 1 && all.first() == all.last() {
+        all.len() - 1 // drop the closing repeat; rotation re-closes it either way
+    } else {
+        all.len()
+    };
+    if n == 0 {
         return Vec::new();
     }
 
-    let bits = |c: &Coord<f64>| (c.x.to_bits(), c.y.to_bits());
-    let mut reversed = points.clone();
-    reversed.reverse();
-    let n = points.len();
+    let bits = |c: Coord<f64>| (c.x.to_bits(), c.y.to_bits());
+    // `all[j]` walks the ring forward from index 0; `all[n - 1 - j]` walks
+    // it backward from the end -- reading both directions off the same
+    // slice by index, rather than materializing a second, reversed copy
+    // of a ring that can hold thousands of points.
+    let at = |forward: bool, j: usize| if forward { all[j] } else { all[n - 1 - j] };
 
-    [&points, &reversed]
+    [true, false]
         .into_iter()
-        .flat_map(|seq| {
-            (0..n).map(move |start| (0..n).map(|i| bits(&seq[(start + i) % n])).collect())
+        .flat_map(|forward| {
+            (0..n).map(move |start| {
+                (0..n)
+                    .map(move |i| bits(at(forward, (start + i) % n)))
+                    .collect()
+            })
         })
         .min()
         .unwrap_or_default()
