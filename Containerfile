@@ -61,9 +61,6 @@ RUN readelf -d /usr/local/bin/tippecanoe 2>&1 | grep -q NEEDED \
     && (echo "✗ dynamic deps detected" && exit 1) \
     || echo "✓ no dynamic library dependencies"
 
-COPY sbom/build_tippecanoe_sbom.sh .
-RUN sh build_tippecanoe_sbom.sh >/artifacts/tippecanoe.cdx.json
-
 
 # ----------------------------------------------------------------------------
 #  Stage 1.3: Build and test osm-diffs binary
@@ -72,13 +69,22 @@ RUN sh build_tippecanoe_sbom.sh >/artifacts/tippecanoe.cdx.json
 WORKDIR /usr/osm-diffs
 
 COPY Cargo.toml Cargo.lock build.rs rust-toolchain.toml .
-COPY sbom sbom
+COPY scripts/sbom scripts/sbom
 COPY src src
 COPY tests tests
 
 RUN cargo build --release --locked
 RUN cargo test --release --locked
-RUN sh sbom/build-pipeline-sbom.sh /artifacts/pipeline.cdx.json
+
+
+# ----------------------------------------------------------------------------
+#  Stage 1.4: Generate the SBOM for the container
+# ----------------------------------------------------------------------------
+#
+# Runs after both binaries (tippecanoe and osm-diffs) have been built, so a
+# single script invocation can see the facts about both of them.
+
+RUN sh scripts/sbom/generate-sbom.sh /artifacts/sbom.cdx.json
 
 
 # ----------------------------------------------------------------------------

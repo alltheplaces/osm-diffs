@@ -69,13 +69,19 @@ jobs:
           podman inspect --format '{{.Digest}}' ${IMAGE} >artifacts/digest.txt
           echo Built container "${IMAGE}@$(cat artifacts/digest.txt)"
 
-      - name: Build SBOM
-        id: build-sbom
+      - name: Patch image digest into SBOM
+        id: patch-sbom
         run: |
-          IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # generate-sbom.sh (run inside Containerfile, above) can't know the
+          # image digest -- it doesn't exist until the build above finishes.
+          # actions/attest binds the SBOM to a specific digest independently
+          # via its own subject-digest input, so this isn't required for
+          # provenance; we patch it in anyway so the SBOM is self-describing
+          # even when read outside of the attestation.
           DIGEST=$(cat artifacts/digest.txt)
-          TIMESTAMP=${{ steps.commit-info.outputs.timestamp }}
-          sh sbom/merge_sbom.sh ${IMAGE} ${DIGEST} ${TIMESTAMP}
+          jq --arg digest "${DIGEST}" '.metadata.component.version = $digest' \
+            artifacts/sbom.cdx.json > artifacts/sbom.cdx.json.tmp
+          mv artifacts/sbom.cdx.json.tmp artifacts/sbom.cdx.json
 
       - name: Push image
         id: push
@@ -181,7 +187,7 @@ jobs:
       - name: Attest amd64 SBOM
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d #v4.2.1
         with:
-          sbom-path: artifacts-amd64/container.cdx.json
+          sbom-path: artifacts-amd64/sbom.cdx.json
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.retrieve-digests.outputs.amd64_digest }}
           push-to-registry: true
@@ -189,7 +195,7 @@ jobs:
       - name: Attest arm64 SBOM
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d #v4.2.1
         with:
-          sbom-path: artifacts-arm64/container.cdx.json
+          sbom-path: artifacts-arm64/sbom.cdx.json
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.retrieve-digests.outputs.arm64_digest }}
           push-to-registry: true

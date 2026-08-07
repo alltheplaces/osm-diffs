@@ -8,12 +8,12 @@ on:
     branches: [ "main" ]
     paths:
       - 'Containerfile'
-      - 'sbom/**'
+      - 'scripts/sbom/**'
   pull_request:
     branches: [ "main" ]
     paths:
       - 'Containerfile'
-      - 'sbom/**'
+      - 'scripts/sbom/**'
 
 permissions: {}
 
@@ -37,9 +37,7 @@ jobs:
               --build-arg BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  \
               --volume $(pwd)/artifacts:/artifacts                          \
               -f Containerfile .
-    - name: Build SBOM
-      run: sh sbom/merge_sbom.sh
     - name: Validate SBOM
       run: |
           podman run --volume $(pwd)/artifacts:/artifacts:ro cyclonedx/cyclonedx-cli \
-              validate --input-file /artifacts/container.cdx.json --fail-on-errors
+              validate --input-file /artifacts/sbom.cdx.json --fail-on-errors
