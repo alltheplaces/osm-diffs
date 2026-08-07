@@ -1,9 +1,11 @@
 //! Assembles an arbitrarily-ordered bag of rings into a valid `Polygon` or
 //! `MultiPolygon`. See [`PolygonAssembler`].
 
+use std::collections::HashSet;
+
 use geo::algorithm::bool_ops::BooleanOps;
 use geo::orient::{Direction, Orient};
-use geo::{Geometry, LineString, MultiPolygon, Polygon, SimplifyVwPreserve};
+use geo::{Coord, Geometry, LineString, MultiPolygon, Polygon, SimplifyVwPreserve};
 
 use super::{align_to_reference_x, centroid_x};
 
@@ -21,6 +23,17 @@ const DEFAULT_MAX_RING_COORDINATES: usize = 2000;
 /// and order-agnostic and naturally handles arbitrary nesting depth —
 /// holes with islands with holes, disjoint outer shells, etc. — without
 /// needing to know which rings are meant to be shells versus holes.
+///
+/// # Duplicate rings
+/// The even-odd rule's flip side: a ring added twice (the same OSM way
+/// listed twice as a member, or two different ways that happen to trace
+/// the same boundary) toggles fill *twice* at every point along it,
+/// canceling back out to "absent" -- silently losing the ring, or (if it
+/// was meant to be a hole) silently losing the hole. `add_ring()` guards
+/// against this by dropping any ring that's an exact duplicate -- up to
+/// starting point and winding direction -- of one already added (see
+/// [`ring_key`]), rather than letting an even multiplicity cancel it out.
+/// See <https://github.com/alltheplaces/osm-diffs/issues/532>.
 ///
 /// # Antimeridian handling
 /// Rings passed in are assumed to already be internally antimeridian-safe
@@ -61,6 +74,12 @@ pub struct PolygonAssembler {
     /// Simplification tolerance, grown monotonically (see `LineStitcher`'s
     /// own `epsilon` field for why).
     epsilon: f64,
+    /// Canonicalized keys (see [`ring_key`]) of every ring added so far,
+    /// used to drop exact duplicates -- see "Duplicate rings" above.
+    /// Retained even for rings later simplified away by `compact()`: a
+    /// duplicate is duplicate input, independent of how the stored copy
+    /// later gets simplified.
+    seen_rings: HashSet<Vec<(u64, u64)>>,
 }
 
 impl PolygonAssembler {
@@ -75,17 +94,23 @@ impl PolygonAssembler {
             max_coordinates,
             total_coords: 0,
             epsilon: 1e-7,
+            seen_rings: HashSet::new(),
         }
     }
 
     /// Add a ring: a closed `LineString`, or a `Polygon`/`MultiPolygon`
     /// whose exterior and interior rings are flattened in individually.
-    /// The running coordinate total is enforced here — see `compact`.
+    /// A ring that exactly duplicates one already added (see "Duplicate
+    /// rings" above) is dropped rather than stored twice. The running
+    /// coordinate total is enforced here — see `compact`.
     pub fn add_ring(&mut self, ring: &Geometry<f64>) {
         for mut ls in extract_rings(ring) {
             match self.reference_x {
                 Some(rx) => align_to_reference_x(&mut ls, rx),
                 None => self.reference_x = Some(centroid_x(&ls)),
+            }
+            if !self.seen_rings.insert(ring_key(&ls)) {
+                continue; // exact duplicate of a ring already added
             }
             self.total_coords += ls.0.len();
             self.rings.push(ls);
@@ -239,6 +264,62 @@ fn extract_rings(geom: &Geometry<f64>) -> Vec<LineString<f64>> {
     }
 }
 
+/// Canonicalizes a closed ring's coordinates so that two rings tracing
+/// the identical boundary produce the same key, regardless of which point
+/// they start at or which direction they're wound in -- e.g. `(A,B,C,D)`,
+/// `(C,D,A,B)`, and `(D,C,B,A)` all key the same. Tries every rotation of
+/// both the ring's own point order and its reverse, and keeps the
+/// lexicographically smallest -- O(n²) in the ring's point count, fine
+/// given `PolygonAssembler`'s own coordinate budget bounds how large a
+/// stored ring ever gets.
+fn ring_key(ls: &LineString<f64>) -> Vec<(u64, u64)> {
+    let all = &ls.0;
+    let n = if all.len() > 1 && all.first() == all.last() {
+        all.len() - 1 // drop the closing repeat; rotation re-closes it either way
+    } else {
+        all.len()
+    };
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Every way to read this ring as a fixed-length sequence: starting at
+    // any of its `n` points, walked in either direction. Two rings that
+    // trace the same boundary -- whichever point they start at, whichever
+    // way they're wound -- share exactly one of these `2n` readings, so
+    // the smallest one is a canonical key for the ring's shape.
+    (0..n)
+        .flat_map(|start| [true, false].map(|forward| rotation_key(all, n, start, forward)))
+        .min()
+        .unwrap_or_default()
+}
+
+/// One reading of `all`'s `n`-point ring: starting at index `start`,
+/// walked either forward (`all[start], all[start + 1], ...`) or backward
+/// (`all[start], all[start - 1], ...`), wrapping around. Indexes into
+/// `all` directly rather than walking a separate reversed copy of it,
+/// since a stored ring can hold thousands of points.
+///
+/// Coordinates come back as `(x.to_bits(), y.to_bits())` rather than
+/// plain `f64` pairs because `ring_key`'s callers need to both hash this
+/// (`PolygonAssembler::seen_rings` is a `HashSet` of these keys) and
+/// order it (`ring_key` takes the lexicographically smallest reading),
+/// and `f64` supports neither: it has no `Hash` impl, and NaN keeps it
+/// from having a total order (no `Ord`) at all. `u64`'s bit pattern gives
+/// both for free, and loses nothing here -- a duplicated OSM way reuses
+/// its underlying nodes' coordinates verbatim, so the values being
+/// compared are exactly bit-identical to begin with, not independently
+/// computed approximations that merely round to the same thing.
+fn rotation_key(all: &[Coord<f64>], n: usize, start: usize, forward: bool) -> Vec<(u64, u64)> {
+    (0..n)
+        .map(|i| {
+            let j = (start + i) % n;
+            let point = if forward { all[j] } else { all[n - 1 - j] };
+            (point.x.to_bits(), point.y.to_bits())
+        })
+        .collect()
+}
+
 struct RingSoup(Vec<LineString<f64>>);
 
 impl BooleanOps for RingSoup {
@@ -300,6 +381,52 @@ mod tests {
         match a.finish() {
             Some(Geometry::MultiPolygon(mp)) => assert_eq!(mp.0.len(), 2),
             other => panic!("expected MultiPolygon, got {other:?}"),
+        }
+    }
+
+    /// https://github.com/alltheplaces/osm-diffs/issues/532, mirroring
+    /// grid fixture `7/790`: a ring added twice (the same OSM way listed
+    /// twice as a member) must not cancel itself out under the even-odd
+    /// rule -- it should still resolve to that one ring's shape.
+    #[test]
+    fn duplicate_ring_is_not_lost() {
+        let mut a = PolygonAssembler::new();
+        let r = ring(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]);
+        a.add_ring(&r);
+        a.add_ring(&r);
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
+            other => panic!("expected the duplicated ring to still resolve, got {other:?}"),
+        }
+    }
+
+    /// Mirrors grid fixture `7/792`: the duplicate traces the identical
+    /// boundary but starts at a different point (and, here, also winds
+    /// the opposite direction) -- still the same ring, still deduped.
+    #[test]
+    fn duplicate_ring_at_a_different_start_point_and_direction_is_still_deduped() {
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&ring(&[(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)]));
+        // Same square, starting at (4.0, 4.0) and wound the other way.
+        a.add_ring(&ring(&[(4.0, 4.0), (4.0, 0.0), (0.0, 0.0), (0.0, 4.0)]));
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
+            other => panic!("expected the rotated duplicate to be deduped, got {other:?}"),
+        }
+    }
+
+    /// Mirrors grid fixture `7/795`: a *hole* ring added twice must not
+    /// cancel back out to "no hole".
+    #[test]
+    fn duplicate_hole_ring_is_not_lost() {
+        let mut a = PolygonAssembler::new();
+        a.add_ring(&ring(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]));
+        let hole = ring(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0), (2.0, 4.0)]);
+        a.add_ring(&hole);
+        a.add_ring(&hole);
+        match a.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+            other => panic!("expected the hole to survive being added twice, got {other:?}"),
         }
     }
 
