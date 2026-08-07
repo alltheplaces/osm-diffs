@@ -32,18 +32,8 @@
 //! it's compared against whichever of `default`/`fix`/`location` is
 //! actually a valid WKT (see [`expected_geometry`]).
 //!
-//! Two further caveats, tracked as known mismatches in
-//! [`KNOWN_MISMATCHES`] rather than hard test failures:
-//! * **Duplicate/overlapping ring members self-cancel.** A relation whose
-//!   members describe the same ring twice (literally the same way twice,
-//!   as `790`, or the same way listed twice as a member, as `795`, or two
-//!   different ways tracing the same or an overlapping ring, as
-//!   `791`/`792`) hits `PolygonAssembler`'s even-odd nesting rule exactly
-//!   as two perfectly overlapping rings would: the second "cancels" the
-//!   first, producing nothing (or, for `795`, dropping the hole entirely).
-//!   `default` is itself `INVALID` for these; only `location` gives a
-//!   lenient expected area. See
-//!   <https://github.com/alltheplaces/osm-diffs/issues/532>.
+//! One further caveat, tracked as a known mismatch in [`KNOWN_MISMATCHES`]
+//! rather than a hard test failure:
 //! * **A "spike" (an exact-reversal duplicate segment) can leave a ring in
 //!   pieces that don't get re-stitched.** `LineStitcher` cuts a stitched
 //!   path at any point it revisits (self-intersection repair, same
@@ -311,10 +301,6 @@ fn areas_match(actual: &Geometry<f64>, expected: &MultiPolygon<f64>) -> bool {
 /// here (rather than skipped silently) so a fix shows up as a now-
 /// unexpectedly-passing test, prompting its removal from this list.
 const KNOWN_MISMATCHES: &[u32] = &[
-    // Duplicate/overlapping ring members self-cancel under the even-odd
-    // nesting rule (see module docs' "duplicate/overlapping" caveat).
-    // https://github.com/alltheplaces/osm-diffs/issues/532
-    790, 791, 792, 795,
     // A "spike" (exact-reversal duplicate segment) leaves a ring in
     // pieces that don't get re-stitched (see module docs' "spike"
     // caveat). https://github.com/alltheplaces/osm-diffs/issues/537
