@@ -1,61 +1,32 @@
-#!/usr/bin/env sh
-#
 # SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
 # SPDX-License-Identifier: MIT
 #
-# Generate and post-process a CycloneDX SBOM for diffed-places-pipeline
-# so it passes the FOSSA NTIA validator and contains a Cryptographic
-# Bill Of Materials (CBOM).
+# Enrich the raw CycloneDX SBOM produced by `cargo cyclonedx` for the
+# osm-diffs binary: fix up the dependency graph, attach build-environment
+# and supplier metadata, and add the vendored "data" components (and the
+# Cryptographic Bill of Materials entries) that cargo-cyclonedx cannot see
+# on its own.
 #
-# Usage:
-#   ./sbom/build-pipeline-sbom.sh [OUTPUT]
+# Input (stdin): the raw CycloneDX 1.5 document from `cargo cyclonedx`.
+# Output: a CycloneDX 1.7 document, still describing only the osm-diffs
+#   application (not the final container -- that's assembled by merge.jq).
 #
-#   OUTPUT  path to write the fixed SBOM
-#           defaults to osm-diffs.cdx.json in the project root
-#
-# Requirements
-#   cargo, cargo-cyclonedx   (`cargo install cargo-cyclonedx`)
-#   jq ≥ 1.6                 (macOS: `brew install jq`  |  Alpine: `apk add jq`)
+# Arguments (all required, passed with --arg):
+#   ALPINE_VERSION            Alpine Linux version of the build environment
+#                             ("dev-unknown" outside of Alpine)
+#   ARCH                      target architecture (amd64 | aarch64)
+#   AWS_LC_SYS_VERSION        version of the aws-lc-sys crate (from Cargo.lock)
+#   CARGO_CYCLONEDX_VERSION   version of the cargo-cyclonedx tool
+#   ID_TAGGING_SCHEMA_LICENSE SPDX license id of the vendored id-tagging-schema
+#   ID_TAGGING_SCHEMA_PURL    package URL of the vendored id-tagging-schema
+#   ID_TAGGING_SCHEMA_VERSION version of the vendored id-tagging-schema
+#   JQ_VERSION                version of jq used to build this SBOM
+#   OSM_TESTDATA_COMMIT       commit hash of the vendored osm-testdata grid
+#   PROTOC_VERSION            version of the Protocol Buffers compiler
+#   RUSTC_VERSION             version of the Rust compiler
+#   DEV_BUILD                 "true" if built outside of the real Alpine
+#                             build environment (placeholders were used)
 
-set -eu
-
-# ── constants ────────────────────────────────────────────────────────────────
-BINARY_NAME="osm-diffs"
-
-# ── locate project root ──────────────────────────────────────────────────────
-# The script lives in <project-root>/sbom/, so the project root is one level
-# up from the directory containing this file.  We resolve it here so the
-# script works correctly regardless of the working directory when invoked
-# (e.g. `./sbom/build-pipeline-sbom.sh` from the project root, or
-# `../sbom/build-pipeline-sbom.sh` from a subdirectory).
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-
-# ── argument handling ────────────────────────────────────────────────────────
-OUTPUT="${1:-${PROJECT_ROOT}/${BINARY_NAME}.cdx.json}"
-
-# ── pre-flight checks ────────────────────────────────────────────────────────
-command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo is not installed" >&2; exit 1; }
-command -v jq    >/dev/null 2>&1 || { echo "ERROR: jq is not installed"    >&2; exit 1; }
-
-# ── generate raw SBOM ────────────────────────────────────────────────────────
-RAW_FILE="${PROJECT_ROOT}/osm-diffs_bin.cdx.json"
-
-# Clean up any leftover file from a previous failed run.
-rm -f "$RAW_FILE"
-
-cargo cyclonedx \
-    --describe binaries \
-    --format json \
-    --manifest-path "${PROJECT_ROOT}/Cargo.toml" \
-    --spec-version 1.5
-
-if [ ! -f "$RAW_FILE" ]; then
-    echo "ERROR: cargo cyclonedx did not produce expected file: $RAW_FILE" >&2
-    exit 1
-fi
-
-JQ_PROGRAM=$(cat <<'JQEOF'
 # Add a crates.io supplier to a component object if it lacks one.
 def add_supplier:
   if .supplier == null or .supplier == {} then
@@ -268,46 +239,13 @@ def add_supplier:
 ] |
 
 (.components[] | select(.name == "rustls") | ."bom-ref") as $rustls_ref |
-(.dependencies[] | select(.ref == $rustls_ref)).dependsOn += ["crypto/protocol/tls-1.3"]
+(.dependencies[] | select(.ref == $rustls_ref)).dependsOn += ["crypto/protocol/tls-1.3"] |
 
-JQEOF
-)
-
-ARCH=$(uname -m)
-case "$ARCH" in
-    x86_64) ARCH="amd64" ;;
-    arm64)  ARCH="aarch64" ;;
-esac
-
-ALPINE_VERSION="$(grep "^VERSION_ID=" /etc/os-release | cut -d '=' -f 2)"
-APK_VERSION="$(apk --version | sed -E 's/.* ([0-9]+\.[0-9]+(\.[0-9]+(-r[0-9]+)?)?).*/\1/')"
-AWS_LC_SYS_VERSION="$(grep -A1 'name = "aws-lc-sys"' Cargo.lock | grep version | sed -n 's/.*version = "//;s/"//p')"
-CARGO_CYCLONEDX_VERSION="$(cargo cyclonedx --version | cut -d ' ' -f 2)"
-ID_TAGGING_SCHEMA_LICENSE="$(sed -n 's/.*released under the \(.*\) license.*/\1/p' src/pipeline/osm/id_tagging_schema.rs)"
-ID_TAGGING_SCHEMA_PURL="$(grep pkg: src/pipeline/osm/id_tagging_schema.rs | awk '{print $NF}')"
-ID_TAGGING_SCHEMA_VERSION="$(echo $ID_TAGGING_SCHEMA_PURL | sed 's/.*@//')"
-JQ_VERSION="$(jq --version | sed -n 's/jq-//p')"
-OSM_TESTDATA_COMMIT="$(sed -n 's/^Commit:  *//p' "${PROJECT_ROOT}/tests/test_data/osm-testdata-grid/VENDORED.md")"
-PROTOC_VERSION="$(protoc --version | awk '{print $2}')"   # "31.1" from "libprotoc 31.1"
-RUSTC_VERSION="$(rustc --version --verbose | awk '/^release:/{print $2}')"
-
-# ── post-process and write output ────────────────────────────────────────────
-jq \
-  --arg binary                    "${BINARY_NAME}" \
-  --arg ALPINE_VERSION            "${ALPINE_VERSION}" \
-  --arg ARCH                      "${ARCH}" \
-  --arg AWS_LC_SYS_VERSION        "${AWS_LC_SYS_VERSION}" \
-  --arg CARGO_CYCLONEDX_VERSION   "${CARGO_CYCLONEDX_VERSION}" \
-  --arg ID_TAGGING_SCHEMA_LICENSE "${ID_TAGGING_SCHEMA_LICENSE}" \
-  --arg ID_TAGGING_SCHEMA_PURL    "${ID_TAGGING_SCHEMA_PURL}" \
-  --arg ID_TAGGING_SCHEMA_VERSION "${ID_TAGGING_SCHEMA_LICENSE}" \
-  --arg JQ_VERSION                "${JQ_VERSION}" \
-  --arg OSM_TESTDATA_COMMIT       "${OSM_TESTDATA_COMMIT}" \
-  --arg PROTOC_VERSION            "${PROTOC_VERSION}" \
-  --arg RUSTC_VERSION             "${RUSTC_VERSION}" \
-  "$JQ_PROGRAM" \
-  "$RAW_FILE" > "$OUTPUT"
-
-rm -f "$RAW_FILE"
-
-echo "Written: $OUTPUT"
+if $DEV_BUILD == "true" then
+  .metadata.properties = ((.metadata.properties // []) + [{
+    name: "osm-diffs:sbom:devBuild",
+    value: "true"
+  }])
+else
+  .
+end
