@@ -34,15 +34,17 @@
 //!
 //! One further caveat, tracked as a known mismatch in [`KNOWN_MISMATCHES`]
 //! rather than a hard test failure:
-//! * **A "spike" (an exact-reversal duplicate segment) can leave a ring in
-//!   pieces that don't get re-stitched.** `LineStitcher` cuts a stitched
-//!   path at any point it revisits (self-intersection repair, same
-//!   philosophy as `build_line`'s own), which correctly drops a
-//!   zero-width spike -- but the resulting pieces, though they still share
-//!   endpoints with each other, aren't fed through a second stitching
-//!   pass, so a ring that would close cleanly once the spike is removed
-//!   (`711`, `742`, `743`) instead stays several disconnected open pieces.
-//!   See <https://github.com/alltheplaces/osm-diffs/issues/537>.
+//! * **A segment duplicated across two ways isn't deduped, and can leave a
+//!   ring in pieces.** Two ways that both contain the same segment (`711`
+//!   -- unlike a "spike", `742`/`743`'s exact-reversal case, which
+//!   `LineStitcher` does now handle) stitch into one chain, get cut at the
+//!   incidental point-touches the duplicate creates, and end up as two
+//!   duplicate 2-point pieces plus the real path -- after which every
+//!   node the duplicate touches looks like a genuine degree-3 junction
+//!   (one edge from each duplicate copy, one from the real path), which
+//!   correctly blocks further merging in the general case but is wrong
+//!   here, where the "3" is an artifact of the duplicate rather than a
+//!   real fork. See <https://github.com/alltheplaces/osm-diffs/issues/541>.
 //!
 //! A fixture with no valid `default`/`fix`/`location` at all has no oracle
 //! to check against and is likewise recorded in [`KNOWN_MISMATCHES`].
@@ -301,10 +303,10 @@ fn areas_match(actual: &Geometry<f64>, expected: &MultiPolygon<f64>) -> bool {
 /// here (rather than skipped silently) so a fix shows up as a now-
 /// unexpectedly-passing test, prompting its removal from this list.
 const KNOWN_MISMATCHES: &[u32] = &[
-    // A "spike" (exact-reversal duplicate segment) leaves a ring in
-    // pieces that don't get re-stitched (see module docs' "spike"
-    // caveat). https://github.com/alltheplaces/osm-diffs/issues/537
-    711, 742, 743,
+    // A segment duplicated across two ways isn't deduped (see module
+    // docs' "duplicated across two ways" caveat).
+    // https://github.com/alltheplaces/osm-diffs/issues/541
+    711,
     // No default/fix/location entry parses to a real polygon at all --
     // nothing to check `GeometryBuilder`'s output against yet. Not a filed
     // bug: these fixtures are meant to have no lenient interpretation.
