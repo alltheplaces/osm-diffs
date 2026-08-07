@@ -12,6 +12,13 @@ use super::{align_to_reference_x, centroid_x, cut_at_crossings, find_crossings};
 /// [`LineStitcher::with_max_coordinates`] to override it.
 const DEFAULT_MAX_COORDINATES: usize = 2000;
 
+/// Safety cap on how many times [`LineStitcher::finish`] alternates
+/// cutting and re-stitching (see "Spikes" below) before giving up and
+/// returning whatever it has. In practice this settles in one or two
+/// rounds; the cap only guards against a pathological input that somehow
+/// never converges.
+const MAX_STITCH_CUT_ROUNDS: usize = 8;
+
 type CoordKey = (u64, u64);
 
 fn coord_key(c: Coord<f64>) -> CoordKey {
@@ -85,6 +92,23 @@ enum ChainEnd {
 /// itself might introduce (rare, but
 /// <https://github.com/georust/geo/issues/1049> shows `SimplifyVwPreserve`
 /// isn't entirely immune to it despite the name).
+///
+/// # Spikes
+/// Cutting a self-intersection can newly expose endpoints that stitch
+/// with each other. The clearest case is a "spike": two ways that share
+/// *both* endpoints but double back on one segment along the way (`A → B
+/// → C` and `C → B → D → E → A`) merge into one chain that revisits `B`
+/// (`A,B,C,B,D,E,A`). That's not a proper crossing (the doubled-back
+/// `B→C→B` is a collinear overlap, not two segments crossing at a point),
+/// but it does make `B` a self-touching vertex, and cutting there leaves
+/// three pieces: `A,B` and `B,D,E,A` — the ring the ways actually
+/// describe, just no longer stitched together — plus the degenerate
+/// `B,C,B` spike itself, which stays a separate, harmless closed 2-point
+/// loop no consumer downstream treats as real area. `finish()` re-stitches
+/// after every cutting round and only stops once a round leaves the piece
+/// count unchanged, so `A,B` and `B,D,E,A` end up merged back into the
+/// closed ring they were always meant to be. See
+/// <https://github.com/alltheplaces/osm-diffs/issues/537>.
 pub struct LineStitcher {
     lines: Vec<VecDeque<Coord<f64>>>,
     reference_x: Option<f64>,
@@ -188,47 +212,38 @@ impl LineStitcher {
             return None;
         }
 
-        // Static degree per node: how many way-ends (across everything
-        // added) touch it. Computed once, up front, so a junction found
-        // late doesn't have to "undo" an earlier greedy merge.
-        let mut degree: HashMap<CoordKey, usize> = HashMap::new();
-        for line in &self.lines {
-            *degree.entry(coord_key(line[0])).or_insert(0) += 1;
-            *degree.entry(coord_key(*line.back().unwrap())).or_insert(0) += 1;
-        }
+        let mut current = stitch_round(std::mem::take(&mut self.lines));
 
-        let mut chains: Vec<Option<VecDeque<Coord<f64>>>> = Vec::new();
-        let mut endpoint_index: HashMap<CoordKey, (usize, ChainEnd)> = HashMap::new();
-        for line in std::mem::take(&mut self.lines) {
-            add_chain(&mut chains, &mut endpoint_index, &degree, line);
-        }
-
-        let mut stitched: Vec<VecDeque<Coord<f64>>> = chains.into_iter().flatten().collect();
-
-        let total: usize = stitched.iter().map(|c| c.len()).sum();
+        // Simplify before the first self-intersection check below, so a
+        // self-intersection simplification itself introduces also gets
+        // caught (see struct docs).
+        let total: usize = current.iter().map(|c| c.len()).sum();
         if total > self.max_coordinates {
-            self.lines = stitched;
+            self.lines = current;
             self.total_coords = total;
             self.compact();
-            stitched = std::mem::take(&mut self.lines);
+            current = std::mem::take(&mut self.lines);
         }
 
-        let mut pieces: Vec<LineString<f64>> = Vec::new();
-        for chain in stitched {
-            if chain.len() < 2 {
-                continue;
+        // Cut, then re-stitch whatever that cut newly exposed, until a
+        // round leaves the piece count unchanged (see struct docs,
+        // "Spikes"). For ordinary input (no self-intersection) `changed`
+        // is `false` on the very first round, so this costs nothing beyond
+        // today's single cut pass.
+        for _ in 0..MAX_STITCH_CUT_ROUNDS {
+            let (pieces, changed) = cut_round(current);
+            current = pieces;
+            if !changed {
+                break;
             }
-            let ls = LineString::new(chain.into_iter().collect());
-            if !ls.is_valid() {
-                continue; // e.g. a degenerate all-duplicate-point loop
-            }
-            let crossings = find_crossings(&ls);
-            if crossings.is_empty() {
-                pieces.push(ls);
-            } else {
-                pieces.extend(cut_at_crossings(&ls, crossings));
-            }
+            current = stitch_round(current);
         }
+
+        let pieces: Vec<LineString<f64>> = current
+            .into_iter()
+            .filter(|chain| chain.len() >= 2)
+            .map(|chain| LineString::new(chain.into_iter().collect()))
+            .collect();
 
         match pieces.len() {
             0 => None,
@@ -236,6 +251,61 @@ impl LineStitcher {
             _ => Some(Geometry::from(MultiLineString::new(pieces))),
         }
     }
+}
+
+/// One round of stitching: computes per-node degree fresh from `lines`'
+/// current endpoints, then merges through every degree-2 junction (see
+/// struct docs). A chain that's already a closed loop is left as-is — it
+/// never tries to extend through its own closing node.
+fn stitch_round(lines: Vec<VecDeque<Coord<f64>>>) -> Vec<VecDeque<Coord<f64>>> {
+    // Static degree per node: how many way-ends (across everything in
+    // `lines`) touch it. Computed once, up front, so a junction found
+    // late doesn't have to "undo" an earlier greedy merge.
+    let mut degree: HashMap<CoordKey, usize> = HashMap::new();
+    for line in &lines {
+        *degree.entry(coord_key(line[0])).or_insert(0) += 1;
+        *degree.entry(coord_key(*line.back().unwrap())).or_insert(0) += 1;
+    }
+
+    let mut chains: Vec<Option<VecDeque<Coord<f64>>>> = Vec::new();
+    let mut endpoint_index: HashMap<CoordKey, (usize, ChainEnd)> = HashMap::new();
+    for line in lines {
+        add_chain(&mut chains, &mut endpoint_index, &degree, line);
+    }
+    chains.into_iter().flatten().collect()
+}
+
+/// One round of self-intersection repair: the same repair `build_line`
+/// uses, applied to each of `chains` independently -- validate, then cut
+/// at every self-crossing. Returns the resulting pieces, along with
+/// whether their count differs from `chains.len()`: a proxy for "this
+/// round changed something", which `finish()` uses to decide whether
+/// another stitching round might find newly-exposed endpoints to merge
+/// (see struct docs, "Spikes").
+fn cut_round(chains: Vec<VecDeque<Coord<f64>>>) -> (Vec<VecDeque<Coord<f64>>>, bool) {
+    let before = chains.len();
+    let mut pieces: Vec<VecDeque<Coord<f64>>> = Vec::new();
+    for chain in chains {
+        if chain.len() < 2 {
+            continue;
+        }
+        let ls = LineString::new(chain.into_iter().collect());
+        if !ls.is_valid() {
+            continue; // e.g. a degenerate all-duplicate-point loop
+        }
+        let crossings = find_crossings(&ls);
+        if crossings.is_empty() {
+            pieces.push(ls.0.into_iter().collect());
+        } else {
+            pieces.extend(
+                cut_at_crossings(&ls, crossings)
+                    .into_iter()
+                    .map(|cut| cut.0.into_iter().collect()),
+            );
+        }
+    }
+    let changed = pieces.len() != before;
+    (pieces, changed)
 }
 
 fn add_chain(
@@ -501,6 +571,37 @@ mod tests {
                 }
             }
             other => panic!("expected MultiLineString, got {other:?}"),
+        }
+    }
+
+    /// https://github.com/alltheplaces/osm-diffs/issues/537, mirroring
+    /// osm-testdata grid fixture `7/742`: two ways sharing both endpoints
+    /// but doubling back on one segment (`A→B→C` and `C→B→D→E→A`) stitch
+    /// into a chain that revisits `B`. Cutting that "spike" away should
+    /// leave the two *other* pieces free to re-stitch into the closed
+    /// ring they actually describe, not stuck as separate open paths.
+    #[test]
+    fn spike_is_cut_and_the_remaining_pieces_restitch_into_a_ring() {
+        let mut a = LineStitcher::new();
+        a.add(&ls(&[(0.0, 0.0), (0.0, 1.0), (0.0, 2.0)])); // A, B, C
+        a.add(&ls(&[
+            (0.0, 2.0), // C
+            (0.0, 1.0), // B (doubles back)
+            (1.0, 1.0), // D
+            (1.0, 0.0), // E
+            (0.0, 0.0), // A
+        ]));
+        match a.finish() {
+            Some(Geometry::MultiLineString(m)) => {
+                let has_closed_ring =
+                    m.0.iter()
+                        .any(|l| l.0.len() >= 4 && l.0.first() == l.0.last());
+                assert!(
+                    has_closed_ring,
+                    "expected a closed ring among the pieces, got {m:?}"
+                );
+            }
+            other => panic!("expected the spike cut away from a re-stitched ring, got {other:?}"),
         }
     }
 
