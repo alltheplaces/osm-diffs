@@ -16,7 +16,7 @@
 //! The header is written uncompressed, ahead of the lz4 frame, so that
 //! [RecordReader::len] is available without decompressing the file.
 
-use std::fs::File;
+use std::fs::{File, rename};
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
@@ -153,16 +153,24 @@ impl Iterator for RecordIter {
 
 /// Writer for a spool file: writes a file header, followed by an
 /// lz4-compressed stream of length-prefixed records.
+///
+/// Writes go to a temporary file beside `path`; [RecordWriter::close]
+/// finishes it and atomically renames it into place, so a reader never
+/// observes a partially written file.
 pub struct RecordWriter {
     encoder: FrameEncoder<File>,
     count: u64,
+    path: PathBuf,
+    tmp_path: PathBuf,
 }
 
 impl RecordWriter {
     /// Create a new spool file for writing, truncating it if it already exists.
     pub fn create(path: &Path) -> Result<RecordWriter> {
-        let mut file = File::create(path)
-            .with_context(|| format!("failed to create spool file {}", path.display()))?;
+        let mut tmp_path = path.to_path_buf();
+        tmp_path.add_extension("tmp");
+        let mut file = File::create(&tmp_path)
+            .with_context(|| format!("failed to create spool file {}", tmp_path.display()))?;
 
         // Reserve space for the header; `close()` seeks back to fill in the
         // real record count once it is known.
@@ -174,6 +182,8 @@ impl RecordWriter {
         Ok(RecordWriter {
             encoder: FrameEncoder::new(file),
             count: 0,
+            path: path.to_path_buf(),
+            tmp_path,
         })
     }
 
@@ -193,9 +203,9 @@ impl RecordWriter {
         Ok(())
     }
 
-    /// Flush all buffered data, finish the lz4 frame, and patch the file
-    /// header with the final record count, ensuring the file is complete
-    /// and readable. Consumes the writer, since no more writes are
+    /// Flush all buffered data, finish the lz4 frame, patch the file header
+    /// with the final record count, and atomically rename the temporary
+    /// file into place. Consumes the writer, since no more writes are
     /// possible after this.
     pub fn close(self) -> Result<()> {
         let mut file = self
@@ -209,6 +219,15 @@ impl RecordWriter {
         file.write_all(&self.count.to_le_bytes())
             .context("failed to write final record count")?;
         file.flush().context("failed to flush underlying file")?;
+        drop(file);
+
+        rename(&self.tmp_path, &self.path).with_context(|| {
+            format!(
+                "failed to rename {} to {}",
+                self.tmp_path.display(),
+                self.path.display()
+            )
+        })?;
 
         Ok(())
     }
