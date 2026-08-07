@@ -569,9 +569,9 @@ fn assemble_super_relations(
                     continue;
                 };
 
-                let fti = FeatureToIndex::decode(blob)?;
+                let mut fti = FeatureToIndex::decode(blob)?;
                 let rel_geometry = {
-                    let feature = fti.feature.expect("feature");
+                    let feature = fti.feature.as_ref().expect("feature");
                     let relation_type = relation_type_from_feature_tags(&feature.tags, strings);
                     let rel_members = feature
                         .relation_members
@@ -600,7 +600,13 @@ fn assemble_super_relations(
                 // the parents.
                 geometry_store.insert(rel_id, &rel_geometry)?;
 
-                // TODO: Modify fti: Store rel_geometry, s2 cells, s2 cell of centroid (for sort key).
+                // Modify fti: Store rel_geometry, s2 cells.
+                // TODO: Also store the s2 cell of the centroid (for sort key), once
+                // we look at that part of the TODO in a later change.
+                let feature = fti.feature.as_mut().expect("feature");
+                write_geometry(&mut feature.geometry_wkb, &rel_geometry, &WKB_WRITE_OPTIONS)?;
+                assemble_geometry(&rel_geometry, &mut fti.s2_cell_id);
+                feature_tx.send(fti.encode_to_vec())?;
             }
             drop(feature_tx);
             Ok(())
