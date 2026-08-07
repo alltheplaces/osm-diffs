@@ -22,7 +22,7 @@
 //! WKT by area of symmetric difference, not by string equality, since
 //! ring start point/winding direction legitimately differ.
 //!
-//! # `default` vs. `fix`/`location`, and known mismatches
+//! # `default` vs. `fix`/`location`
 //! A fixture's `default` interpretation is the strict OGC reading; `fix`
 //! and `location` (checked, in the vendored data, only ever alongside an
 //! `INVALID` default) are alternate, deliberately lenient readings — e.g.
@@ -32,24 +32,11 @@
 //! it's compared against whichever of `default`/`fix`/`location` is
 //! actually a valid WKT (see [`expected_geometry`]).
 //!
-//! One further caveat, tracked as a known mismatch in [`KNOWN_MISMATCHES`]
-//! rather than a hard test failure:
-//! * **A segment duplicated across two ways isn't deduped, and can leave a
-//!   ring in pieces.** Two ways that both contain the same segment (`711`
-//!   -- unlike a "spike", `742`/`743`'s exact-reversal case, which
-//!   `LineStitcher` does now handle) stitch into one chain, get cut at the
-//!   incidental point-touches the duplicate creates, and end up as two
-//!   duplicate 2-point pieces plus the real path -- after which every
-//!   node the duplicate touches looks like a genuine degree-3 junction
-//!   (one edge from each duplicate copy, one from the real path), which
-//!   correctly blocks further merging in the general case but is wrong
-//!   here, where the "3" is an artifact of the duplicate rather than a
-//!   real fork. See <https://github.com/alltheplaces/osm-diffs/issues/541>.
-//!
-//! A fixture with no valid `default`/`fix`/`location` at all has no oracle
-//! to check against and is likewise recorded in [`KNOWN_MISMATCHES`].
-//! None of this is something this test suite should fail CI over today —
-//! it's the follow-up work the grid run surfaced.
+//! Every fixture that has an oracle to check against matches it. The only
+//! ones this test doesn't hold itself accountable for are tracked in
+//! [`NO_ORACLE_FIXTURES`] — fixtures with no valid `default`/`fix`/`location`
+//! at all, so there's nothing to check `GeometryBuilder`'s output against
+//! in the first place. That's not a bug; see that constant's docs.
 
 use std::{collections::HashMap, fs, path::PathBuf};
 
@@ -296,22 +283,18 @@ fn areas_match(actual: &Geometry<f64>, expected: &MultiPolygon<f64>) -> bool {
 // The test itself
 // =======================================================================
 
-/// Grid test IDs whose `GeometryBuilder` output is known not to match its
-/// oracle yet — either because there's no valid `default`/`fix`/`location`
-/// WKT to check against at all, or because of the
-/// multipolygon-vs-general-relation gap noted in the module docs. Tracked
-/// here (rather than skipped silently) so a fix shows up as a now-
-/// unexpectedly-passing test, prompting its removal from this list.
-const KNOWN_MISMATCHES: &[u32] = &[
-    // A segment duplicated across two ways isn't deduped (see module
-    // docs' "duplicated across two ways" caveat).
-    // https://github.com/alltheplaces/osm-diffs/issues/541
-    711,
-    // No default/fix/location entry parses to a real polygon at all --
-    // nothing to check `GeometryBuilder`'s output against yet. Not a filed
-    // bug: these fixtures are meant to have no lenient interpretation.
-    710, 714, 715, 740, 741, 744, 745, 746, 768, 771, 773,
-];
+/// Grid test IDs with no valid `default`/`fix`/`location` WKT to check
+/// `GeometryBuilder`'s output against at all -- not a bug, just nothing to
+/// verify (these fixtures are meant to have no lenient interpretation).
+/// Tracked here (rather than skipped silently) so an upstream grid update
+/// that gives one of these a real oracle -- or a regression that makes a
+/// currently-passing fixture unverifiable -- shows up as a test change
+/// prompting a look, rather than silently altering coverage. If a genuine
+/// `GeometryBuilder` mismatch (as opposed to "no oracle") ever needs
+/// tracking here too, this list's name and doc should go back to
+/// something more general -- today, every fixture with an oracle matches
+/// it, so it doesn't need to.
+const NO_ORACLE_FIXTURES: &[u32] = &[710, 714, 715, 740, 741, 744, 745, 746, 768, 771, 773];
 
 fn grid_fixture_dirs() -> Vec<PathBuf> {
     let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -353,7 +336,7 @@ fn grid_multipolygon_tests() {
             continue; // not a multipolygon test (no expected geometry)
         };
         let Some(expected_entries) = expected_geometry(areas) else {
-            if !KNOWN_MISMATCHES.contains(&test_id) {
+            if !NO_ORACLE_FIXTURES.contains(&test_id) {
                 mismatches.push(format!("{test_id}: no valid default/fix/location oracle"));
             }
             continue;
@@ -385,7 +368,7 @@ fn grid_multipolygon_tests() {
             }
         }
 
-        if !case_ok && !KNOWN_MISMATCHES.contains(&test_id) {
+        if !case_ok && !NO_ORACLE_FIXTURES.contains(&test_id) {
             mismatches.push(format!("{test_id}: {}", details.join("; ")));
         }
     }
@@ -403,25 +386,26 @@ fn grid_multipolygon_tests() {
 }
 
 #[test]
-fn known_mismatches_are_still_mismatches() {
-    // Guards against KNOWN_MISMATCHES silently going stale: if a listed
-    // test id starts passing (e.g. after a GeometryBuilder fix), it should
-    // be removed from the list rather than staying there unnoticed.
-    for &test_id in KNOWN_MISMATCHES {
+fn no_oracle_fixtures_are_still_unverifiable() {
+    // Guards against NO_ORACLE_FIXTURES silently going stale: if a listed
+    // test id gets a real oracle to check against (e.g. an upstream grid
+    // update), or now matches one, it should be removed from the list
+    // rather than staying there unnoticed.
+    for &test_id in NO_ORACLE_FIXTURES {
         let dir = grid_fixture_dirs()
             .into_iter()
             .find(|d| d.file_name().unwrap().to_str().unwrap() == test_id.to_string())
-            .unwrap_or_else(|| panic!("KNOWN_MISMATCHES has stale test id {test_id}"));
+            .unwrap_or_else(|| panic!("NO_ORACLE_FIXTURES has stale test id {test_id}"));
 
         let test_json: TestJson =
             serde_json::from_str(&fs::read_to_string(dir.join("test.json")).unwrap()).unwrap();
         let areas = test_json
             .areas
             .as_ref()
-            .unwrap_or_else(|| panic!("{test_id} in KNOWN_MISMATCHES has no areas at all"));
+            .unwrap_or_else(|| panic!("{test_id} in NO_ORACLE_FIXTURES has no areas at all"));
         let data = parse_osm(&fs::read_to_string(dir.join("data.osm")).unwrap());
 
-        let still_mismatched = match expected_geometry(areas) {
+        let still_unverifiable = match expected_geometry(areas) {
             None => true, // still no oracle to check against
             Some(entries) => entries.iter().any(|entry| {
                 let expected = parse_multipolygon_wkt(&entry.wkt);
@@ -432,8 +416,8 @@ fn known_mismatches_are_still_mismatches() {
             }),
         };
         assert!(
-            still_mismatched,
-            "{test_id} is in KNOWN_MISMATCHES but now matches its oracle; remove it from the list"
+            still_unverifiable,
+            "{test_id} is in NO_ORACLE_FIXTURES but now has an oracle it matches; remove it from the list"
         );
     }
 }
