@@ -272,13 +272,6 @@ fn extract_rings(geom: &Geometry<f64>) -> Vec<LineString<f64>> {
 /// lexicographically smallest -- O(n²) in the ring's point count, fine
 /// given `PolygonAssembler`'s own coordinate budget bounds how large a
 /// stored ring ever gets.
-///
-/// f64 coordinates are compared by bit pattern (via `to_bits()`) rather
-/// than `PartialOrd`/`PartialEq`, sidestepping NaN's lack of a total
-/// order -- exact bit-identical coordinates are what actually occurs here
-/// (a duplicated OSM way reuses the same underlying node coordinates
-/// verbatim, not a recomputed approximation of them), so this doesn't
-/// give up any real matches.
 fn ring_key(ls: &LineString<f64>) -> Vec<(u64, u64)> {
     let all = &ls.0;
     let n = if all.len() > 1 && all.first() == all.last() {
@@ -303,10 +296,20 @@ fn ring_key(ls: &LineString<f64>) -> Vec<(u64, u64)> {
 
 /// One reading of `all`'s `n`-point ring: starting at index `start`,
 /// walked either forward (`all[start], all[start + 1], ...`) or backward
-/// (`all[start], all[start - 1], ...`), wrapping around, and reduced to
-/// bit-pattern coordinates. Indexes into `all` directly rather than
-/// walking a separate reversed copy of it, since a stored ring can hold
-/// thousands of points.
+/// (`all[start], all[start - 1], ...`), wrapping around. Indexes into
+/// `all` directly rather than walking a separate reversed copy of it,
+/// since a stored ring can hold thousands of points.
+///
+/// Coordinates come back as `(x.to_bits(), y.to_bits())` rather than
+/// plain `f64` pairs because `ring_key`'s callers need to both hash this
+/// (`PolygonAssembler::seen_rings` is a `HashSet` of these keys) and
+/// order it (`ring_key` takes the lexicographically smallest reading),
+/// and `f64` supports neither: it has no `Hash` impl, and NaN keeps it
+/// from having a total order (no `Ord`) at all. `u64`'s bit pattern gives
+/// both for free, and loses nothing here -- a duplicated OSM way reuses
+/// its underlying nodes' coordinates verbatim, so the values being
+/// compared are exactly bit-identical to begin with, not independently
+/// computed approximations that merely round to the same thing.
 fn rotation_key(all: &[Coord<f64>], n: usize, start: usize, forward: bool) -> Vec<(u64, u64)> {
     (0..n)
         .map(|i| {
