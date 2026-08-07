@@ -5,7 +5,7 @@ use geo::algorithm::bool_ops::BooleanOps;
 use geo::algorithm::intersects::Intersects;
 use geo::{Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPolygon, Point};
 
-use super::{LineStitcher, PolygonAssembler, PolygonUnion, build_points};
+use super::{LineStitcher, PolygonAssembler, PolygonUnion, build_points, build_ring};
 
 /// Accumulates an arbitrarily-typed, arbitrarily-ordered stream of `geo`
 /// geometries — as would come from resolving the members of an OSM
@@ -168,24 +168,57 @@ impl GeometryBuilder {
     /// Resolve everything added so far into a single combined geometry.
     /// `None` if nothing was added. See struct docs for how mixed-kind
     /// input is combined.
-    pub fn finish(self) -> Option<Geometry<f64>> {
+    pub fn finish(mut self) -> Option<Geometry<f64>> {
         let has_points = !self.points.is_empty();
 
-        // Fast path: only one kind was ever added, so there's nothing to
-        // combine and no need to even look at the other two accumulators.
-        match (self.has_lines, self.has_polygons, has_points) {
-            (false, false, false) => return None,
-            (true, false, false) => return self.lines.finish(),
-            (false, true, false) => return self.polygons.finish(),
-            (false, false, true) => return build_points(self.points),
-            _ => {}
-        }
-
+        // Resolve the line accumulator once, up front -- needed either
+        // way below, and (in Containment mode) so any loop it stitched
+        // closed can be promoted into a ring before anything else runs.
         let mut line_geom = if self.has_lines {
             self.lines.finish()
         } else {
             None
         };
+
+        // A ring stitched together from 2+ open member ways (rather than
+        // one already-closed way) is still a ring: in Containment mode,
+        // every member is ring material, whether it arrived pre-closed
+        // (build_ring already made it a Polygon) or as an open arc that
+        // only closes once stitched to its neighbors. Promote any closed
+        // piece LineStitcher produced into the polygon accumulator,
+        // through build_ring so a self-intersecting stitched loop gets
+        // the same repair a single self-intersecting way would. Leftover
+        // open pieces (a dangling arc that never closed) stay as line
+        // output, same as today.
+        //
+        // Union mode does *not* get this treatment: there, a closed loop
+        // isn't necessarily meant to be an area (e.g. a circular route
+        // relation's ways closing back on themselves is still a route,
+        // not a polygon) -- see PolygonFill::Union's docs.
+        if let (PolygonAccumulator::Containment(polygons), Some(lg)) =
+            (&mut self.polygons, &line_geom)
+        {
+            let (closed, open) = split_closed_open(lg);
+            for ring in closed {
+                if let Some(built) = build_ring(ring.0) {
+                    polygons.add_ring(&built);
+                    self.has_polygons = true;
+                }
+            }
+            line_geom = line_geometry_of(open);
+            self.has_lines = line_geom.is_some();
+        }
+
+        // Fast path: only one kind is left, so there's nothing to combine
+        // and no need to even look at the other two accumulators.
+        match (self.has_lines, self.has_polygons, has_points) {
+            (false, false, false) => return None,
+            (true, false, false) => return line_geom,
+            (false, true, false) => return self.polygons.finish(),
+            (false, false, true) => return build_points(self.points),
+            _ => {}
+        }
+
         let poly_geom = if self.has_polygons {
             self.polygons.finish()
         } else {
@@ -252,6 +285,31 @@ fn multi_line_string_of(lg: &Geometry<f64>) -> MultiLineString<f64> {
         Geometry::LineString(ls) => MultiLineString::new(vec![ls.clone()]),
         Geometry::MultiLineString(mls) => mls.clone(),
         other => unreachable!("LineStitcher::finish returned {other:?}"),
+    }
+}
+
+/// Splits `lg`'s constituent pieces into closed ones (first coordinate ==
+/// last: a candidate ring) and open ones (everything else). `lg` is
+/// always [`Geometry::LineString`] or [`Geometry::MultiLineString`], since
+/// it can only come from [`LineStitcher::finish`].
+fn split_closed_open(lg: &Geometry<f64>) -> (Vec<LineString<f64>>, Vec<LineString<f64>>) {
+    let pieces = match lg {
+        Geometry::LineString(ls) => vec![ls.clone()],
+        Geometry::MultiLineString(mls) => mls.0.clone(),
+        other => unreachable!("LineStitcher::finish returned {other:?}"),
+    };
+    pieces
+        .into_iter()
+        .partition(|ls| ls.0.len() >= 2 && ls.0.first() == ls.0.last())
+}
+
+/// The smallest `Geometry` representing `pieces`: `None` if empty, a bare
+/// `LineString` for exactly one piece, a `MultiLineString` otherwise.
+fn line_geometry_of(pieces: Vec<LineString<f64>>) -> Option<Geometry<f64>> {
+    match pieces.len() {
+        0 => None,
+        1 => Some(Geometry::from(pieces.into_iter().next().unwrap())),
+        _ => Some(Geometry::from(MultiLineString::new(pieces))),
     }
 }
 
@@ -591,6 +649,58 @@ mod tests {
         match b.finish() {
             Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
             other => panic!("expected Polygon with a hole, got {other:?}"),
+        }
+    }
+
+    /// https://github.com/alltheplaces/osm-diffs/issues/531: a ring made
+    /// of 2+ *open* member ways (rather than one already-closed way)
+    /// closes once `LineStitcher` stitches them together, and in
+    /// Containment mode that closed loop should be promoted to a ring --
+    /// mirrors osm-testdata grid fixture `9/901`.
+    #[test]
+    fn containment_fill_promotes_a_stitched_closed_loop_to_a_ring() {
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
+        b.add(&ls(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]));
+        b.add(&ls(&[(10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]));
+        match b.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 0),
+            other => panic!("expected the stitched loop promoted to a Polygon, got {other:?}"),
+        }
+    }
+
+    /// Same idea, but the promoted loop is the *hole*, not the shell --
+    /// mirrors grid fixture `7/782` (a single closed way for the outer
+    /// ring, and a hole stitched from two open ways).
+    #[test]
+    fn containment_fill_promotes_a_stitched_closed_loop_to_a_hole() {
+        let mut b = GeometryBuilder::new(PolygonFill::Containment);
+        b.add(&polygon(&[
+            (0.0, 0.0),
+            (10.0, 0.0),
+            (10.0, 10.0),
+            (0.0, 10.0),
+        ]));
+        b.add(&ls(&[(2.0, 2.0), (4.0, 2.0), (4.0, 4.0)]));
+        b.add(&ls(&[(4.0, 4.0), (2.0, 4.0), (2.0, 2.0)]));
+        match b.finish() {
+            Some(Geometry::Polygon(p)) => assert_eq!(p.interiors().len(), 1),
+            other => panic!("expected Polygon with a hole, got {other:?}"),
+        }
+    }
+
+    /// The complement of the two tests above: in Union mode, a closed
+    /// loop of stitched lines is *not* necessarily an area (e.g. a
+    /// circular route relation's ways closing back on themselves is still
+    /// a route) -- see `PolygonFill::Union`'s docs -- so it should stay a
+    /// line, not get promoted to a polygon.
+    #[test]
+    fn union_fill_does_not_promote_a_stitched_closed_loop() {
+        let mut b = GeometryBuilder::new(PolygonFill::Union);
+        b.add(&ls(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)]));
+        b.add(&ls(&[(10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]));
+        match b.finish() {
+            Some(Geometry::LineString(l)) => assert_eq!(l.0.len(), 5),
+            other => panic!("expected the stitched loop to stay a LineString, got {other:?}"),
         }
     }
 

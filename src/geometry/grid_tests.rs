@@ -32,34 +32,27 @@
 //! it's compared against whichever of `default`/`fix`/`location` is
 //! actually a valid WKT (see [`expected_geometry`]).
 //!
-//! Three further caveats, tracked as known mismatches in
+//! Two further caveats, tracked as known mismatches in
 //! [`KNOWN_MISMATCHES`] rather than hard test failures:
-//! * **Stitched closed loops aren't promoted to rings.** When a ring is
-//!   made of 2+ *open* member ways, `GeometryBuilder` runs each through
-//!   `build_line` (they're open) and routes the resulting `LineString`s to
-//!   its internal `LineStitcher`, which joins them into one closed path —
-//!   but nothing then notices that closed path is a ring and hands it to
-//!   `PolygonAssembler`. If that's the *only* member (e.g. grid `701`),
-//!   the relation ends up a `LineString`/`MultiLineString`, not a
-//!   `Polygon`. If the relation *also* has an independent closed-way ring
-//!   (e.g. `782`'s outer, a single way), `GeometryBuilder::finish`'s
-//!   mixed-kind path clips the stitched line to whatever falls outside the
-//!   polygon area — since the stitched loop sits entirely inside, it's
-//!   clipped away completely, silently dropping what should have been a
-//!   hole. A ring built from a single, already-closed way (`build_ring`'s
-//!   own output) is unaffected, since it's a `Polygon` from the start.
 //! * **Duplicate/overlapping ring members self-cancel.** A relation whose
 //!   members describe the same ring twice (literally the same way twice,
-//!   as `790`, or two different ways tracing the same or an overlapping
-//!   ring, as `791`/`792`) hits `PolygonAssembler`'s even-odd nesting rule
-//!   exactly as two perfectly overlapping rings would: the second
-//!   "cancels" the first, producing nothing. `default` is itself `INVALID`
-//!   for these; only `location` gives a lenient expected area.
-//! * `GeometryBuilder` also doesn't yet special-case `type=multipolygon`/
-//!   `boundary` relations (nesting decides fill) vs. other relation types
-//!   (which should be a plain geometric union, ignoring containment) —
-//!   moot for this fixture set, since every relation in it is one of the
-//!   two nesting-fill types, but relevant to note.
+//!   as `790`, or the same way listed twice as a member, as `795`, or two
+//!   different ways tracing the same or an overlapping ring, as
+//!   `791`/`792`) hits `PolygonAssembler`'s even-odd nesting rule exactly
+//!   as two perfectly overlapping rings would: the second "cancels" the
+//!   first, producing nothing (or, for `795`, dropping the hole entirely).
+//!   `default` is itself `INVALID` for these; only `location` gives a
+//!   lenient expected area. See
+//!   <https://github.com/alltheplaces/osm-diffs/issues/532>.
+//! * **A "spike" (an exact-reversal duplicate segment) can leave a ring in
+//!   pieces that don't get re-stitched.** `LineStitcher` cuts a stitched
+//!   path at any point it revisits (self-intersection repair, same
+//!   philosophy as `build_line`'s own), which correctly drops a
+//!   zero-width spike -- but the resulting pieces, though they still share
+//!   endpoints with each other, aren't fed through a second stitching
+//!   pass, so a ring that would close cleanly once the spike is removed
+//!   (`711`, `742`, `743`) instead stays several disconnected open pieces.
+//!   See <https://github.com/alltheplaces/osm-diffs/issues/537>.
 //!
 //! A fixture with no valid `default`/`fix`/`location` at all has no oracle
 //! to check against and is likewise recorded in [`KNOWN_MISMATCHES`].
@@ -318,15 +311,14 @@ fn areas_match(actual: &Geometry<f64>, expected: &MultiPolygon<f64>) -> bool {
 /// here (rather than skipped silently) so a fix shows up as a now-
 /// unexpectedly-passing test, prompting its removal from this list.
 const KNOWN_MISMATCHES: &[u32] = &[
-    // Ring stitched from 2+ open member ways isn't promoted to a
-    // Polygon/hole (see module docs' "stitched closed loops" caveat).
-    // https://github.com/alltheplaces/osm-diffs/issues/531
-    701, 702, 703, 704, 705, 706, 707, 708, 709, 711, 725, 731, 742, 743, 782, 795, 901, 902, 904,
-    912, 913, 920, 921, 924, 925, 930, 931, 950,
     // Duplicate/overlapping ring members self-cancel under the even-odd
     // nesting rule (see module docs' "duplicate/overlapping" caveat).
     // https://github.com/alltheplaces/osm-diffs/issues/532
-    790, 791, 792,
+    790, 791, 792, 795,
+    // A "spike" (exact-reversal duplicate segment) leaves a ring in
+    // pieces that don't get re-stitched (see module docs' "spike"
+    // caveat). https://github.com/alltheplaces/osm-diffs/issues/537
+    711, 742, 743,
     // No default/fix/location entry parses to a real polygon at all --
     // nothing to check `GeometryBuilder`'s output against yet. Not a filed
     // bug: these fixtures are meant to have no lenient interpretation.
