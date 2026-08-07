@@ -164,7 +164,8 @@ fn assemble_nodes(
                     if let Primitive::Node(node) = primitive
                         && keep_nodes.contains(node.id)
                     {
-                        let mut fti = assemble_feature(10 * node.id + 1, &node.info);
+                        let feature_id = make_feature_id(RelationMemberType::Node, node.id);
+                        let mut fti = assemble_feature(feature_id, &node.info);
                         let point = geo::Point::new(node.lon, node.lat); // x = longitude, y = latitude
                         if let Some(feature) = &mut fti.feature {
                             write_point(&mut feature.geometry_wkb, &point, &WKB_WRITE_OPTIONS)?;
@@ -240,7 +241,7 @@ fn assemble_ways<'a>(
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Way(way) = primitive {
-                        let feature_id = 10 * way.id + 2;
+                        let feature_id = make_feature_id(RelationMemberType::Way, way.id);
                         let is_interesting = prunings.keep_ways.contains(way.id);
                         let is_relation_member = prunings.relation_members.contains(feature_id);
                         if !is_interesting && !is_relation_member {
@@ -399,7 +400,7 @@ fn assemble_leaf_relations<'a>(
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Relation(relation) = primitive {
-                        let feature_id = 10 * relation.id + 3;
+                        let feature_id = make_feature_id(RelationMemberType::Relation, relation.id);
                         let is_interesting = prunings.keep_relations.contains(relation.id);
                         let is_relation_member = prunings.relation_members.contains(feature_id);
                         if !is_interesting && !is_relation_member {
@@ -769,7 +770,10 @@ fn is_super_relation(rel: &osm_pbf_iter::Relation<'_>) -> bool {
     false
 }
 
-fn member_feature_id(member_type: RelationMemberType, id: u64) -> u64 {
+/// Encodes an OpenStreetMap object's `(member_type, id)` as a `Feature.id`
+/// — `id * 10 + 1` for nodes, `+ 2` for ways, `+ 3` for relations. Inverse
+/// of [`feature_to_osm_id`]. See `Feature.id` in `feature.proto`.
+fn make_feature_id(member_type: RelationMemberType, id: u64) -> u64 {
     match member_type {
         RelationMemberType::Node => id * 10 + 1,
         RelationMemberType::Way => id * 10 + 2,
@@ -806,7 +810,7 @@ fn assemble_relation_members(
         });
         let member = RelationMember {
             role: role_id as u32,
-            id: member_feature_id(member_type, id),
+            id: make_feature_id(member_type, id),
         };
         feature.relation_members.push(member);
     }
