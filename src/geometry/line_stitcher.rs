@@ -1,7 +1,7 @@
 //! Stitches arbitrarily-ordered, arbitrarily-oriented `LineString`s into
 //! longer paths wherever their endpoints touch. See [`LineStitcher`].
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use geo::algorithm::validation::Validation;
 use geo::{Coord, Geometry, LineString, MultiLineString, SimplifyVwPreserve};
@@ -109,6 +109,20 @@ enum ChainEnd {
 /// count unchanged, so `A,B` and `B,D,E,A` end up merged back into the
 /// closed ring they were always meant to be. See
 /// <https://github.com/alltheplaces/osm-diffs/issues/537>.
+///
+/// # Duplicate segments
+/// A segment shared verbatim by two ways in the *same* direction (as
+/// opposed to a spike's reversal) is a collinear overlap too, so it isn't
+/// a crossing either -- but if cutting elsewhere in the chain ever
+/// separates it out as its own piece, it comes out *twice*, once from
+/// each way. Left alone, both copies would count toward their shared
+/// endpoints' degree, making a node that's actually part of a simple loop
+/// look like a genuine three-way junction and blocking it from
+/// re-stitching. Every cutting round de-duplicates its own output pieces
+/// (`cut_round`, via [`line_key`]) for exactly this reason -- the same
+/// idea as [`PolygonAssembler`](super::PolygonAssembler)'s duplicate-ring
+/// guard, applied to open pieces instead of closed rings. See
+/// <https://github.com/alltheplaces/osm-diffs/issues/541>.
 pub struct LineStitcher {
     lines: Vec<VecDeque<Coord<f64>>>,
     reference_x: Option<f64>,
@@ -277,11 +291,12 @@ fn stitch_round(lines: Vec<VecDeque<Coord<f64>>>) -> Vec<VecDeque<Coord<f64>>> {
 
 /// One round of self-intersection repair: the same repair `build_line`
 /// uses, applied to each of `chains` independently -- validate, then cut
-/// at every self-crossing. Returns the resulting pieces, along with
-/// whether their count differs from `chains.len()`: a proxy for "this
-/// round changed something", which `finish()` uses to decide whether
-/// another stitching round might find newly-exposed endpoints to merge
-/// (see struct docs, "Spikes").
+/// at every self-crossing -- followed by dropping any exact-duplicate
+/// piece that cutting produced (see struct docs, "Duplicate segments").
+/// Returns the resulting pieces, along with whether their count differs
+/// from `chains.len()`: a proxy for "this round changed something", which
+/// `finish()` uses to decide whether another stitching round might find
+/// newly-exposed endpoints to merge (see struct docs, "Spikes").
 fn cut_round(chains: Vec<VecDeque<Coord<f64>>>) -> (Vec<VecDeque<Coord<f64>>>, bool) {
     let before = chains.len();
     let mut pieces: Vec<VecDeque<Coord<f64>>> = Vec::new();
@@ -304,8 +319,25 @@ fn cut_round(chains: Vec<VecDeque<Coord<f64>>>) -> (Vec<VecDeque<Coord<f64>>>, b
             );
         }
     }
+
+    let mut seen = HashSet::new();
+    pieces.retain(|piece| seen.insert(line_key(piece)));
+
     let changed = pieces.len() != before;
     (pieces, changed)
+}
+
+/// Canonicalizes a piece's coordinates so that it and its exact reverse
+/// produce the same key -- `A,B,C` and `C,B,A` are the same undirected
+/// path, however it's traced. Unlike `PolygonAssembler`'s `ring_key`, no
+/// rotation is tried: these are open pieces, or a closed one with an
+/// already-fixed start/end (e.g. a spike's remnant loop), not cyclic
+/// rings where the start point is arbitrary.
+fn line_key(points: &VecDeque<Coord<f64>>) -> Vec<(u64, u64)> {
+    let bits = |c: Coord<f64>| (c.x.to_bits(), c.y.to_bits());
+    let forward: Vec<(u64, u64)> = points.iter().copied().map(bits).collect();
+    let backward: Vec<(u64, u64)> = points.iter().rev().copied().map(bits).collect();
+    forward.min(backward)
 }
 
 fn add_chain(
@@ -602,6 +634,36 @@ mod tests {
                 );
             }
             other => panic!("expected the spike cut away from a re-stitched ring, got {other:?}"),
+        }
+    }
+
+    /// https://github.com/alltheplaces/osm-diffs/issues/541, mirroring
+    /// osm-testdata grid fixture `7/711`: two ways sharing the same
+    /// segment in the *same* direction (`A→B→C` and `B→C→D→A`) -- unlike
+    /// a spike's reversal -- should still close into the one ring they
+    /// describe, not stay fragmented because the un-deduplicated
+    /// duplicate segment makes its endpoints look like three-way
+    /// junctions.
+    #[test]
+    fn duplicate_segment_is_deduped_and_the_ring_closes() {
+        let mut a = LineStitcher::new();
+        a.add(&ls(&[(0.0, 0.0), (0.0, 1.0), (1.0, 1.0)])); // A, B, C
+        a.add(&ls(&[
+            (0.0, 1.0), // B
+            (1.0, 1.0), // C (same direction as above: B -> C)
+            (1.0, 0.0), // D
+            (0.0, 0.0), // A
+        ]));
+        match a.finish() {
+            Some(Geometry::LineString(l)) => {
+                assert_eq!(l.0.first(), l.0.last(), "expected a closed ring");
+                assert_eq!(
+                    l.0.len(),
+                    5,
+                    "expected exactly one ring, no leftover pieces"
+                );
+            }
+            other => panic!("expected a single closed ring, got {other:?}"),
         }
     }
 

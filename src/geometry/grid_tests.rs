@@ -32,24 +32,10 @@
 //! it's compared against whichever of `default`/`fix`/`location` is
 //! actually a valid WKT (see [`expected_geometry`]).
 //!
-//! One further caveat, tracked as a known mismatch in [`KNOWN_MISMATCHES`]
-//! rather than a hard test failure:
-//! * **A segment duplicated across two ways isn't deduped, and can leave a
-//!   ring in pieces.** Two ways that both contain the same segment (`711`
-//!   -- unlike a "spike", `742`/`743`'s exact-reversal case, which
-//!   `LineStitcher` does now handle) stitch into one chain, get cut at the
-//!   incidental point-touches the duplicate creates, and end up as two
-//!   duplicate 2-point pieces plus the real path -- after which every
-//!   node the duplicate touches looks like a genuine degree-3 junction
-//!   (one edge from each duplicate copy, one from the real path), which
-//!   correctly blocks further merging in the general case but is wrong
-//!   here, where the "3" is an artifact of the duplicate rather than a
-//!   real fork. See <https://github.com/alltheplaces/osm-diffs/issues/541>.
-//!
-//! A fixture with no valid `default`/`fix`/`location` at all has no oracle
-//! to check against and is likewise recorded in [`KNOWN_MISMATCHES`].
-//! None of this is something this test suite should fail CI over today —
-//! it's the follow-up work the grid run surfaced.
+//! Every fixture that has an oracle to check against now matches it. The
+//! only entries left in [`KNOWN_MISMATCHES`] are fixtures with no valid
+//! `default`/`fix`/`location` at all -- nothing to check `GeometryBuilder`'s
+//! output against in the first place, not a bug.
 
 use std::{collections::HashMap, fs, path::PathBuf};
 
@@ -303,10 +289,6 @@ fn areas_match(actual: &Geometry<f64>, expected: &MultiPolygon<f64>) -> bool {
 /// here (rather than skipped silently) so a fix shows up as a now-
 /// unexpectedly-passing test, prompting its removal from this list.
 const KNOWN_MISMATCHES: &[u32] = &[
-    // A segment duplicated across two ways isn't deduped (see module
-    // docs' "duplicated across two ways" caveat).
-    // https://github.com/alltheplaces/osm-diffs/issues/541
-    711,
     // No default/fix/location entry parses to a real polygon at all --
     // nothing to check `GeometryBuilder`'s output against yet. Not a filed
     // bug: these fixtures are meant to have no lenient interpretation.
