@@ -181,14 +181,11 @@ fn assemble_nodes(
         });
 
         let writer = s.spawn(|| {
-            let mut tmp_path = out_path.clone();
-            tmp_path.add_extension("tmp");
-            let mut out = RecordWriter::create(&tmp_path)?;
+            let mut out = RecordWriter::create(&out_path)?;
             for f in feature_rx {
                 out.write(&f)?;
             }
             out.close()?;
-            std::fs::rename(&tmp_path, &out_path)?;
             Ok(())
         });
 
@@ -305,15 +302,12 @@ fn assemble_ways<'a>(
         });
 
         let feature_writer = s.spawn(|| {
-            let mut tmp_path = out_path.clone();
-            tmp_path.add_extension("tmp");
-            let mut out = RecordWriter::create(&tmp_path)?;
+            let mut out = RecordWriter::create(&out_path)?;
             for f in feature_rx {
                 feature_count.fetch_add(1, Ordering::SeqCst);
                 out.write(&f)?;
             }
             out.close()?;
-            std::fs::rename(&tmp_path, &out_path)?;
             Ok(())
         });
 
@@ -460,15 +454,12 @@ fn assemble_leaf_relations<'a>(
         });
 
         let leaf_rel_writer = s.spawn(|| {
-            let mut tmp_path = leaf_relations_path.clone();
-            tmp_path.add_extension("tmp");
-            let mut out = RecordWriter::create(&tmp_path)?;
+            let mut out = RecordWriter::create(&leaf_relations_path)?;
             for f in feature_rx {
                 leaf_relations_count.fetch_add(1, Ordering::SeqCst);
                 out.write(&f)?;
             }
             out.close()?;
-            std::fs::rename(&tmp_path, &leaf_relations_path)?;
             Ok(())
         });
 
@@ -613,14 +604,11 @@ fn assemble_super_relations(
         });
 
         let writer = s.spawn(|| {
-            let mut tmp_path = super_relations_path.clone();
-            tmp_path.add_extension("tmp");
-            let mut out = RecordWriter::create(&tmp_path)?;
+            let mut out = RecordWriter::create(&super_relations_path)?;
             for f in feature_rx {
                 out.write(&f)?;
             }
             out.close()?;
-            std::fs::rename(&tmp_path, &super_relations_path)?;
             Ok(())
         });
 
