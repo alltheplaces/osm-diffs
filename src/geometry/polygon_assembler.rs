@@ -290,24 +290,31 @@ fn ring_key(ls: &LineString<f64>) -> Vec<(u64, u64)> {
         return Vec::new();
     }
 
-    let bits = |c: Coord<f64>| (c.x.to_bits(), c.y.to_bits());
-    // `all[j]` walks the ring forward from index 0; `all[n - 1 - j]` walks
-    // it backward from the end -- reading both directions off the same
-    // slice by index, rather than materializing a second, reversed copy
-    // of a ring that can hold thousands of points.
-    let at = |forward: bool, j: usize| if forward { all[j] } else { all[n - 1 - j] };
-
-    [true, false]
-        .into_iter()
-        .flat_map(|forward| {
-            (0..n).map(move |start| {
-                (0..n)
-                    .map(move |i| bits(at(forward, (start + i) % n)))
-                    .collect()
-            })
-        })
+    // Every way to read this ring as a fixed-length sequence: starting at
+    // any of its `n` points, walked in either direction. Two rings that
+    // trace the same boundary -- whichever point they start at, whichever
+    // way they're wound -- share exactly one of these `2n` readings, so
+    // the smallest one is a canonical key for the ring's shape.
+    (0..n)
+        .flat_map(|start| [true, false].map(|forward| rotation_key(all, n, start, forward)))
         .min()
         .unwrap_or_default()
+}
+
+/// One reading of `all`'s `n`-point ring: starting at index `start`,
+/// walked either forward (`all[start], all[start + 1], ...`) or backward
+/// (`all[start], all[start - 1], ...`), wrapping around, and reduced to
+/// bit-pattern coordinates. Indexes into `all` directly rather than
+/// walking a separate reversed copy of it, since a stored ring can hold
+/// thousands of points.
+fn rotation_key(all: &[Coord<f64>], n: usize, start: usize, forward: bool) -> Vec<(u64, u64)> {
+    (0..n)
+        .map(|i| {
+            let j = (start + i) % n;
+            let point = if forward { all[j] } else { all[n - 1 - j] };
+            (point.x.to_bits(), point.y.to_bits())
+        })
+        .collect()
 }
 
 struct RingSoup(Vec<LineString<f64>>);
