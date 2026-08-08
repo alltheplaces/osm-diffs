@@ -57,6 +57,7 @@ jobs:
           mkdir artifacts
           podman build \
             --build-arg BUILD_TIMESTAMP="${TIMESTAMP}" \
+            --build-arg IMAGE_NAME="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" \
             --build-arg VCS_REF="${{ github.sha }}" \
             --build-arg VCS_URL="${{ github.server_url }}/${{ github.repository }}" \
             --file ./Containerfile \
