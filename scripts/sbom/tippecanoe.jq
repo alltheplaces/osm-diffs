@@ -96,7 +96,18 @@ def alpine_supplier: {name: "Alpine Linux", url: ["https://alpinelinux.org"]};
       "bom-ref": ("sqlite-" + $SQLITE_VERSION),
       purl: ("pkg:apk/alpine/sqlite@" + $SQLITE_VERSION + "?arch=" + $ARCH),
       supplier: alpine_supplier,
-      licenses: [{license: {id: "blessing"}}],
+      # SQLite isn't SPDX-licensed; upstream dedicates it to the public
+      # domain and informally calls that dedication a "blessing" (see
+      # https://www.sqlite.org/copyright.html). "blessing" itself isn't a
+      # valid SPDX license id, so it doesn't belong in a `license.id`
+      # field. Follow the same pattern used for osm-testdata-grid in
+      # pipeline.jq: a plain, declared "Public Domain" license name.
+      licenses: [{
+        license: {
+          name: "Public Domain",
+          acknowledgement: "declared"
+        }
+      }],
       evidence: {
         identity: [{
           field: "version",
