@@ -14,6 +14,11 @@ security team, an auditor) answer questions like "does this container
 contain a vulnerable version of library X?" without having to rebuild the
 software or read its source.
 
+Alongside it, our SBOM includes a small Cryptographic Bill of Materials
+(CBOM): the same idea, but for cryptography instead of dependencies --
+which TLS version, cipher suites and crypto backend we use. See the
+`crypto/protocol/tls-1.3` entry in [`pipeline.jq`](pipeline.jq).
+
 We publish our SBOM in [CycloneDX](https://cyclonedx.org/) format, an
 open standard for this kind of document (see the
 [CycloneDX Wikipedia article](https://en.wikipedia.org/wiki/CycloneDX) for
