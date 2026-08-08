@@ -21,6 +21,7 @@
 FROM rust:1.97.1-alpine3.23 AS builder
 
 ARG BUILD_TIMESTAMP
+ARG IMAGE_NAME=alltheplaces/osm-diffs
 ARG TIPPECANOE_VERSION=2.79.0
 
 # TODO: Take cargo-cyclonedx from stable Alpine Linux (not edge)

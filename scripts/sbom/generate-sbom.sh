@@ -38,7 +38,12 @@
 
 set -eu
 
-IMAGE_NAME="alltheplaces/osm-diffs"
+# The registry-qualified image name (e.g. "ghcr.io/alltheplaces/osm-diffs")
+# is known before the build runs, so -- unlike the image digest -- release.yml
+# can just pass it in as a build arg instead of patching it in afterwards.
+# Falls back to a plain default for local development and test-container.yml,
+# neither of which push a real, registry-qualified image.
+IMAGE_NAME="${IMAGE_NAME:-alltheplaces/osm-diffs}"
 
 # ── locate project root and jq scripts ──────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
