@@ -37,16 +37,31 @@ def add_supplier:
 
 # Patch bom-ref of main application to read "osm-diffs-1.2.3"
 # instead of "path+file:///Users/sascha/src/osm-diffs#osm-diffs".
+.metadata.component."bom-ref" as $orig_root_ref |
 ( .metadata.component.name + "-" + .metadata.component.version ) as $root_ref |
 .metadata.component."bom-ref" = $root_ref |
-.dependencies[0].ref = $root_ref |
+
+# Locate the root component's entry in the dependency graph by its
+# original bom-ref, not by assuming it's .dependencies[0] -- cargo-cyclonedx
+# doesn't document any ordering guarantee for `.dependencies`.
+(
+  [.dependencies[] | select(.ref == $orig_root_ref)] | length
+) as $root_matches |
+if $root_matches != 1 then
+  error("pipeline.jq: expected exactly one dependency entry with ref "
+        + $orig_root_ref + ", found " + ($root_matches | tostring))
+else . end |
+(
+  .dependencies | map(.ref == $orig_root_ref) | index(true)
+) as $root_idx |
+.dependencies[$root_idx].ref = $root_ref |
 
 # Declare the root component's dependency on our two vendored, non-crate
 # "data" components, so the dependency graph has a single root instead of
 # three (the FOSSA NTIA validator flags orphaned components -- ones no
 # other component depends on -- as extra roots).
-.dependencies[0].dependsOn =
-  ((.dependencies[0].dependsOn // []) + ["id-tagging-schema", "osm-testdata-grid"]) |
+.dependencies[$root_idx].dependsOn =
+  ((.dependencies[$root_idx].dependsOn // []) + ["id-tagging-schema", "osm-testdata-grid"]) |
 
 .bomFormat = "CycloneDX" |
 .specVersion = "1.7" |
