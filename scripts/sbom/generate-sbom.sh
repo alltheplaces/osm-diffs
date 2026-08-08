@@ -32,6 +32,13 @@
 # into the generated SBOM afterwards, with a one-line `jq` expression.
 # See merge.jq for details.
 #
+# Note on the CBOM's cipher suites: the TLS 1.3 cipher suites listed in the
+# generated Cryptographic Bill of Materials come from
+# tls-1.3-cipher-suites.json (in this directory), not from a hardcoded list
+# in pipeline.jq. A Rust test (see src/main.rs) checks that same file
+# against the live crypto provider's actual cipher suites, so this SBOM
+# can't silently drift from what the binary really supports.
+#
 # Requirements:
 #   cargo, cargo-cyclonedx   (`cargo install cargo-cyclonedx`)
 #   jq >= 1.6                (macOS: `brew install jq`  |  Alpine: `apk add jq`)
@@ -151,6 +158,7 @@ jq \
   --arg PROTOC_VERSION            "${PROTOC_VERSION}" \
   --arg RUSTC_VERSION             "${RUSTC_VERSION}" \
   --arg DEV_BUILD                 "${DEV_BUILD}" \
+  --argjson TLS13_CIPHER_SUITES   "$(cat "${SCRIPT_DIR}/tls-1.3-cipher-suites.json")" \
   -f "${SCRIPT_DIR}/pipeline.jq" \
   "$RAW_PIPELINE" > "${WORKDIR}/pipeline.cdx.json"
 

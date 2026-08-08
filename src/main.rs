@@ -83,6 +83,49 @@ mod tests {
         let _ = build_client();
     }
 
+    // The SBOM's Cryptographic Bill of Materials (see scripts/sbom/pipeline.jq)
+    // asserts which TLS 1.3 cipher suites we support. Unlike the TLS library,
+    // backend and version -- which are explicit, easily reviewed lines in
+    // build_client() above -- the cipher suite *set* isn't chosen by this
+    // codebase at all: it's whatever aws-lc-rs's default crypto provider
+    // ships. A routine `cargo update` could silently change that set with no
+    // diff in this repo's own source for a reviewer to notice. This test
+    // catches that: it reads the live provider's actual TLS 1.3 cipher
+    // suites and compares them against the same JSON file the SBOM is
+    // generated from, so the two can't drift apart unnoticed.
+    #[test]
+    fn cbom_cipher_suites_match_sbom_facts() {
+        init_crypto_once();
+
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        let actual: Vec<String> = provider
+            .cipher_suites
+            .iter()
+            .filter(|cs| cs.tls13().is_some())
+            .map(|cs| {
+                // rustls names these "TLS13_AES_256_GCM_SHA384" etc., not
+                // "TLS_AES_256_GCM_SHA384" as registered with IANA and used
+                // in the SBOM; normalize the prefix before comparing.
+                cs.suite()
+                    .as_str()
+                    .expect("known cipher suite has a name")
+                    .replacen("TLS13_", "TLS_", 1)
+            })
+            .collect();
+
+        let expected: Vec<String> =
+            serde_json::from_str(include_str!("../scripts/sbom/tls-1.3-cipher-suites.json"))
+                .expect("scripts/sbom/tls-1.3-cipher-suites.json is valid JSON");
+
+        assert_eq!(
+            actual, expected,
+            "aws-lc-rs's default TLS 1.3 cipher suites changed -- update \
+             scripts/sbom/tls-1.3-cipher-suites.json (and reconsider the \
+             SBOM's CBOM section in scripts/sbom/pipeline.jq) if this is \
+             expected"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires network"]
     async fn test_client_rejects_tls12() {
