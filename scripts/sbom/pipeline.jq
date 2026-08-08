@@ -26,6 +26,13 @@
 #   RUSTC_VERSION             version of the Rust compiler
 #   DEV_BUILD                 "true" if built outside of the real Alpine
 #                             build environment (placeholders were used)
+#
+# Arguments (passed with --argjson):
+#   TLS13_CIPHER_SUITES       array of TLS 1.3 cipher suite names, read from
+#                             tls-1.3-cipher-suites.json -- the same file a
+#                             Rust test (see src/main.rs) checks against the
+#                             live crypto provider, so this can't silently
+#                             drift from what the binary actually supports
 
 # Add a crates.io supplier to a component object if it lacks one.
 def add_supplier:
@@ -222,11 +229,7 @@ def add_supplier:
       "protocolProperties": {
         "type": "tls",
         "version": "1.3",
-        "cipherSuites": [
-          {"name":"TLS_AES_256_GCM_SHA384"},
-          { "name": "TLS_AES_128_GCM_SHA256" },
-          { "name": "TLS_CHACHA20_POLY1305_SHA256" }
-        ]
+        "cipherSuites": ($TLS13_CIPHER_SUITES | map({name: .}))
       }
     }
   }
