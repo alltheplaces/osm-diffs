@@ -30,7 +30,7 @@ ARG TIPPECANOE_VERSION=2.79.0
 # Update alongside TIPPECANOE_VERSION when bumping to a newer release.
 ARG TIPPECANOE_COMMIT=68ab8dcc229f95b8b25877697d5e8d66783af503
 
-# TODO: Take cargo-cyclonedx from stable Alpine Linux (not edge)
+# TODO(#556): Take cargo-cyclonedx from stable Alpine Linux (not edge)
 # once Alpine 3.24 has been released.
 RUN echo "@edge https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/apk/repositories && \
     apk update && \
