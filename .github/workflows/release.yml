@@ -14,6 +14,10 @@ jobs:
   build:
     name: Build architecture-specific images
     runs-on: ${{ matrix.runner }}
+    # Observed ~11-16 min per arch as of 2026-08; generous headroom over that,
+    # well short of the 360 min default, so a hang fails fast instead of
+    # burning runner-minutes for hours.
+    timeout-minutes: 30
 
     strategy:
       matrix:
@@ -102,6 +106,7 @@ jobs:
     name: Build multi-architecture manifest
     runs-on: ubuntu-24.04
     needs: [build]
+    timeout-minutes: 10
     permissions:
       id-token: write
       packages: write
@@ -160,6 +165,7 @@ jobs:
     name: Attest build provenance
     runs-on: ubuntu-24.04
     needs: [manifest]
+    timeout-minutes: 10
 
     permissions:
       artifact-metadata: write
