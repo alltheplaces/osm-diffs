@@ -22,9 +22,40 @@ env:
 permissions: {}
 
 jobs:
+  verify-version:
+    name: Verify release tag matches Cargo.toml version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Compare tag to Cargo.toml version
+        run: |
+          TAG="${{ github.ref_name }}"
+          CARGO_VERSION=$(awk '
+            /^\[package\]/ { in_package=1; next }
+            /^\[/           { in_package=0 }
+            in_package && /^version[[:space:]]*=/ {
+              match($0, /"[^"]*"/)
+              print substr($0, RSTART+1, RLENGTH-2)
+              exit
+            }
+          ' Cargo.toml)
+          EXPECTED_TAG="v${CARGO_VERSION}"
+          if [ "$TAG" != "$EXPECTED_TAG" ]; then
+            echo "::error::Git tag '${TAG}' does not match Cargo.toml's package version '${CARGO_VERSION}' (expected tag '${EXPECTED_TAG}'). Bump and commit Cargo.toml's version before tagging a release, or fix the tag." >&2
+            exit 1
+          fi
+          echo "OK: tag ${TAG} matches Cargo.toml version ${CARGO_VERSION}"
+
   build:
     name: Build architecture-specific images
     runs-on: ${{ matrix.runner }}
+    needs: [verify-version]
     # Observed ~11-16 min per arch as of 2026-08; generous headroom over that,
     # well short of the 360 min default, so a hang fails fast instead of
     # burning runner-minutes for hours.
