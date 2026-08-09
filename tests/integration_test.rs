@@ -35,3 +35,14 @@ fn test_no_subcommand() {
         .failure()
         .stderr(predicates::str::contains("no subcommand given"));
 }
+
+#[test]
+fn test_version_flag() {
+    // Asserts against CARGO_PKG_VERSION (rather than a hardcoded string) so
+    // this doesn't need updating every time cut-release.sh bumps the version.
+    Command::new(cargo_bin!("osm-diffs"))
+        .arg("--version")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(env!("CARGO_PKG_VERSION")));
+}
