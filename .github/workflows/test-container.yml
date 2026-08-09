@@ -21,6 +21,9 @@ jobs:
   build:
     name: Build (container)
     runs-on: ubuntu-latest
+    # Same build as release.yml's build job, which observed ~11-16 min per
+    # arch as of 2026-08; generous headroom over that.
+    timeout-minutes: 30
     permissions: {}
 
     steps:
