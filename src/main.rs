@@ -8,7 +8,7 @@ use rustls::{ClientConfig, RootCertStore};
 use webpki_roots::TLS_SERVER_ROOTS;
 
 #[derive(Parser)]
-#[command(name = "diffed-places-pipeline")]
+#[command(name = "diffed-places-pipeline", version)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
