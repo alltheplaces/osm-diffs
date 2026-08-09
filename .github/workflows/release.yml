@@ -4,6 +4,17 @@ on:
   push:
     tags: ['v*']  # triggered by pushing a tag such as 'v0.1.2'
 
+# Serialize releases: the manifest job below overwrites the shared, mutable
+# ":latest" tag, so two tags pushed close together must not build
+# concurrently -- whichever run's manifest push happened to land last would
+# silently "win" :latest, regardless of which tag is actually newer.
+# cancel-in-progress stays false (the default) on purpose: an in-progress
+# release may be mid-push or mid-attestation, and queuing a second run is
+# safe where killing the first one mid-flight would not be.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
