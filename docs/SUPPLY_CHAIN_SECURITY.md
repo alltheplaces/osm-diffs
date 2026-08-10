@@ -15,11 +15,7 @@ on a food package. The idea is most commonly applied to software (a
 which compiler and build tools were used, under which licenses), but
 nothing about it is specific to software. The same idea applies to any
 produced artifact: a BOM for a dataset could record which pipeline
-version, which input files, and when it was produced. This project’s SBOM
-already has a taste of that: alongside the software dependencies, it
-includes a couple of `"type": "data"` components (the vendored
-`id-tagging-schema` and `osm-testdata-grid`) that aren’t code at all, just
-data this project depends on.
+version, which input files, and when it was produced.
 
 A BOM lets anyone — a downstream user, a security team, an auditor —
 answer questions like “does this contain a vulnerable version of library
@@ -95,6 +91,17 @@ outright, its tag name can never be reused for a new release. This closes
 off a whole class of supply-chain attack where a previously-trusted,
 already-verified tag gets quietly repointed at something else later.
 
+## Why all of this, together
+
+None of these pieces alone is enough. An SBOM without provenance tells
+you what’s in an artifact but not whether to trust that it was built
+honestly. Provenance without immutability can be quietly invalidated
+later by moving the tag it refers to. Together, they form a chain a
+downstream consumer can actually verify: *this exact tag* can’t have been
+silently swapped (immutability), *this exact image* was built by our
+workflow from our source (provenance), and *this exact image* contains
+what it claims to (SBOM/CBOM).
+
 ## Is this overkill for a project like this?
 
 Fair question. `osm-diffs` is open source, processes only publicly
@@ -116,14 +123,3 @@ being the starkest recent example), and the regulation and tooling
 responding to them — the practices this document describes among them —
 are becoming baseline expectations rather than something only
 security-sensitive projects bother with.
-
-## Why all of this, together
-
-None of these pieces alone is enough. An SBOM without provenance tells
-you what’s in an artifact but not whether to trust that it was built
-honestly. Provenance without immutability can be quietly invalidated
-later by moving the tag it refers to. Together, they form a chain a
-downstream consumer can actually verify: *this exact tag* can’t have been
-silently swapped (immutability), *this exact image* was built by our
-workflow from our source (provenance), and *this exact image* contains
-what it claims to (SBOM/CBOM).
