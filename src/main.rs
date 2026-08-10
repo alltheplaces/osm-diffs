@@ -28,7 +28,6 @@ enum Commands {
 
 fn main() -> Result<()> {
     let args = Cli::parse();
-    env_logger::init();
     init_crypto();
 
     match &args.command {
