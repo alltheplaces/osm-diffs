@@ -69,6 +69,13 @@ mod tests {
     // `init()` sets the process-wide logger, which -- like `log::set_logger`
     // in general -- can only happen once per process; keep this the only
     // test in the crate that calls it.
+    //
+    // That logger then stays live for the rest of the test binary's
+    // process. `cargo test` runs tests in parallel within one process, so
+    // any other test that logs anything afterwards -- directly, or via a
+    // dependency such as ext_sort -- gets appended to this very same file.
+    // Search for our own two records by content instead of assuming we're
+    // the only lines in the file, or that they're at fixed positions.
     #[test]
     fn test_init_writes_structured_startup_record() -> Result<()> {
         let dir = tempfile::tempdir()?;
@@ -76,11 +83,16 @@ mod tests {
         log::warn!("something worth noting: {}", "relation/12345");
 
         let contents = std::fs::read_to_string(dir.path().join(LOG_FILE_NAME))?;
-        let lines: Vec<&str> = contents.lines().collect();
-        assert_eq!(lines.len(), 2, "expected startup + warn record: {lines:?}");
+        let records: Vec<serde_json::Value> = contents
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<std::result::Result<_, _>>()?;
 
-        let startup: serde_json::Value = serde_json::from_str(lines[0])?;
-        assert_eq!(startup["level"], "INFO");
+        let init_module = module_path!().rsplit_once("::").unwrap().0;
+        let startup = records
+            .iter()
+            .find(|r| r["target"] == init_module && r["level"] == "INFO")
+            .with_context(|| format!("no startup record found among: {records:?}"))?;
         assert!(
             startup["message"]
                 .as_str()
@@ -90,9 +102,10 @@ mod tests {
         );
         assert!(startup["timestamp"].as_str().is_some());
 
-        let warn: serde_json::Value = serde_json::from_str(lines[1])?;
-        assert_eq!(warn["level"], "WARN");
-        assert_eq!(warn["target"], module_path!());
+        let warn = records
+            .iter()
+            .find(|r| r["target"] == module_path!() && r["level"] == "WARN")
+            .with_context(|| format!("no warn record found among: {records:?}"))?;
         assert!(warn["message"].as_str().unwrap().contains("relation/12345"));
 
         Ok(())
