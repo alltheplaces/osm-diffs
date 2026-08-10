@@ -580,11 +580,7 @@ fn assemble_super_relations(
                 };
 
                 let Some(rel_geometry) = rel_geometry else {
-                    // TODO: Write to a proper log file, perhaps via rust logging framework.
-                    println!(
-                        "assemble_super_relations could not build geometry for relation/{}",
-                        rel_id
-                    );
+                    log::error!("could not build geometry for relation/{}", rel_id);
                     continue;
                 };
 

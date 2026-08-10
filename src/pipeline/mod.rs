@@ -12,6 +12,7 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
     if !workdir.exists() {
         std::fs::create_dir(workdir)?;
     }
+    crate::logging::init(workdir)?;
 
     geostats::init()?;
     let progress = indicatif::MultiProgress::new();
