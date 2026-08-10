@@ -27,13 +27,11 @@ jobs:
       uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba  # v0.0.11
     - name: Check out repository
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-    - name: Install protocol buffers compiler
+    - name: Install protobuf compiler and tippecanoe
       run: |
-        sudo apt-get install -y protobuf-compiler
+        sudo apt-get update
+        sudo apt-get install -y protobuf-compiler tippecanoe
         protoc --version
-    - name: Install tippecanoe
-      run: |
-        sudo apt-get install -y tippecanoe
         tippecanoe --version
     - name: Install Rust LLVM tools preview
       run: rustup component add llvm-tools-preview
