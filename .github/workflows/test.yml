@@ -51,7 +51,7 @@ jobs:
       run: |
         cargo llvm-cov test --cobertura --locked --verbose --output-path cobertura.xml
     - name: Look for common mistakes
-      run: cargo clippy --locked
+      run: cargo clippy --locked --all-targets -- -D warnings
     - name: Upload test coverage to Coveralls
       with:
         fail-on-error: false  # not critical when coveralls.io is down
