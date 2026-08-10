@@ -34,7 +34,7 @@ pub fn render_tiles(
         if let Some(progress) = parse_progress(&line) {
             progress_bar.set_position((progress + 0.5) as u64);
         } else {
-            eprintln!("{}", line);
+            log::info!("tippecanoe: {}", line);
         }
     }
 
@@ -76,7 +76,7 @@ fn make_tippecanoe_command(
                 layer.path.display()
             ));
         } else {
-            eprintln!("dropping layer {:?}", layer);
+            log::info!("dropping empty layer {:?}", layer);
         }
     }
     cmd.arg("--output").arg(out_path);
