@@ -279,44 +279,38 @@ mod tests {
     #[test]
     fn test_is_area() {
         // If a way is not closed, it is never an area, no matter how it is tagged.
-        assert_eq!(is_area(false, [("area", "yes")].into_iter()), false);
-        assert_eq!(is_area(true, [("area", "yes")].into_iter()), true);
-        assert_eq!(is_area(true, [("area", "no")].into_iter()), false);
+        assert!(!is_area(false, [("area", "yes")].into_iter()));
+        assert!(is_area(true, [("area", "yes")].into_iter()));
+        assert!(!is_area(true, [("area", "no")].into_iter()));
 
         // By default, a closed way is not an area, unless the tags say otherwise.
-        assert_eq!(is_area(true, [].into_iter()), false);
-        assert_eq!(is_area(true, [("foo", "bar")].into_iter()), false);
+        assert!(!is_area(true, [].into_iter()));
+        assert!(!is_area(true, [("foo", "bar")].into_iter()));
 
         // Should handle allowlists and denylists.
-        assert_eq!(is_area(true, [("aerialway", "pylon")].into_iter()), true);
-        assert_eq!(
-            is_area(true, [("aerialway", "pylon"), ("area", "no")].into_iter()),
-            false
-        );
-        assert_eq!(
-            is_area(true, [("aerialway", "pylon"), ("area", "yes")].into_iter()),
-            true
-        );
-        assert_eq!(is_area(true, [("aerialway", "goods")].into_iter()), false);
-        assert_eq!(
-            is_area(true, [("aerialway", "goods"), ("area", "no")].into_iter()),
-            false
-        );
-        assert_eq!(
-            is_area(true, [("aerialway", "goods"), ("area", "yes")].into_iter()),
-            true
-        );
+        assert!(is_area(true, [("aerialway", "pylon")].into_iter()));
+        assert!(!is_area(
+            true,
+            [("aerialway", "pylon"), ("area", "no")].into_iter()
+        ));
+        assert!(is_area(
+            true,
+            [("aerialway", "pylon"), ("area", "yes")].into_iter()
+        ));
+        assert!(!is_area(true, [("aerialway", "goods")].into_iter()));
+        assert!(!is_area(
+            true,
+            [("aerialway", "goods"), ("area", "no")].into_iter()
+        ));
+        assert!(is_area(
+            true,
+            [("aerialway", "goods"), ("area", "yes")].into_iter()
+        ));
 
         // Should recognize lifecycle prefixes, similar to how iD does it in its codebase.
-        assert_eq!(
-            is_area(true, [("planned:aerialway", "pylon")].into_iter()),
-            true
-        );
-        assert_eq!(
-            is_area(true, [("planned:aerialway", "goods")].into_iter()),
-            false
-        );
-        assert_eq!(is_area(true, [("razed:building", "yes")].into_iter()), true);
+        assert!(is_area(true, [("planned:aerialway", "pylon")].into_iter()));
+        assert!(!is_area(true, [("planned:aerialway", "goods")].into_iter()));
+        assert!(is_area(true, [("razed:building", "yes")].into_iter()));
     }
 
     #[test]
