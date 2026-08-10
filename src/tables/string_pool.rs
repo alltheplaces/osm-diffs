@@ -668,13 +668,13 @@ mod tests {
     use std::sync::LazyLock;
     use tempfile::TempDir;
 
-    const TEST_POOL: LazyLock<StringPool> = LazyLock::new(|| {
+    static TEST_POOL: LazyLock<StringPool> = LazyLock::new(|| {
         let entries = &["zero", "one", "two", "hello world"];
         let workdir = TempDir::new().expect("TempDir::new() failed");
         let path = workdir.path().join("test.StringPool");
         StringPool::create(
-            entries.into_iter().map(|&s| String::from(s)),
-            &workdir.path(),
+            entries.iter().map(|&s| String::from(s)),
+            workdir.path(),
             &path,
         )
         .expect("StringPool::create() failed")

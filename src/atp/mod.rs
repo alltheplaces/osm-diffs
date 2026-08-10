@@ -388,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_find_point_for_line_string() {
-        let pt = find_point(&BICYCLE_ROAD).unwrap();
+        let pt = find_point(BICYCLE_ROAD).unwrap();
         assert!((pt.x() - 7.4593195).abs() < 1e-6);
         assert!((pt.y() - 46.9423753).abs() < 1e-6);
     }
@@ -413,12 +413,12 @@ mod tests {
                ]
            }
         }"#;
-        let pt = find_point(&geojson).unwrap();
+        let pt = find_point(geojson).unwrap();
         assert!((pt.x() - -72.4474).abs() < 1e-3);
         assert!((pt.y() - 25.3935).abs() < 1e-3);
     }
 
-    fn tags<'a>(place: &'a Place) -> Vec<(&'a str, &'a str)> {
+    fn tags(place: &Place) -> Vec<(&str, &str)> {
         place
             .tags
             .iter()
@@ -504,54 +504,42 @@ mod tests {
 
     #[test]
     fn test_is_usable_for_osm() {
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[("use:openstreetmap", "yes")])),
-            true
-        );
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[("use:openstreetmap", "no")])),
-            false
-        );
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[
-                ("license", "Creative Commons Zero"),
-                ("license:wikidata", "Q6938433"),
-                ("spider:lineage", "S_ATP_AGGREGATORS"),
-            ])),
-            true
-        );
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[
-                ("license", "Creative Commons Zero"),
-                ("license:wikidata", "Q6938433"),
-                ("use:openstreetmap", "no"),
-            ])),
-            false
-        );
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[("spider:lineage", "S_ATP_BRANDS")])),
-            true
-        );
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[
-                ("license", "Creative Commons Attribution 4.0 International"),
-                ("license:wikidata", "Q20007257"),
-                ("spider:lineage", "S_ATP_BRANDS")
-            ])),
-            false
-        );
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[
-                ("license", "Etalab Open License 2.0"),
-                ("license:wikidata", "Q80939351"),
-                ("spider:lineage", "S_ATP_GOVERNMENT")
-            ])),
-            true
-        );
-        assert_eq!(
-            is_usable_for_osm(&make_dataset(&[("spider:lineage", "S_ATP_AGGREGATORS")])),
-            false
-        );
+        assert!(is_usable_for_osm(&make_dataset(&[(
+            "use:openstreetmap",
+            "yes"
+        )])));
+        assert!(!is_usable_for_osm(&make_dataset(&[(
+            "use:openstreetmap",
+            "no"
+        )])));
+        assert!(is_usable_for_osm(&make_dataset(&[
+            ("license", "Creative Commons Zero"),
+            ("license:wikidata", "Q6938433"),
+            ("spider:lineage", "S_ATP_AGGREGATORS"),
+        ])));
+        assert!(!is_usable_for_osm(&make_dataset(&[
+            ("license", "Creative Commons Zero"),
+            ("license:wikidata", "Q6938433"),
+            ("use:openstreetmap", "no"),
+        ])));
+        assert!(is_usable_for_osm(&make_dataset(&[(
+            "spider:lineage",
+            "S_ATP_BRANDS"
+        )])));
+        assert!(!is_usable_for_osm(&make_dataset(&[
+            ("license", "Creative Commons Attribution 4.0 International"),
+            ("license:wikidata", "Q20007257"),
+            ("spider:lineage", "S_ATP_BRANDS")
+        ])));
+        assert!(is_usable_for_osm(&make_dataset(&[
+            ("license", "Etalab Open License 2.0"),
+            ("license:wikidata", "Q80939351"),
+            ("spider:lineage", "S_ATP_GOVERNMENT")
+        ])));
+        assert!(!is_usable_for_osm(&make_dataset(&[(
+            "spider:lineage",
+            "S_ATP_AGGREGATORS"
+        )])));
     }
 
     fn make_dataset(tags: &[(&str, &str)]) -> geojson::FeatureCollection {

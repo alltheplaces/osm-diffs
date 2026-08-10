@@ -520,27 +520,15 @@ mod tests {
 
     impl FeatureStore for MockFeatureStore {
         fn get_node(&self, id: u64) -> Option<Node> {
-            if let Some(node) = self.nodes.get(&id) {
-                Some(node.clone())
-            } else {
-                None
-            }
+            self.nodes.get(&id).cloned()
         }
 
         fn get_way(&self, id: u64) -> Option<Way> {
-            if let Some(way) = self.ways.get(&id) {
-                Some(way.clone())
-            } else {
-                None
-            }
+            self.ways.get(&id).cloned()
         }
 
         fn get_relation(&self, id: u64) -> Option<Relation> {
-            if let Some(relation) = self.relations.get(&id) {
-                Some(relation.clone())
-            } else {
-                None
-            }
+            self.relations.get(&id).cloned()
         }
 
         fn node_count(&self) -> u64 {
