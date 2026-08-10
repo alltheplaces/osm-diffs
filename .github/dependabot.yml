@@ -3,14 +3,13 @@ updates:
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "monthly"
+    allow:
+      - dependency-type: "all"
     groups:
-      arrow:
+      cargo:
         patterns:
-          - "arrow*"
-      parquet:
-        patterns:
-          - "parquet*"
+          - "*"
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
