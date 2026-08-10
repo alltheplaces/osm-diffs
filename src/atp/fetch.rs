@@ -144,7 +144,7 @@ mod tests {
         let client = test_client(&server);
         let progress = MultiProgress::with_draw_target(ProgressDrawTarget::hidden());
         let workdir = TempDir::new()?;
-        let path = fetch_atp(&mock_history_url, &client, &progress, &workdir.path()).await?;
+        let path = fetch_atp(&mock_history_url, &client, &progress, workdir.path()).await?;
         mock_history.assert_async().await;
         mock_atp_data.assert_async().await;
 

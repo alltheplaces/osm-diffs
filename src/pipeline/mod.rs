@@ -78,7 +78,7 @@ mod tests {
         f7.as_file().set_modified(t7)?;
 
         assert!(last_modified(&[]).is_err());
-        assert!(last_modified(&[&Path::new("/no/such/file")]).is_err());
+        assert!(last_modified(&[Path::new("/no/such/file")]).is_err());
 
         assert_eq!(last_modified(&[f0.path()])?, t0);
         assert_eq!(last_modified(&[f0.path(), f2.path()])?, t2);

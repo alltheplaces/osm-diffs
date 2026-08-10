@@ -1065,7 +1065,7 @@ pub mod filtered_file {
             bytes.extend_from_slice(&0xdeadbeefcafefeed_u64.to_le_bytes()); // [32..40]: data[0]
             bytes.extend_from_slice(&42_u64.to_le_bytes()); // [40..48]: data[1]
             bytes.extend_from_slice(&2_u64.to_le_bytes()); // [48..56]: num_headers
-            assert!(FilteredFile::get_offset_size(b"some_key", &bytes, 1) == None);
+            assert!(FilteredFile::get_offset_size(b"some_key", &bytes, 1).is_none());
             for (key, offset, size) in [(b"some_key", 88, 16), (b"otherkey", 91, 2)] {
                 bytes.extend_from_slice(key as &[u8; 8]);
                 bytes.extend_from_slice(&(offset as u64).to_le_bytes());
@@ -1120,7 +1120,7 @@ pub mod filtered_file {
                 }
                 file.sync_all()?;
             }
-            writer.write_coords(&keys_path, &data.path())?;
+            writer.write_coords(&keys_path, data.path())?;
             writer.close()?;
             let ff = FilteredFile::open(tmp.path())?;
             assert_eq!(
@@ -1195,12 +1195,12 @@ pub mod filtered_file {
             writer.write_node_refs(&test_data_path("u64_le_0_2_7"))?;
             writer.close()?;
             let ff = FilteredFile::open(tmp.path())?;
-            assert_eq!(ff.has_node_ref(0), true);
-            assert_eq!(ff.has_node_ref(2), true);
-            assert_eq!(ff.has_node_ref(7), true);
-            assert_eq!(ff.has_node_ref(1), false);
-            assert_eq!(ff.has_node_ref(8), false);
-            assert_eq!(ff.has_node_ref(1234567890123456789), false);
+            assert!(ff.has_node_ref(0));
+            assert!(ff.has_node_ref(2));
+            assert!(ff.has_node_ref(7));
+            assert!(!ff.has_node_ref(1));
+            assert!(!ff.has_node_ref(8));
+            assert!(!ff.has_node_ref(1234567890123456789));
             Ok(())
         }
 
@@ -1211,12 +1211,12 @@ pub mod filtered_file {
             writer.write_way_refs(&test_data_path("u64_le_0_2_7"))?;
             writer.close()?;
             let ff = FilteredFile::open(tmp.path())?;
-            assert_eq!(ff.has_way_ref(0), true);
-            assert_eq!(ff.has_way_ref(2), true);
-            assert_eq!(ff.has_way_ref(7), true);
-            assert_eq!(ff.has_way_ref(1), false);
-            assert_eq!(ff.has_way_ref(8), false);
-            assert_eq!(ff.has_way_ref(1234567890123456789), false);
+            assert!(ff.has_way_ref(0));
+            assert!(ff.has_way_ref(2));
+            assert!(ff.has_way_ref(7));
+            assert!(!ff.has_way_ref(1));
+            assert!(!ff.has_way_ref(8));
+            assert!(!ff.has_way_ref(1234567890123456789));
             Ok(())
         }
 
@@ -1230,8 +1230,8 @@ pub mod filtered_file {
             assert_eq!(ff.get_coord(5), None);
             assert_eq!(ff.feature_count(), 0);
             assert_eq!(ff.feature_data(17123), None);
-            assert_eq!(ff.has_node_ref(123), false);
-            assert_eq!(ff.has_way_ref(789), false);
+            assert!(!ff.has_node_ref(123));
+            assert!(!ff.has_way_ref(789));
             Ok(())
         }
 

@@ -134,25 +134,25 @@ mod tests {
     use std::{io::Write, sync::LazyLock};
     use tempfile::{NamedTempFile, TempDir};
 
-    const TEST_TABLE: LazyLock<U64Set> = LazyLock::new(|| {
+    static TEST_TABLE: LazyLock<U64Set> = LazyLock::new(|| {
         let mut file = NamedTempFile::new().expect("NamedTempFile");
         file.write_all(FILE_SIGNATURE).expect("File::write");
         file.write_all(&3_u64.to_le_bytes()).expect("File::write");
         for i in [7_u64, 23, 42] {
             file.write_all(&i.to_le_bytes()).expect("File::write");
         }
-        U64Set::open(&file.path()).expect("U64Set::open")
+        U64Set::open(file.path()).expect("U64Set::open")
     });
 
     #[test]
     fn test_contains() {
-        assert_eq!(TEST_TABLE.contains(u64::MIN), false);
-        assert_eq!(TEST_TABLE.contains(7), true);
-        assert_eq!(TEST_TABLE.contains(23), true);
-        assert_eq!(TEST_TABLE.contains(41), false);
-        assert_eq!(TEST_TABLE.contains(42), true);
-        assert_eq!(TEST_TABLE.contains(43), false);
-        assert_eq!(TEST_TABLE.contains(u64::MAX), false);
+        assert!(!TEST_TABLE.contains(u64::MIN));
+        assert!(TEST_TABLE.contains(7));
+        assert!(TEST_TABLE.contains(23));
+        assert!(!TEST_TABLE.contains(41));
+        assert!(TEST_TABLE.contains(42));
+        assert!(!TEST_TABLE.contains(43));
+        assert!(!TEST_TABLE.contains(u64::MAX));
     }
 
     #[test]
@@ -173,7 +173,7 @@ mod tests {
         file.write_all(&42_u64.to_le_bytes())?;
 
         let table = U64Set::open(file.path())?;
-        let file_metadata = std::fs::metadata(&file.path())?;
+        let file_metadata = std::fs::metadata(file.path())?;
         assert_eq!(table.modified()?, file_metadata.modified()?);
         Ok(())
     }
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn test_open_inexistent_file() {
         let path = Path::new("file/does/not/exist");
-        assert!(U64Set::open(&path).is_err());
+        assert!(U64Set::open(path).is_err());
     }
 
     #[test]
@@ -240,11 +240,11 @@ mod tests {
 
         let set = U64Set::create([42, 7, 23, 7].into_iter(), workdir.path(), &out)?;
         assert_eq!(set.len(), 3);
-        assert_eq!(set.contains(0), false);
-        assert_eq!(set.contains(7), true);
-        assert_eq!(set.contains(23), true);
-        assert_eq!(set.contains(42), true);
-        assert_eq!(set.contains(99), false);
+        assert!(!set.contains(0));
+        assert!(set.contains(7));
+        assert!(set.contains(23));
+        assert!(set.contains(42));
+        assert!(!set.contains(99));
         assert_eq!(set.iter().collect::<Vec<u64>>(), &[7, 23, 42]);
 
         Ok(())
@@ -321,11 +321,11 @@ mod writer {
             assert_eq!(num_written, 3);
 
             let table = U64Set::open(&out)?;
-            assert_eq!(table.contains(4), false);
-            assert_eq!(table.contains(23), true);
-            assert_eq!(table.contains(42), true);
-            assert_eq!(table.contains(7777), true);
-            assert_eq!(table.contains(123), false);
+            assert!(!table.contains(4));
+            assert!(table.contains(23));
+            assert!(table.contains(42));
+            assert!(table.contains(7777));
+            assert!(!table.contains(123));
 
             Ok(())
         }
@@ -339,10 +339,10 @@ mod writer {
             assert_eq!(num_written, 1);
 
             let table = U64Set::open(&out)?;
-            assert_eq!(table.contains(4), false);
-            assert_eq!(table.contains(8), false);
-            assert_eq!(table.contains(9), true);
-            assert_eq!(table.contains(10), false);
+            assert!(!table.contains(4));
+            assert!(!table.contains(8));
+            assert!(table.contains(9));
+            assert!(!table.contains(10));
 
             Ok(())
         }
@@ -356,7 +356,7 @@ mod writer {
             assert_eq!(num_written, 0);
 
             let table = U64Set::open(&out)?;
-            assert_eq!(table.contains(42), false);
+            assert!(!table.contains(42));
 
             Ok(())
         }

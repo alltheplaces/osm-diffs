@@ -194,8 +194,8 @@ mod tests {
             vec![],
         )
         .unwrap();
-        assert_eq!(a.eq(&b), false);
-        assert_eq!(a.eq(&a), true);
+        assert!(!a.eq(&b));
+        assert!(a.eq(&a));
         assert_eq!(a.cmp(&b), a.s2_cell_id.cmp(&b.s2_cell_id));
         assert_eq!(a.partial_cmp(&b), a.s2_cell_id.partial_cmp(&b.s2_cell_id));
     }
@@ -217,7 +217,7 @@ mod tests {
             assert_eq!(p.x(), 7.4478123);
             assert_eq!(p.y(), 46.9479801);
         } else {
-            assert!(false, "expected a point, got {:?}", shape);
+            panic!("expected a point, got {:?}", shape);
         };
     }
 }

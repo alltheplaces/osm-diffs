@@ -341,7 +341,7 @@ mod tests {
     use std::sync::LazyLock;
     use tempfile::TempDir;
 
-    const TEST_COUNTER: LazyLock<StringCounts> = LazyLock::new(|| {
+    static TEST_COUNTER: LazyLock<StringCounts> = LazyLock::new(|| {
         let entries = &[("foo", 1), ("bar", 7), ("foo", 2), ("foo", 3)];
         let workdir = TempDir::new().expect("TempDir::new() failed");
         let path = workdir.path().join("test.StringCounts");

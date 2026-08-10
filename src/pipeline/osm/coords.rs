@@ -69,7 +69,7 @@ mod tests {
         let workdir = TempDir::new()?;
         let keys_file = NamedTempFile::new()?;
         let data_file = NamedTempFile::new()?;
-        build_tables(rx, &workdir.path(), &keys_file.path(), &data_file.path())?;
+        build_tables(rx, workdir.path(), keys_file.path(), data_file.path())?;
 
         let keys: Vec<u64> = {
             let mut buf = Vec::new();

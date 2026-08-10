@@ -40,12 +40,12 @@ mod tests {
 
     #[test]
     fn test_is_wikidata_id() {
-        assert_eq!(is_wikidata_key("highway"), false);
-        assert_eq!(is_wikidata_key("wikidata"), true);
-        assert_eq!(is_wikidata_key("brand:wikidata"), true);
-        assert_eq!(is_wikidata_key("network:wikidata"), true);
-        assert_eq!(is_wikidata_key("operator:wikidata"), true);
-        assert_eq!(is_wikidata_key("species:wikidata"), false);
+        assert!(!is_wikidata_key("highway"));
+        assert!(is_wikidata_key("wikidata"));
+        assert!(is_wikidata_key("brand:wikidata"));
+        assert!(is_wikidata_key("network:wikidata"));
+        assert!(is_wikidata_key("operator:wikidata"));
+        assert!(!is_wikidata_key("species:wikidata"));
     }
 
     #[test]
@@ -211,7 +211,7 @@ mod reader {
             let mut bytes = Vec::new();
             bytes.extend_from_slice(b"diffed-places coverage\0\0");
             bytes.extend_from_slice(&2_u64.to_le_bytes());
-            assert!(Coverage::get_offset_size(b"some_key", &bytes, 1) == None);
+            assert!(Coverage::get_offset_size(b"some_key", &bytes, 1).is_none());
             for (key, offset, size) in [(b"some_key", 80, 16), (b"otherkey", 83, 2)] {
                 bytes.extend_from_slice(key as &[u8; 8]);
                 bytes.extend_from_slice(&(offset as u64).to_le_bytes());
@@ -721,12 +721,12 @@ mod writer {
                 );
             }
 
-            assert_eq!(cov.contains_wikidata_item(1), false);
-            assert_eq!(cov.contains_wikidata_item(23), true);
-            assert_eq!(cov.contains_wikidata_item(51), false);
-            assert_eq!(cov.contains_wikidata_item(77), true);
-            assert_eq!(cov.contains_wikidata_item(88), true);
-            assert_eq!(cov.contains_wikidata_item(89), false);
+            assert!(!cov.contains_wikidata_item(1));
+            assert!(cov.contains_wikidata_item(23));
+            assert!(!cov.contains_wikidata_item(51));
+            assert!(cov.contains_wikidata_item(77));
+            assert!(cov.contains_wikidata_item(88));
+            assert!(!cov.contains_wikidata_item(89));
 
             Ok(())
         }

@@ -118,7 +118,7 @@ mod tests {
             .get_args()
             .map(|s| s.to_string_lossy().into_owned())
             .collect();
-        let shop_layer_arg = format!("--named-layer=Shops:{}", &layers[1].path.display());
+        let shop_layer_arg = format!("--named-layer=Shops:{}", layers[1].path.display());
         let workdir_abs = std::path::absolute(&workdir).expect("absolute path of workdir");
         assert_eq!(
             args,
