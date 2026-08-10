@@ -46,3 +46,13 @@ fn test_version_flag() {
         .success()
         .stdout(predicates::str::contains(env!("CARGO_PKG_VERSION")));
 }
+
+#[test]
+fn test_help_flag() {
+    Command::new(cargo_bin!("osm-diffs"))
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("run"))
+        .stdout(predicates::str::contains("--version"));
+}

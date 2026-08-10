@@ -7,6 +7,8 @@ use rustls::version::TLS13;
 use rustls::{ClientConfig, RootCertStore};
 use webpki_roots::TLS_SERVER_ROOTS;
 
+/// Computes diffs between AllThePlaces and OpenStreetMap data, producing
+/// edit suggestions to help keep OpenStreetMap complete and up to date.
 #[derive(Parser)]
 #[command(name = "diffed-places-pipeline", version)]
 struct Cli {
@@ -16,7 +18,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Run the full pipeline: fetch inputs, compute diffs, write output.
     Run {
+        /// Directory for input, intermediate, and output files.
         #[arg(short, long, value_name = "workdir")]
         workdir: PathBuf,
     },
