@@ -8,7 +8,7 @@
 #   - waits for (or, if it's already done, immediately checks) that
 #     workflow's run for the given tag to complete successfully
 #   - confirms both a build-provenance and an SBOM attestation exist for
-#     each per-architecture image (see docs/supply-chain-security.md for
+#     each per-architecture image (see docs/SUPPLY_CHAIN_SECURITY.md for
 #     what these are and why both should exist)
 #
 # Usage:

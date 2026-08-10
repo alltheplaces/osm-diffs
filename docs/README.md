@@ -1,7 +1,7 @@
 # Documentation
 
-- [`releasing.md`](releasing.md) — how to cut a release of `osm-diffs`.
-- [`supply-chain-security.md`](supply-chain-security.md) — the concepts
+- [`RELEASING.md`](RELEASING.md) — how to cut a release of `osm-diffs`.
+- [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md) — the concepts
   behind our release process: SBOM, CBOM, CycloneDX, build provenance,
   attestations, and immutable releases.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — how we expect people to

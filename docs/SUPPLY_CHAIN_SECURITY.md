@@ -2,7 +2,7 @@
 
 This document explains the concepts behind the supply-chain security
 practices used in this project’s release process (see
-[`releasing.md`](releasing.md) for the actual, repo-specific steps). It’s
+[`RELEASING.md`](RELEASING.md) for the actual, repo-specific steps). It’s
 written for someone who can code but hasn’t necessarily done release
 engineering before.
 
@@ -71,7 +71,7 @@ feature for this (backed by [Sigstore](https://www.sigstore.dev/)), which
 signs and publishes both a build-provenance attestation and an
 SBOM attestation for our container images, so anyone who pulls the image
 can verify both what’s in it and that it was really built by our GitHub
-Actions workflow — see [`releasing.md`](releasing.md) for exactly which
+Actions workflow — see [`RELEASING.md`](RELEASING.md) for exactly which
 attestations get created and how to check them yourself.
 
 One nuance worth knowing for a multi-architecture image like ours: the

@@ -3,7 +3,7 @@
 This directory holds the scripts that generate the Software Bill of
 Materials (SBOM) — including a small Cryptographic Bill of Materials,
 CBOM — for the `osm-diffs` container image. See
-[`../../docs/supply-chain-security.md`](../../docs/supply-chain-security.md)
+[`../../docs/SUPPLY_CHAIN_SECURITY.md`](../../docs/SUPPLY_CHAIN_SECURITY.md)
 for what an SBOM/CBOM actually is and why we publish one; this document
 only covers how it’s implemented here.
 
