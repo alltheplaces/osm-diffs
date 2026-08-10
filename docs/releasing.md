@@ -14,13 +14,23 @@ This document is the practical how-to for cutting a release of
 Run it from a clean, up-to-date `main` checkout. It handles everything
 else: bumping the version, opening and merging the PR for that, tagging,
 and publishing the release. See “What happens automatically” below for
-the full sequence.
+the full sequence — but read “Choosing the version number” first, it’s
+the one part of this that actually needs a careful decision, not just
+running a command.
 
 ## Choosing the version number
 
 This is the one genuine judgment call in the whole process; everything
 else is mechanical. We follow [SemVer](https://semver.org/), driven by
-the pipeline’s **output schema** — not by how much code changed:
+the pipeline’s **output schema** — not by how much code changed.
+
+This is a different question than what [SemVer](https://semver.org/)
+usually answers. Programmers normally think of SemVer in terms of API
+compatibility for code that *links against* a library. Nobody links
+against `osm-diffs`:
+downstream clients only ever consume the *data* it produces. So the
+question to ask isn’t “did the code change in a breaking way,” it’s “does
+this change what a client reading our output has to handle differently”:
 
 - **major** — the output schema changed in a way that breaks existing
   clients (a field was removed or renamed, a type changed, ...)
@@ -63,7 +73,8 @@ Once you run `cut-release.sh vX.Y.Z`:
      (a server-side safety net — this should never fail if you used the
      script, since the script only ever tags a version it just set).
    - `build` (once per architecture, amd64 and arm64): builds the
-     container via `Containerfile`, which also generates the SBOM (see
+     container via [`Containerfile`](../Containerfile), which also
+     generates the SBOM (see
      [`scripts/sbom/README.md`](../scripts/sbom/README.md)) and pushes
      each architecture’s image to `ghcr.io` by digest.
    - `manifest`: combines both architectures into a multi-arch manifest,
@@ -71,36 +82,38 @@ Once you run `cut-release.sh vX.Y.Z`:
    - `attest`: publishes signed SBOM and build-provenance attestations
      for both per-architecture images, plus a build-provenance
      attestation for the manifest list.
+6. **The script waits for that workflow to finish**, then runs
+   [`verify-release.sh`](../scripts/verify-release.sh) to confirm it
+   actually came out right — not just that it reported success, but that
+   both a build-provenance and an SBOM attestation genuinely exist for
+   both architectures (see “Verifying a release” below).
 
-Steps 1-4 usually take under 10 minutes; step 5 (the actual container
-build) takes roughly another 15-20 minutes.
+Steps 1-4 usually take under 10 minutes; steps 5-6 (the actual container
+build, plus verification) take roughly another 20-25 minutes.
 
 ## Verifying a release
 
-To double-check a release actually came out right, rather than just
-trusting that the workflow went green:
+This happens automatically as the last step of `cut-release.sh` — you
+don’t need to do anything extra. It’s implemented as a separate script,
+[`verify-release.sh`](../scripts/verify-release.sh), specifically so it
+can also be run standalone at any later time, e.g. if `cut-release.sh`
+didn’t get to finish (the machine running it crashed, the connection
+dropped, ...), or to double-check an older release:
 
 ```sh
-# Cargo.toml on main should match the tag you just cut
-git show origin/main:Cargo.toml | grep '^version'
-
-# the release.yml run for your tag should show all jobs succeeding
-gh run list --workflow=release.yml --limit 1
-
-# attestations exist for the published image (note: gh attestation
-# verify's default --predicate-type filter only shows build provenance;
-# query the raw API to see the SBOM attestation too)
-gh api "repos/alltheplaces/osm-diffs/attestations/sha256:<digest>" \
-  | jq -r '.attestations[].bundle.dsseEnvelope.payload' \
-  | while read -r p; do echo "$p" | base64 -d | jq -r .predicateType; done
-# expect: https://slsa.dev/provenance/v1 and https://cyclonedx.org/bom
+./scripts/verify-release.sh vX.Y.Z
 ```
 
-(This is exactly what was done to confirm v0.6.9, the first release cut
-with this script — see the comment trail on
+It waits for (or, if already finished, immediately checks)
+`release.yml`’s run for that tag, then confirms both a build-provenance
+and an SBOM attestation exist for each per-architecture image — the same
+two checks described in
+[`supply-chain-security.md`](supply-chain-security.md#build-provenance-and-attestations),
+done for real rather than assumed. This is exactly what was done by hand
+to confirm v0.6.9, the first release cut with `cut-release.sh` — see the
+comment trail on
 [alltheplaces/osm-diffs#562](https://github.com/alltheplaces/osm-diffs/pull/562)
-for the full walkthrough, including how to find the per-architecture
-digests via the release’s uploaded artifacts.)
+for that walkthrough, which is what `verify-release.sh` automates.
 
 ## Rules
 
@@ -136,11 +149,20 @@ digests via the release’s uploaded artifacts.)
   new patch version. The failed tag’s GitHub Release will just exist
   without a correspondingly published, attested container — that’s a
   known, accepted consequence of immutability, not a bug.
+- **`cut-release.sh` is interrupted, or times out, while waiting on
+  `release.yml`** (~20-25 min; a crashed machine, a dropped connection,
+  or a truly stuck workflow): the release itself is unaffected — it was
+  already created before this wait began. Just run
+  `./scripts/verify-release.sh vX.Y.Z` on its own once you’re ready to
+  check on it again; it picks up wherever the run currently stands.
 
 ## Where things live
 
 - [`scripts/cut-release.sh`](../scripts/cut-release.sh) — the script
   itself
+- [`scripts/verify-release.sh`](../scripts/verify-release.sh) — the
+  verification step `cut-release.sh` runs at the end (also usable
+  standalone)
 - [`.github/workflows/release.yml`](../.github/workflows/release.yml) —
   build, SBOM, attest
 - [`Containerfile`](../Containerfile) — how the container gets built

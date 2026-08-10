@@ -35,7 +35,8 @@ build-environment details (compiler and OS versions), and licenses.
 Alongside it, our SBOM includes a small **C**ryptographic **B**ill of
 **M**aterials (CBOM): the same idea, but for cryptography instead of
 dependencies — which TLS version, cipher suites, and crypto backend the
-binary uses. This matters because that’s exactly the kind of thing that
+binary uses, for example when uploading its output to S3-compatible
+storage. This matters because that’s exactly the kind of thing that
 can go stale silently: nothing about a routine dependency update would
 otherwise tell you that the set of cipher suites your binary supports has
 changed.
@@ -93,6 +94,28 @@ be deleted while the release exists. Even if the release is deleted
 outright, its tag name can never be reused for a new release. This closes
 off a whole class of supply-chain attack where a previously-trusted,
 already-verified tag gets quietly repointed at something else later.
+
+## Is this overkill for a project like this?
+
+Fair question. `osm-diffs` is open source, processes only publicly
+available data, and doesn’t handle secrets. Our actual threat model is
+modest compared to, say, a proprietary service handling user data or
+credentials — nobody stands to gain much by compromising this pipeline.
+So no, this level of supply-chain hardening isn’t strictly *necessary*
+the way it would be for many other projects.
+
+But it’s a one-time cost: once set up, it runs entirely automated, adding
+no ongoing effort to any future release. Given that, doing it properly
+is cheap insurance rather than a real trade-off against something else
+we’d otherwise be spending that effort on.
+
+It’s also a reasonable bet on where the industry is heading, not just
+where it stands today: supply-chain attacks aren’t hypothetical anymore
+(the [xz-utils backdoor](https://en.wikipedia.org/wiki/XZ_Utils_backdoor)
+being the starkest recent example), and the regulation and tooling
+responding to them — the practices this document describes among them —
+are becoming baseline expectations rather than something only
+security-sensitive projects bother with.
 
 ## Why all of this, together
 
