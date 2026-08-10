@@ -40,11 +40,12 @@ mod tests {
 
     #[test]
     fn test_is_wikidata_id() {
-        assert!(!is_wikidata_key("highway"));
         assert!(is_wikidata_key("wikidata"));
         assert!(is_wikidata_key("brand:wikidata"));
         assert!(is_wikidata_key("network:wikidata"));
         assert!(is_wikidata_key("operator:wikidata"));
+
+        assert!(!is_wikidata_key("highway"));
         assert!(!is_wikidata_key("species:wikidata"));
     }
 
