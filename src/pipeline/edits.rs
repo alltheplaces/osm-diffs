@@ -79,8 +79,8 @@ pub fn suggest_edits(
     progress_bar.finish_with_message(format!("ATP features → {} suggested OSM edits", num_edits));
 
     let cache_stats = osm.cache_stats();
-    println!(
-        "  cache hits: {} misses: {} hit rate: {:.1}%",
+    log::info!(
+        "cache hits: {} misses: {} hit rate: {:.1}%",
         cache_stats.hits,
         cache_stats.misses,
         cache_stats.hit_rate().unwrap_or(0.0) * 100.0
@@ -142,12 +142,13 @@ fn produce_edits(
                 {
                     num_matches.fetch_add(1, Ordering::Relaxed);
                     if let Some(edit) = matcher.suggest_edit(&best_candidate) {
-                        if false {
-                            println!(
-                                "score={} place={:?} best_candidate={:?} edit={:?}",
-                                best_score, place, best_candidate, edit
-                            );
-                        }
+                        log::debug!(
+                            "score={} place={:?} best_candidate={:?} edit={:?}",
+                            best_score,
+                            place,
+                            best_candidate,
+                            edit
+                        );
                         // TODO: Dispatch to one of {shops, infrastructure, trees}.
                         out.shops.send(edit)?;
                     }

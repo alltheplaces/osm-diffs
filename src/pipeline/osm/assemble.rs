@@ -280,6 +280,7 @@ fn assemble_ways<'a>(
                             build_line(coords)
                         };
                         let Some(geometry) = geometry else {
+                            log::warn!("could not build geometry for way/{}", way.id);
                             continue;
                         };
 
@@ -429,6 +430,7 @@ fn assemble_leaf_relations<'a>(
                             /* super_relations */ None,
                         )?
                         else {
+                            log::error!("could not build geometry for relation/{}", relation.id);
                             continue;
                         };
 

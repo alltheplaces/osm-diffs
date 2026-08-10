@@ -82,7 +82,7 @@ impl<'a> Drop for Upload<'a> {
 
 pub fn upload_tiles(tiles: &Path, progress: &MultiProgress) -> Result<()> {
     let Some(endpoint) = env::var("S3_ENDPOINT").ok() else {
-        eprintln!("S3_ENDPOINT not set, skipping upload");
+        log::warn!("S3_ENDPOINT not set, skipping upload");
         return Ok(());
     };
 
