@@ -1,0 +1,164 @@
+#!/usr/bin/env sh
+#
+# SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
+# SPDX-License-Identifier: MIT
+#
+# Cut a new release, end to end:
+#   1. Bump Cargo.toml's version (and Cargo.lock's self-entry) on a new
+#      branch, open a PR, enable auto-merge, and wait for it to clear
+#      required checks and the merge queue.
+#   2. Once that's landed on main, create the GitHub Release there (tag +
+#      auto-generated notes, from the categories configured in
+#      .github/release.yml).
+#
+# That release tag is what triggers .github/workflows/release.yml, which
+# builds, SBOMs, and attests the container -- this script doesn't touch
+# that part at all, it only automates getting a correctly tagged, correctly
+# versioned commit onto main in the first place.
+#
+# Usage:
+#   ./scripts/cut-release.sh vX.Y.Z
+#
+# Version bump rules (SemVer, driven by the pipeline's OUTPUT SCHEMA, not
+# just code changes):
+#   major - output schema changed in a client-breaking way
+#   minor - output schema evolved in a backward-compatible way
+#   patch - bugfixes only, no schema changes
+#
+# Requirements: git, cargo, gh (authenticated -- run `gh auth login` first)
+
+set -eu
+
+REQUIRED_CHECK="Execute unit and integration tests"
+MERGE_WAIT_TIMEOUT=1500  # 25 min: ~5 min test run + merge-queue wait + slack
+MERGE_POLL_INTERVAL=15
+
+# ── argument handling ────────────────────────────────────────────────────────
+TAG="${1:?usage: cut-release.sh vX.Y.Z}"
+case "$TAG" in
+  v*.*.*) VERSION="${TAG#v}" ;;
+  *) echo "ERROR: tag must look like vX.Y.Z (got: $TAG)" >&2; exit 1 ;;
+esac
+case "$VERSION" in
+  [0-9]*.[0-9]*.[0-9]*) ;;
+  *) echo "ERROR: '$VERSION' doesn't look like X.Y.Z" >&2; exit 1 ;;
+esac
+
+# ── pre-flight checks ────────────────────────────────────────────────────────
+for cmd in git cargo gh; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: $cmd is not installed" >&2; exit 1; }
+done
+gh auth status >/dev/null 2>&1 || { echo "ERROR: gh is not authenticated -- run 'gh auth login'" >&2; exit 1; }
+
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$BRANCH" != "main" ]; then
+  echo "ERROR: must be run from main (currently on '$BRANCH')" >&2
+  exit 1
+fi
+if [ -n "$(git status --porcelain)" ]; then
+  echo "ERROR: working tree is not clean" >&2
+  exit 1
+fi
+
+echo "Fetching origin..."
+git fetch origin main --tags -q
+if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+  echo "ERROR: local main is not up to date with origin/main (run 'git pull')" >&2
+  exit 1
+fi
+
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+  echo "ERROR: tag '${TAG}' already exists" >&2
+  exit 1
+fi
+
+CURRENT_VERSION="$(awk '
+  /^\[package\]/ { in_package=1; next }
+  /^\[/           { in_package=0 }
+  in_package && /^version[[:space:]]*=/ {
+    match($0, /"[^"]*"/)
+    print substr($0, RSTART+1, RLENGTH-2)
+    exit
+  }
+' Cargo.toml)"
+HIGHEST="$(printf '%s\n%s\n' "$CURRENT_VERSION" "$VERSION" | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)"
+if [ "$HIGHEST" != "$VERSION" ] || [ "$VERSION" = "$CURRENT_VERSION" ]; then
+  echo "ERROR: ${VERSION} is not newer than Cargo.toml's current version (${CURRENT_VERSION})" >&2
+  exit 1
+fi
+
+echo "Checking latest CI status on main..."
+LATEST_RUN="$(gh run list --branch main --workflow test.yml --limit 1 \
+  --json headSha,status,conclusion -q '.[0]')"
+RUN_SHA="$(echo "$LATEST_RUN" | jq -r .headSha)"
+RUN_STATUS="$(echo "$LATEST_RUN" | jq -r .status)"
+RUN_CONCLUSION="$(echo "$LATEST_RUN" | jq -r .conclusion)"
+if [ "$RUN_SHA" != "$(git rev-parse HEAD)" ] || [ "$RUN_STATUS" != "completed" ] || [ "$RUN_CONCLUSION" != "success" ]; then
+  echo "ERROR: latest '${REQUIRED_CHECK}' run on main is not a successful," >&2
+  echo "  completed run for the current main HEAD (sha=${RUN_SHA}" >&2
+  echo "  status=${RUN_STATUS} conclusion=${RUN_CONCLUSION}). Wait for CI" >&2
+  echo "  to finish, or fix main, before cutting a release." >&2
+  exit 1
+fi
+
+# ── bump the version via a PR (main is protected: no direct pushes) ─────────
+BUMP_BRANCH="release/${TAG}"
+echo "Creating branch ${BUMP_BRANCH}..."
+git checkout -b "$BUMP_BRANCH" -q
+
+awk -v new_version="$VERSION" '
+  /^\[package\]/ { print; in_package=1; next }
+  /^\[/           { in_package=0 }
+  in_package && /^version[[:space:]]*=/ {
+    print "version = \"" new_version "\""
+    next
+  }
+  { print }
+' Cargo.toml > Cargo.toml.new
+mv Cargo.toml.new Cargo.toml
+cargo check --quiet
+
+git add Cargo.toml Cargo.lock
+git commit -q -m "Bump version to ${VERSION}"
+git push -q -u origin "$BUMP_BRANCH"
+
+PR_URL="$(gh pr create \
+  --title "Bump version to ${VERSION}" \
+  --body "Version bump ahead of releasing ${TAG}. Opened by scripts/cut-release.sh." \
+  --base main)"
+echo "Opened ${PR_URL}"
+
+gh pr merge "$PR_URL" --auto --squash
+echo "Auto-merge enabled; waiting for '${REQUIRED_CHECK}' and the merge queue..."
+
+ELAPSED=0
+while :; do
+  STATE="$(gh pr view "$PR_URL" --json state -q .state)"
+  case "$STATE" in
+    MERGED)
+      echo "Merged."
+      break
+      ;;
+    CLOSED)
+      echo "ERROR: PR was closed without merging: ${PR_URL}" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$ELAPSED" -ge "$MERGE_WAIT_TIMEOUT" ]; then
+    echo "ERROR: timed out after ${MERGE_WAIT_TIMEOUT}s waiting for ${PR_URL} to merge." >&2
+    echo "  Check its status manually; it may still merge on its own." >&2
+    exit 1
+  fi
+  sleep "$MERGE_POLL_INTERVAL"
+  ELAPSED=$((ELAPSED + MERGE_POLL_INTERVAL))
+done
+
+git checkout main -q
+git branch -D "$BUMP_BRANCH" -q
+
+# ── create the release (tag + auto-generated notes) at the new main HEAD ────
+echo "Creating release ${TAG}..."
+gh release create "$TAG" --target main --generate-notes
+
+echo "Done. ${TAG} is tagged and released; .github/workflows/release.yml" \
+     "is now building, SBOM-ing, and attesting the container."
