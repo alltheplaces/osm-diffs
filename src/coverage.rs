@@ -722,11 +722,12 @@ mod writer {
                 );
             }
 
-            assert!(!cov.contains_wikidata_item(1));
             assert!(cov.contains_wikidata_item(23));
-            assert!(!cov.contains_wikidata_item(51));
             assert!(cov.contains_wikidata_item(77));
             assert!(cov.contains_wikidata_item(88));
+
+            assert!(!cov.contains_wikidata_item(1));
+            assert!(!cov.contains_wikidata_item(51));
             assert!(!cov.contains_wikidata_item(89));
 
             Ok(())

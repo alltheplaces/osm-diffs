@@ -146,11 +146,12 @@ mod tests {
 
     #[test]
     fn test_contains() {
-        assert!(!TEST_TABLE.contains(u64::MIN));
         assert!(TEST_TABLE.contains(7));
         assert!(TEST_TABLE.contains(23));
-        assert!(!TEST_TABLE.contains(41));
         assert!(TEST_TABLE.contains(42));
+
+        assert!(!TEST_TABLE.contains(u64::MIN));
+        assert!(!TEST_TABLE.contains(41));
         assert!(!TEST_TABLE.contains(43));
         assert!(!TEST_TABLE.contains(u64::MAX));
     }
@@ -240,10 +241,11 @@ mod tests {
 
         let set = U64Set::create([42, 7, 23, 7].into_iter(), workdir.path(), &out)?;
         assert_eq!(set.len(), 3);
-        assert!(!set.contains(0));
         assert!(set.contains(7));
         assert!(set.contains(23));
         assert!(set.contains(42));
+
+        assert!(!set.contains(0));
         assert!(!set.contains(99));
         assert_eq!(set.iter().collect::<Vec<u64>>(), &[7, 23, 42]);
 
@@ -321,10 +323,11 @@ mod writer {
             assert_eq!(num_written, 3);
 
             let table = U64Set::open(&out)?;
-            assert!(!table.contains(4));
             assert!(table.contains(23));
             assert!(table.contains(42));
             assert!(table.contains(7777));
+
+            assert!(!table.contains(4));
             assert!(!table.contains(123));
 
             Ok(())
@@ -339,9 +342,10 @@ mod writer {
             assert_eq!(num_written, 1);
 
             let table = U64Set::open(&out)?;
+            assert!(table.contains(9));
+
             assert!(!table.contains(4));
             assert!(!table.contains(8));
-            assert!(table.contains(9));
             assert!(!table.contains(10));
 
             Ok(())
