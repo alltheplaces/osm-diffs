@@ -54,7 +54,11 @@ jobs:
       run: cargo build --locked
     - name: Run tests
       run: |
-        cargo llvm-cov test --cobertura --locked --verbose --output-path cobertura.xml
+        # Line coverage was ~91% as of 2026-08; 88% leaves some headroom
+        # for noise while still catching real regressions. Ratchet this
+        # up over time as coverage improves.
+        cargo llvm-cov test --cobertura --locked --verbose \
+          --output-path cobertura.xml --fail-under-lines 88
     - name: Look for common mistakes
       run: cargo clippy --locked --all-targets -- -D warnings
     - name: Upload test coverage to Coveralls
