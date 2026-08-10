@@ -3,7 +3,7 @@
 This document is the practical how-to for cutting a release of
 `osm-diffs`. For the concepts behind *why* the process looks like this
 (SBOM, attestations, immutable releases, ...), see
-[`supply-chain-security.md`](supply-chain-security.md).
+[`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md).
 
 ## Quick start
 
@@ -65,7 +65,7 @@ Once you run `cut-release.sh vX.Y.Z`:
    [`.github/release.yml`](../.github/release.yml)’s label rules). This
    creates the underlying git tag as a side effect, and the release is
    immutable from this point on (see
-   [`supply-chain-security.md`](supply-chain-security.md#immutable-releases)).
+   [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md#immutable-releases)).
 5. **That tag push triggers
    [`.github/workflows/release.yml`](../.github/workflows/release.yml)**,
    entirely independently of the script:
@@ -108,7 +108,7 @@ It waits for (or, if already finished, immediately checks)
 `release.yml`’s run for that tag, then confirms both a build-provenance
 and an SBOM attestation exist for each per-architecture image — the same
 two checks described in
-[`supply-chain-security.md`](supply-chain-security.md#build-provenance-and-attestations),
+[`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md#build-provenance-and-attestations),
 done for real rather than assumed. This is exactly what was done by hand
 to confirm v0.6.9, the first release cut with `cut-release.sh` — see the
 comment trail on

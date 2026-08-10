@@ -2,7 +2,7 @@
 
 Scripts used to generate some Rust sources in this repository, plus
 release-engineering scripts that aren’t part of the Rust build itself.
-See [`../docs/releasing.md`](../docs/releasing.md) for the full release
+See [`../docs/RELEASING.md`](../docs/RELEASING.md) for the full release
 process these fit into.
 
 - [`sbom/`](sbom/README.md): generates the Software Bill of Materials
