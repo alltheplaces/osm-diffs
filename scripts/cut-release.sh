@@ -10,11 +10,14 @@
 #   2. Once that's landed on main, create the GitHub Release there (tag +
 #      auto-generated notes, from the categories configured in
 #      .github/release.yml).
+#   3. Wait for the resulting .github/workflows/release.yml run (build,
+#      SBOM, attest) and verify it actually came out right, via
+#      verify-release.sh.
 #
-# That release tag is what triggers .github/workflows/release.yml, which
-# builds, SBOMs, and attests the container -- this script doesn't touch
-# that part at all, it only automates getting a correctly tagged, correctly
-# versioned commit onto main in the first place.
+# Step 3 alone can take ~20-25 minutes; it's safe to Ctrl-C this script
+# once the release has been created (end of step 2) and, if you do,
+# finish verifying it later with:
+#   ./scripts/verify-release.sh vX.Y.Z
 #
 # Usage:
 #   ./scripts/cut-release.sh vX.Y.Z
@@ -28,6 +31,8 @@
 # Requirements: git, cargo, gh (authenticated -- run `gh auth login` first)
 
 set -eu
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 REQUIRED_CHECK="Execute unit and integration tests"
 MERGE_WAIT_TIMEOUT=1500  # 25 min: ~5 min test run + merge-queue wait + slack
@@ -160,5 +165,11 @@ git branch -D "$BUMP_BRANCH" -q
 echo "Creating release ${TAG}..."
 gh release create "$TAG" --target main --generate-notes
 
-echo "Done. ${TAG} is tagged and released; .github/workflows/release.yml" \
-     "is now building, SBOM-ing, and attesting the container."
+# ── wait for release.yml and verify the result ───────────────────────────────
+echo "${TAG} is tagged and released; waiting for .github/workflows/release.yml" \
+     "to build, SBOM, and attest the container, then verifying the result." \
+     "This can take ~20-25 minutes; safe to Ctrl-C and finish later with" \
+     "'./scripts/verify-release.sh ${TAG}'."
+"${SCRIPT_DIR}/verify-release.sh" "$TAG"
+
+echo "Done."
