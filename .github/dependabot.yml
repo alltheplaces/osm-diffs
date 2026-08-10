@@ -4,6 +4,13 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    groups:
+      arrow:
+        patterns:
+          - "arrow*"
+      parquet:
+        patterns:
+          - "parquet*"
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
