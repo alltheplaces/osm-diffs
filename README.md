@@ -16,3 +16,6 @@ yet run on a weekly basis. Once it does, the plan is to automatically
 feed edit proposals to [MapRoulette](https://maproulette.org/) where
 human users can manually check each edit before applying it to
 OpenStreetMap.
+
+See [`docs/`](docs/) for how to cut a release and the supply-chain
+security practices behind it.
