@@ -35,8 +35,6 @@ jobs:
       run: |
         sudo apt-get install -y tippecanoe
         tippecanoe --version
-    - name: Install Rust LLVM tools preview
-      run: rustup component add llvm-tools-preview
     - name: Install Rust coverage tool
       uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
       with:
