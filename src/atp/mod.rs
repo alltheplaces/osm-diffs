@@ -558,21 +558,13 @@ mod tests {
             foreign_members: Some(foreign_members),
         }
     }
-}
-
-#[cfg(any(test, fuzzing))]
-pub mod fuzz {
-    use super::process_geojson;
-    use std::io::Cursor;
-
-    pub fn fuzz_process_geojson(data: &[u8]) {
-        _ = process_geojson(Cursor::new(data), "test.json", None);
-    }
 
     #[test]
-    fn test_fuzz_process_geojson() {
-        // Make sure we don’t crash. The actual fuzzing is performed
-        // by `cargo fuzz`, not when running unit tests.
-        fuzz_process_geojson(b"foo");
+    fn test_process_geojson_does_not_panic_on_garbage() {
+        use std::io::Cursor;
+
+        // Regression test: process_geojson() must return an error rather
+        // than panic when handed input that isn't valid GeoJSON.
+        assert!(process_geojson(Cursor::new(b"foo"), "test.json", None).is_err());
     }
 }
