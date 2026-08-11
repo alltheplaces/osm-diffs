@@ -108,19 +108,20 @@ workflow W, from commit C, on GitHub-hosted infrastructure, triggered
 by event E.”
 
 We reach
-[SLSA Build Level 2](https://slsa.dev/spec/v1.2/build-track-basics#build-l2):
-provenance that’s signed by a hosted build platform (GitHub Actions),
-not just self-attested. `release.yml`’s `attest` job runs separately
-from `build`/`manifest`, so its signing credentials are never exposed
-to the steps that compile arbitrary code — good defense in depth, but
-not the same thing as
-[SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3).
-Per GitHub’s own guidance, reaching Level 3 means moving the build and
-attestation steps into a
-[reusable workflow](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows),
-so the process that generates provenance has a distinct, independently
-verifiable identity — not just another job living in the same workflow
-file as the build steps.
+[SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3):
+provenance whose builder identity is distinct from, and independently
+verifiable from, whatever triggered the build. `release.yml` only
+triggers on a tag push and calls
+[`release-build.yml`](../.github/workflows/release-build.yml) — a
+[reusable workflow](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
+that does the actual build, manifest, and attest steps. That’s what
+gets recorded as the provenance’s builder
+(`predicate.runDetails.builder.id`), not `release.yml` itself, so an
+attacker who could edit `release.yml` still couldn’t forge what gets
+signed. `verify-release.sh` checks this on every release rather than
+trusting the file layout to keep doing its job: it reads the real
+attestation and fails loudly if the recorded builder ever stops being
+`release-build.yml`.
 
 We use GitHub’s native
 [artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
