@@ -78,13 +78,11 @@ Our SBOM describes the container image we publish: the Rust dependency
 graph of the `osm-diffs` binary, the statically linked `tippecanoe`
 binary and its libraries, build-environment details, and licenses.
 
-Alongside it, our SBOM includes a small Cryptographic Bill of Materials
+Alongside it, our SBOM includes a small
+[Cryptographic Bill of Materials](https://en.wikipedia.org/wiki/Cryptographic_bill_of_materials)
 (CBOM): the same idea, but for cryptography — which TLS version, cipher
 suites, and crypto backend the binary uses, for example when uploading
-its output to S3-compatible storage. This matters because it’s exactly
-the kind of thing that can go stale silently: a routine dependency
-update wouldn’t otherwise tell you the set of cipher suites your binary
-supports has changed.
+its output to S3-compatible storage.
 
 Both are generated from real, current build state, not maintained by
 hand — see [`scripts/sbom/README.md`](../scripts/sbom/README.md) for how.
@@ -164,8 +162,8 @@ But it’s a one-time cost: once set up, it runs fully automated, adding
 no effort to any future release. Cheap insurance, not a real trade-off
 against other work.
 
-It’s also a bet on where the industry is heading, not just where it
-stands today: supply-chain attacks aren’t hypothetical anymore (the
+It’s also about where things are heading, not just where they stand
+today: supply-chain attacks aren’t hypothetical anymore (the
 [xz-utils backdoor](https://en.wikipedia.org/wiki/XZ_Utils_backdoor)
 being the starkest recent example), and what this document describes
 is becoming a baseline expectation, not something only
