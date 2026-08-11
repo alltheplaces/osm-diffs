@@ -200,9 +200,12 @@ jobs:
           retention-days: 30
 
 
-  # If you ever refactor the GitHub workflow, make sure that the attest phase
-  # continues to run on a separate machine, decoupled from any build jobs.
-  # https://slsa.dev/spec/v1.2/build-track-basics#build-l3
+  # This job runs on its own machine, decoupled from the build jobs, so the
+  # signing credentials used here are never exposed to build steps that
+  # compile arbitrary code. That's SLSA Build Level 2 (hosted, signed
+  # provenance) -- reaching Level 3 needs build+attest moved into a
+  # reusable workflow; see docs/SUPPLY_CHAIN_SECURITY.md.
+  # https://slsa.dev/spec/v1.2/build-track-basics
   attest:
     name: Attest build provenance
     runs-on: ubuntu-24.04

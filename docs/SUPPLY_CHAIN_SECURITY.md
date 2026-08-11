@@ -107,13 +107,20 @@ statement, tied to the exact artifact digest, saying “this was built by
 workflow W, from commit C, on GitHub-hosted infrastructure, triggered
 by event E.”
 
-We target
-[SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3):
-provenance that isn’t just signed, but generated somewhere the build
-itself can’t influence or forge. That’s why `release.yml`’s `attest`
-job runs separately from `build`/`manifest` — the signing credentials
-are never exposed to the steps that compile arbitrary code, the part an
-attacker is more likely to reach.
+We reach
+[SLSA Build Level 2](https://slsa.dev/spec/v1.2/build-track-basics#build-l2):
+provenance that’s signed by a hosted build platform (GitHub Actions),
+not just self-attested. `release.yml`’s `attest` job runs separately
+from `build`/`manifest`, so its signing credentials are never exposed
+to the steps that compile arbitrary code — good defense in depth, but
+not the same thing as
+[SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3).
+Per GitHub’s own guidance, reaching Level 3 means moving the build and
+attestation steps into a
+[reusable workflow](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows),
+so the process that generates provenance has a distinct, independently
+verifiable identity — not just another job living in the same workflow
+file as the build steps.
 
 We use GitHub’s native
 [artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
