@@ -57,10 +57,33 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
 /// step that errors out (e.g. due to an actual OOM) still gets its
 /// "end" snapshot on the way out.
 fn run_step<T>(name: &str, step: impl FnOnce() -> Result<T>) -> Result<T> {
-    log::info!("{name}: start {}", crate::memstats::snapshot());
+    log_snapshot(name, "start");
     let result = step();
-    log::info!("{name}: end {}", crate::memstats::snapshot());
+    log_snapshot(name, "end");
     result
+}
+
+/// Above this fraction of the cgroup memory limit, [`log_snapshot`] logs
+/// a warning in addition to its usual info-level snapshot -- an early
+/// signal ahead of an actual OOM-kill, which the kernel triggers once
+/// usage reaches 1.0. 85% leaves a little margin for noise while still
+/// catching a real problem before it turns into a kill.
+const CGROUP_WARN_THRESHOLD: f64 = 0.85;
+
+fn log_snapshot(name: &str, phase: &str) {
+    let stats = crate::memstats::snapshot();
+    log::info!("{name}: {phase} {stats}");
+    if let Some(fraction) = stats.cgroup_usage_fraction()
+        && fraction >= CGROUP_WARN_THRESHOLD
+    {
+        log::warn!(
+            "{name}: {phase}: memory usage at {:.0}% of the cgroup limit \
+             ({} / {} bytes) -- at risk of being OOM-killed",
+            fraction * 100.0,
+            stats.cgroup_current_bytes.unwrap_or_default(),
+            stats.cgroup_max_bytes.unwrap_or_default(),
+        );
+    }
 }
 
 /// Returns the highest (most recent) last modification time among all paths.
