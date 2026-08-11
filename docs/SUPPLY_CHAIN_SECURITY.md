@@ -17,7 +17,8 @@ It’s much lighter weight than a full virtual machine, since it shares
 the host machine’s kernel instead of running its own, while still
 keeping what’s inside isolated from everything else on that host.
 
-We publish `osm-diffs` as an [OCI](https://opencontainers.org/) image —
+We publish `osm-diffs` as an
+[OCI image](https://opencontainers.org/) —
 the open, vendor-neutral standard most container tooling implements
 today — to a
 [container registry](https://www.redhat.com/en/topics/cloud-native-apps/what-is-a-container-registry)
