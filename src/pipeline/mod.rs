@@ -16,25 +16,51 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
 
     geostats::init()?;
     let progress = indicatif::MultiProgress::new();
-    let atp = tokio::runtime::Builder::new_multi_thread()
+    let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .build()?
-        .block_on(crate::atp::import_atp(http_client, &progress, workdir))?;
-    let coverage = crate::coverage::build_coverage(&atp, &progress, workdir)?;
-    let (osm_parquet, osm_store) = osm::import_osm(&coverage, &progress, workdir)?;
-    let _conflated = conflate::conflate(
-        &atp,
-        &coverage,
-        &osm_parquet,
-        &*osm_store,
-        &progress,
-        workdir,
-    )?;
-    let edits = edits::suggest_edits(&coverage, &atp, &osm_parquet, &progress, workdir)?;
-    let tiles = tiles::render_tiles(&edits, &progress, workdir)?;
-    upload::upload_tiles(&tiles, &progress)?;
+        .build()?;
+    let atp = run_step("import_atp", || {
+        runtime.block_on(crate::atp::import_atp(http_client, &progress, workdir))
+    })?;
+    let coverage = run_step("build_coverage", || {
+        crate::coverage::build_coverage(&atp, &progress, workdir)
+    })?;
+    let (osm_parquet, osm_store) = run_step("import_osm", || {
+        osm::import_osm(&coverage, &progress, workdir)
+    })?;
+    let _conflated = run_step("conflate", || {
+        conflate::conflate(
+            &atp,
+            &coverage,
+            &osm_parquet,
+            &*osm_store,
+            &progress,
+            workdir,
+        )
+    })?;
+    let edits = run_step("suggest_edits", || {
+        edits::suggest_edits(&coverage, &atp, &osm_parquet, &progress, workdir)
+    })?;
+    let tiles = run_step("render_tiles", || {
+        tiles::render_tiles(&edits, &progress, workdir)
+    })?;
+    run_step("upload_tiles", || upload::upload_tiles(&tiles, &progress))?;
 
     Ok(())
+}
+
+/// Runs one top-level pipeline step, logging a [`crate::memstats`]
+/// snapshot before and after it -- to help diagnose out-of-memory kills
+/// and resource misconfigurations, since each step here (import, build
+/// tables, conflate, ...) tends to be where a memory blowup would show
+/// up first. Logging happens whether the step succeeds or fails, so a
+/// step that errors out (e.g. due to an actual OOM) still gets its
+/// "end" snapshot on the way out.
+fn run_step<T>(name: &str, step: impl FnOnce() -> Result<T>) -> Result<T> {
+    log::info!("{name}: start {}", crate::memstats::snapshot());
+    let result = step();
+    log::info!("{name}: end {}", crate::memstats::snapshot());
+    result
 }
 
 /// Returns the highest (most recent) last modification time among all paths.
@@ -89,5 +115,18 @@ mod tests {
         assert_eq!(last_modified(&[f7.path(), f2.path(), f0.path()])?, t7);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_run_step_returns_the_closures_value() -> Result<()> {
+        let value = run_step("test-step", || Ok(42))?;
+        assert_eq!(value, 42);
+        Ok(())
+    }
+
+    #[test]
+    fn test_run_step_propagates_the_closures_error() {
+        let result: Result<()> = run_step("test-step", || anyhow::bail!("boom"));
+        assert!(result.is_err());
     }
 }
