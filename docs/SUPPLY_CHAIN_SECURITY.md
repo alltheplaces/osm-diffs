@@ -4,7 +4,66 @@ This document explains the concepts behind the supply-chain security
 practices used in this project’s release process (see
 [`RELEASING.md`](RELEASING.md) for the actual, repo-specific steps). It’s
 written for someone who can code but hasn’t necessarily done release
-engineering before.
+engineering before. None of it is original to `osm-diffs` — everything
+described here is standard practice; this document just explains it in
+one place.
+
+## Containers
+
+A container packages an application together with everything it needs
+to run — binaries, libraries, configuration — into a single, portable
+unit that behaves the same way regardless of the machine underneath it.
+It’s much lighter weight than a full virtual machine, since it shares
+the host machine’s kernel instead of running its own, while still
+keeping what’s inside isolated from everything else on that host.
+
+We publish `osm-diffs` as an
+[OCI image](https://opencontainers.org/) —
+the open, vendor-neutral standard most container tooling implements
+today — to a
+[container registry](https://www.redhat.com/en/topics/cloud-native-apps/what-is-a-container-registry)
+(GitHub’s, specifically): a place to store and distribute container
+images, the same way a package registry does for libraries.
+[`Containerfile`](../Containerfile) is the
+[recipe that builds our image](https://github.com/containers/container-libs/blob/main/common/docs/Containerfile.5.md):
+a plain-text file listing the steps to assemble it, one instruction per
+line.
+
+## Minimal containers
+
+`Containerfile` builds in two stages, and only the second one ships:
+`FROM scratch`, containing nothing but the `osm-diffs` and `tippecanoe`
+binaries. The entire build toolchain (Rust, a C compiler, `apk`, `git`,
+...) stays behind in the discarded first stage. Both binaries are
+statically linked against [musl](https://en.wikipedia.org/wiki/Musl),
+Alpine’s lightweight, security-focused C library
+([musl.libc.org explains why](https://musl.libc.org/about.html)), so
+there isn’t even a shared C library in the final image, let alone a
+shell or a package manager. The process also
+runs as an unprivileged user, not `root`. If someone found a way to run
+arbitrary code inside this container, there’s nothing there to run: no
+`/bin/sh`, nothing to fetch a second-stage payload with, and no root
+privileges to do more damage with even so — see
+[this explanation of container attack-surface reduction](https://www.minimus.io/post/container-image-attack-surface-reduction)
+for more background on why that matters.
+
+## Multi-architecture containers
+
+Our container image is published for both `amd64` and `arm64`. The main
+reason: this is meant to run as a weekly batch job in a datacenter, but
+if something goes wrong, a developer should be able to just pull the
+image and run it locally to debug — including on an Apple Silicon Mac,
+without hunting down an old Intel machine first. ARM is also more
+power-efficient than x86 and gaining ground in datacenter infrastructure
+for that reason; publishing both architectures now makes an eventual
+production move easier, if that ever happens.
+
+Mechanically, a multi-architecture image is just an
+[image index](https://github.com/opencontainers/image-spec/blob/main/image-index.md)
+(also called a manifest list): a small document that points to one
+architecture-specific image per platform. Pulling the image by its tag
+automatically fetches the right one for your machine — you never have to
+pick `amd64` or `arm64` yourself.
 
 ## Bill of Materials (BOM)
 
@@ -60,6 +119,14 @@ build provenance attestation records: a cryptographically signed
 statement, tied to the exact artifact digest, that says “this was built
 by workflow W, from commit C, on GitHub-hosted infrastructure, triggered
 by event E.”
+
+We target
+[SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3):
+provenance that isn’t just signed, but generated somewhere the build
+itself can’t influence or forge. That’s why `release.yml`’s `attest` job
+runs as a separate job from `build`/`manifest` — the credentials used to
+sign the provenance are never exposed to the steps that actually compile
+arbitrary code, which is the part an attacker is more likely to reach.
 
 We use GitHub’s native
 [artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
