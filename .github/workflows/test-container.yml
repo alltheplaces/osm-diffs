@@ -37,10 +37,10 @@ jobs:
       run: |
           mkdir artifacts
           podman build -t test-container  \
-              --build-arg BUILD_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")  \
-              --volume $(pwd)/artifacts:/artifacts                          \
+              --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"  \
+              --volume "$(pwd)/artifacts:/artifacts"                          \
               -f Containerfile .
     - name: Validate SBOM
       run: |
-          podman run --volume $(pwd)/artifacts:/artifacts:ro cyclonedx/cyclonedx-cli \
+          podman run --volume "$(pwd)/artifacts:/artifacts:ro" cyclonedx/cyclonedx-cli \
               validate --input-file /artifacts/sbom.cdx.json --fail-on-errors
