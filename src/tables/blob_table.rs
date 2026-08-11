@@ -125,14 +125,10 @@ impl<'a> BlobTable<'a> {
     }
 
     pub fn lookup(&self, key: u64) -> Option<&'a [u8]> {
-        let idx = self.keys.partition_point(|&k| u64::from_le(k) < key);
-        if idx < self.keys.len() && u64::from_le(self.keys[idx]) == key {
-            let start = u64::from_le(self.starts[idx]) as usize;
-            let end = u64::from_le(self.starts[idx + 1]) as usize;
-            Some(&self.blob[start..end])
-        } else {
-            None
-        }
+        let idx = super::sorted_u64_index::search(self.keys, key)?;
+        let start = u64::from_le(self.starts[idx]) as usize;
+        let end = u64::from_le(self.starts[idx + 1]) as usize;
+        Some(&self.blob[start..end])
     }
 
     pub fn len(&self) -> usize {
@@ -200,7 +196,8 @@ impl Writer {
     }
 
     /// Appends `blob` under `key`. Keys must be written in strictly
-    /// ascending order, so that [BlobTable::lookup] can binary-search them.
+    /// ascending order, so that [BlobTable::lookup] can search them via
+    /// [super::sorted_u64_index].
     pub fn write(&mut self, key: u64, blob: &[u8]) -> Result<()> {
         if let Some(last_key) = self.last_key
             && key <= last_key
