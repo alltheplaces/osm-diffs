@@ -51,8 +51,5 @@ mockito = { version = "1.7.2", default-features = false }
 predicates = "3.1.4"
 wkt = "0.14.0"
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
-
 [build-dependencies]
 prost-build = "0.14.4"
