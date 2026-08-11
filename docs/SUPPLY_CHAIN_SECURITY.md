@@ -155,7 +155,7 @@ image* was built by our workflow from our source (provenance), and
 
 Fair question. `osm-diffs` is open source, processes only public data,
 and handles no secrets — our actual threat model is modest compared to
-a proprietary service handling user data or credentials. So no, this
+a service handling user data or credentials. So no, this
 isn’t strictly *necessary* the way it would be for many other projects.
 
 But it’s a one-time cost: once set up, it runs fully automated, adding
