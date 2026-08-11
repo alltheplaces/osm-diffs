@@ -60,6 +60,13 @@ jobs:
       # release binaries from scratch on purpose, without touching this
       # (or any other) build cache.
       uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7  # v2.9.2
+      with:
+        # GitHub Actions caches are scoped per ref, so PR and merge-queue
+        # runs would otherwise each save their own full (~1 GB) copy of
+        # this cache on top of main's. Only save from main; other refs
+        # still restore main's cache via the usual base-branch fallback,
+        # they just don't pay to re-save a duplicate.
+        save-if: ${{ github.ref == 'refs/heads/main' }}
     - name: Fetch Rust dependencies
       run: cargo fetch --locked
     - name: Check formatting
