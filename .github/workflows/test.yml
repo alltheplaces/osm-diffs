@@ -32,6 +32,12 @@ jobs:
     timeout-minutes: 20
     permissions: {}
 
+    # sccache still earns its keep alongside the target/ cache below: an A/B
+    # measurement (same source change, same unchanged Cargo.lock, sccache
+    # toggled) showed it saves ~180s on a typical PR, since Cargo still
+    # re-invokes rustc for much of the dependency graph even when the
+    # restored target/ cache matches Cargo.lock exactly. See
+    # https://github.com/alltheplaces/osm-diffs/issues/597 for the numbers.
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "true"
