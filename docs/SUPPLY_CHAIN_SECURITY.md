@@ -109,19 +109,17 @@ by event E.”
 
 We reach
 [SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3):
-provenance whose builder identity is distinct from, and independently
-verifiable from, whatever triggered the build. `release.yml` only
-triggers on a tag push and calls
-[`release-build.yml`](../.github/workflows/release-build.yml) — a
-[reusable workflow](https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows)
-that does the actual build, manifest, and attest steps. That’s what
-gets recorded as the provenance’s builder
-(`predicate.runDetails.builder.id`), not `release.yml` itself, so an
-attacker who could edit `release.yml` still couldn’t forge what gets
-signed. `verify-release.sh` checks this on every release rather than
-trusting the file layout to keep doing its job: it reads the real
-attestation and fails loudly if the recorded builder ever stops being
-`release-build.yml`.
+whatever triggers a release and whatever signs it have separate,
+independently checkable identities, so compromising `release.yml`
+alone couldn’t forge what gets signed. `release.yml` only triggers on
+a tag push; the actual building and signing happens in a separate
+reusable workflow,
+[`release-build.yml`](../.github/workflows/release-build.yml) — see
+that file and
+[`verify-release.sh`](../scripts/verify-release.sh) for the mechanism,
+and
+[alltheplaces/osm-diffs#608](https://github.com/alltheplaces/osm-diffs/pull/608)
+for this having been checked against a real release, not just assumed.
 
 We use GitHub’s native
 [artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
