@@ -1,5 +1,8 @@
 use anyhow::{Context, Ok, Result};
-use std::{path::Path, time::SystemTime};
+use std::{
+    path::Path,
+    time::{Instant, SystemTime},
+};
 
 mod conflate;
 mod edits;
@@ -50,16 +53,18 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
 }
 
 /// Runs one top-level pipeline step, logging a [`crate::memstats`]
-/// snapshot before and after it -- to help diagnose out-of-memory kills
-/// and resource misconfigurations, since each step here (import, build
-/// tables, conflate, ...) tends to be where a memory blowup would show
-/// up first. Logging happens whether the step succeeds or fails, so a
-/// step that errors out (e.g. due to an actual OOM) still gets its
-/// "end" snapshot on the way out.
+/// snapshot and the step's wall-clock run time -- to help diagnose
+/// out-of-memory kills and resource misconfigurations, since each step
+/// here (import, build tables, conflate, ...) tends to be where a
+/// memory or time blowup would show up first. Logging happens whether
+/// the step succeeds or fails, so a step that errors out (e.g. due to
+/// an actual OOM) still gets its "end" snapshot, with an elapsed time,
+/// on the way out.
 fn run_step<T>(name: &str, step: impl FnOnce() -> Result<T>) -> Result<T> {
-    log_snapshot(name, "start");
+    let start = Instant::now();
+    log_snapshot(name, "start", None);
     let result = step();
-    log_snapshot(name, "end");
+    log_snapshot(name, "end", Some(start.elapsed().as_secs_f64()));
     result
 }
 
@@ -70,18 +75,41 @@ fn run_step<T>(name: &str, step: impl FnOnce() -> Result<T>) -> Result<T> {
 /// catching a real problem before it turns into a kill.
 const CGROUP_WARN_THRESHOLD: f64 = 0.85;
 
-fn log_snapshot(name: &str, phase: &str) {
+/// Logs one [`crate::memstats`] snapshot for a pipeline step, as
+/// structured fields (see `crate::logging`) rather than baked into the
+/// message text, so a log consumer can query/aggregate on them directly
+/// (e.g. `jq '.fields.elapsed_seconds'`) instead of parsing a string.
+/// `elapsed_seconds` is `None` for the "start" record -- there's no
+/// elapsed time to report yet -- and the step's wall-clock run time for
+/// "end".
+fn log_snapshot(name: &str, phase: &str, elapsed_seconds: Option<f64>) {
     let stats = crate::memstats::snapshot();
-    log::info!("{name}: {phase} {stats}");
+    log::info!(
+        step = name,
+        phase = phase,
+        elapsed_seconds = elapsed_seconds,
+        rss_bytes = stats.rss_bytes,
+        rss_peak_bytes = stats.rss_peak_bytes,
+        rss_anon_bytes = stats.rss_anon_bytes,
+        rss_file_bytes = stats.rss_file_bytes,
+        rss_shmem_bytes = stats.rss_shmem_bytes,
+        cgroup_current_bytes = stats.cgroup_current_bytes,
+        cgroup_max_bytes = stats.cgroup_max_bytes,
+        cgroup_peak_bytes = stats.cgroup_peak_bytes;
+        "{name}: {phase}"
+    );
     if let Some(fraction) = stats.cgroup_usage_fraction()
         && fraction >= CGROUP_WARN_THRESHOLD
     {
         log::warn!(
+            step = name,
+            phase = phase,
+            cgroup_usage_fraction = fraction,
+            cgroup_current_bytes = stats.cgroup_current_bytes,
+            cgroup_max_bytes = stats.cgroup_max_bytes;
             "{name}: {phase}: memory usage at {:.0}% of the cgroup limit \
-             ({} / {} bytes) -- at risk of being OOM-killed",
+             -- at risk of being OOM-killed",
             fraction * 100.0,
-            stats.cgroup_current_bytes.unwrap_or_default(),
-            stats.cgroup_max_bytes.unwrap_or_default(),
         );
     }
 }
