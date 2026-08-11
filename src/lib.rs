@@ -6,6 +6,9 @@ mod coverage;
 mod geometry;
 mod logging;
 mod matchers;
+// Not yet wired into the pipeline; see #616.
+#[allow(unused)]
+mod memstats;
 mod pipeline;
 mod places;
 mod s2_util;
