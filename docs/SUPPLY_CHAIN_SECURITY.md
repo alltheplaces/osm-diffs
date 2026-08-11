@@ -8,6 +8,36 @@ engineering before. None of it is original to `osm-diffs` — everything
 described here is standard practice; this document just explains it in
 one place.
 
+## Containers
+
+A container packages an application together with everything it needs
+to run — binaries, libraries, configuration — into a single, portable
+unit that behaves the same way regardless of the machine underneath it.
+It’s much lighter weight than a full virtual machine, since it shares
+the host machine’s kernel instead of running its own, while still
+keeping what’s inside isolated from everything else on that host. We
+publish `osm-diffs` as an [OCI](https://opencontainers.org/) image — the
+open, vendor-neutral standard most container tooling implements today —
+to GitHub’s container registry.
+
+## Minimal containers
+
+`Containerfile` builds in two stages, and only the second one ships:
+`FROM scratch`, containing nothing but the `osm-diffs` and `tippecanoe`
+binaries. The entire build toolchain (Rust, a C compiler, `apk`, `git`,
+...) stays behind in the discarded first stage. Both binaries are
+statically linked against [musl](https://en.wikipedia.org/wiki/Musl),
+Alpine’s lightweight, security-focused C library
+([musl.libc.org explains why](https://musl.libc.org/about.html)), so
+there isn’t even a shared C library in the final image, let alone a
+shell or a package manager. The process also
+runs as an unprivileged user, not `root`. If someone found a way to run
+arbitrary code inside this container, there’s nothing there to run: no
+`/bin/sh`, nothing to fetch a second-stage payload with, and no root
+privileges to do more damage with even so — see
+[this explanation of container attack-surface reduction](https://www.minimus.io/post/container-image-attack-surface-reduction)
+for more background on why that matters.
+
 ## Bill of Materials (BOM)
 
 A Bill of Materials is a structured, machine-readable record of what went
@@ -41,24 +71,6 @@ changed.
 
 Both are generated from real, current build state, not maintained by
 hand — see [`scripts/sbom/README.md`](../scripts/sbom/README.md) for how.
-
-## Minimal containers
-
-`Containerfile` builds in two stages, and only the second one ships:
-`FROM scratch`, containing nothing but the `osm-diffs` and `tippecanoe`
-binaries. The entire build toolchain (Rust, a C compiler, `apk`, `git`,
-...) stays behind in the discarded first stage. Both binaries are
-statically linked against [musl](https://en.wikipedia.org/wiki/Musl),
-Alpine’s lightweight, security-focused C library
-([musl.libc.org explains why](https://musl.libc.org/about.html)), so
-there isn’t even a shared C library in the final image, let alone a
-shell or a package manager. The process also
-runs as an unprivileged user, not `root`. If someone found a way to run
-arbitrary code inside this container, there’s nothing there to run: no
-`/bin/sh`, nothing to fetch a second-stage payload with, and no root
-privileges to do more damage with even so — see
-[this explanation of container attack-surface reduction](https://www.minimus.io/post/container-image-attack-surface-reduction)
-for more background on why that matters.
 
 ## CycloneDX
 
