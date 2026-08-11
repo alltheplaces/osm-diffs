@@ -56,9 +56,9 @@ shell or a package manager. The process also
 runs as an unprivileged user, not `root`. If someone found a way to run
 arbitrary code inside this container, there’s nothing there to run: no
 `/bin/sh`, nothing to fetch a second-stage payload with, and no root
-privileges to do more damage with even so. This is the same idea behind
-[Distroless](https://github.com/GoogleContainerTools/distroless) images,
-not something specific to `osm-diffs`.
+privileges to do more damage with even so — see
+[this explanation of container attack-surface reduction](https://www.minimus.io/post/container-image-attack-surface-reduction)
+for more background on why that matters.
 
 ## CycloneDX
 
