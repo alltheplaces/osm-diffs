@@ -164,6 +164,8 @@ for that walkthrough, which is what `verify-release.sh` automates.
   verification step `cut-release.sh` runs at the end (also usable
   standalone)
 - [`.github/workflows/release.yml`](../.github/workflows/release.yml) —
+  triggers on a pushed tag, calls `release-build.yml`
+- [`.github/workflows/release-build.yml`](../.github/workflows/release-build.yml) —
   build, SBOM, attest
 - [`Containerfile`](../Containerfile) — how the container gets built
 - [`.github/release.yml`](../.github/release.yml) — changelog
