@@ -83,12 +83,18 @@ ARM64_DIGEST="$(cat "${WORKDIR}/arm64/digest.txt")"
 # Note: `gh attestation verify`'s default --predicate-type filter only shows
 # build provenance, hiding the SBOM attestation; query the raw API instead.
 #
-# Also confirms the provenance was signed by release-build.yml, not
-# release.yml: that's the actual, checkable evidence that build+attest ran
-# inside the isolated reusable workflow SLSA Build Level 3 requires, rather
-# than just trusting the workflow file's own claim about itself. See
-# "Build provenance and attestations" in docs/SUPPLY_CHAIN_SECURITY.md.
-EXPECTED_BUILDER_PATH=".github/workflows/release-build.yml"
+# Also confirms the provenance's *builder* (predicate.runDetails.builder.id)
+# is release-build.yml, not release.yml: that's the actual, checkable
+# evidence that build+attest ran inside the isolated reusable workflow SLSA
+# Build Level 3 requires, rather than just trusting the workflow file's own
+# claim about itself. See "Build provenance and attestations" in
+# docs/SUPPLY_CHAIN_SECURITY.md.
+#
+# Don't use predicate.buildDefinition.externalParameters.workflow.path for
+# this -- that field records the *caller* workflow (release.yml, the one
+# the tag-push event triggered), not who actually signed. Confirmed against
+# a real v0.6.10 attestation before relying on it.
+EXPECTED_BUILDER_ID="https://github.com/${REPO}/.github/workflows/release-build.yml@refs/tags/${TAG}"
 
 check_attestations() {
   arch="$1"; digest="$2"
@@ -104,15 +110,15 @@ check_attestations() {
   echo "$types" | grep -qx 'https://cyclonedx.org/bom' \
     || { echo "ERROR: missing SBOM attestation for ${arch}" >&2; exit 1; }
 
-  builder_path="$(echo "$payloads" | while read -r p; do
+  builder_id="$(echo "$payloads" | while read -r p; do
       decoded="$(echo "$p" | base64 -d)"
       if [ "$(echo "$decoded" | jq -r .predicateType)" = "https://slsa.dev/provenance/v1" ]; then
-        echo "$decoded" | jq -r .predicate.buildDefinition.externalParameters.workflow.path
+        echo "$decoded" | jq -r .predicate.runDetails.builder.id
       fi
     done)"
-  [ "$builder_path" = "$EXPECTED_BUILDER_PATH" ] \
-    || { echo "ERROR: provenance for ${arch} was signed by workflow" \
-              "'${builder_path}', expected '${EXPECTED_BUILDER_PATH}'." >&2
+  [ "$builder_id" = "$EXPECTED_BUILDER_ID" ] \
+    || { echo "ERROR: provenance for ${arch} was signed by builder" \
+              "'${builder_id}', expected '${EXPECTED_BUILDER_ID}'." >&2
          exit 1; }
 }
 
