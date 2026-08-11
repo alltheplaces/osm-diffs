@@ -1,3 +1,4 @@
+// sccache A/B timing experiment; this branch is not meant to be merged.
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
