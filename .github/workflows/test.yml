@@ -1,5 +1,11 @@
 name: Tests
 
+# This workflow deliberately never triggers on tags: the push trigger below
+# is restricted to the "main" branch. Pushing a git tag is handled by
+# release.yml instead; see docs/RELEASING.md and docs/SUPPLY_CHAIN_SECURITY.md
+# for how releases work. One consequence is that github.ref, used below for
+# the concurrency group, is always a branch ref here (e.g. refs/heads/main)
+# rather than a tag ref.
 on:
   merge_group:
   push:
@@ -8,6 +14,13 @@ on:
     branches: [ "main" ]
 
 permissions: {}
+
+# Cancel a still-running run for the same PR (or branch) once a newer one
+# starts, e.g. after a force-push or an "Update branch" merge commit, so
+# superseded runs don't sit queued behind/compete with the current one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
