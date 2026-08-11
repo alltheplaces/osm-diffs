@@ -89,7 +89,7 @@ jobs:
         id: commit-info
         run: |
           TIMESTAMP=$(git log -1 --format=%cI ${{ github.sha }})
-          echo "timestamp=$TIMESTAMP" >> $GITHUB_OUTPUT
+          echo "timestamp=$TIMESTAMP" >> "$GITHUB_OUTPUT"
 
       - name: Build image
         id: build
@@ -106,8 +106,8 @@ jobs:
             --platform ${{ matrix.platform }} \
             --squash \
             --tag ${IMAGE} \
-            --timestamp $(date -d "${TIMESTAMP}" +%s) \
-            --volume $(pwd)/artifacts:/artifacts \
+            --timestamp "$(date -d "${TIMESTAMP}" +%s)" \
+            --volume "$(pwd)/artifacts:/artifacts" \
             .
           podman inspect --format '{{.Digest}}' ${IMAGE} >artifacts/digest.txt
           echo Built container "${IMAGE}@$(cat artifacts/digest.txt)"
@@ -131,7 +131,7 @@ jobs:
         run: |
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DIGEST=$(cat artifacts/digest.txt)
-          podman push ${IMAGE}@${DIGEST}
+          podman push "${IMAGE}@${DIGEST}"
 
       - name: Upload image digest and SBOM to artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -165,23 +165,21 @@ jobs:
       - name: Pull architecture-specific images
         run: |
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          podman pull ${IMAGE}@`cat artifacts-amd64/digest.txt`
-          podman pull ${IMAGE}@`cat artifacts-arm64/digest.txt`
+          podman pull "${IMAGE}@$(cat artifacts-amd64/digest.txt)"
+          podman pull "${IMAGE}@$(cat artifacts-arm64/digest.txt)"
 
       - name: Create and push multi-architecture manifest
         id: manifests
         run: |
           IMAGE=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           IMAGE_SHA=${IMAGE}:${{ github.sha }}
-          IMAGE_AMD64=${IMAGE}@`cat artifacts-amd64/digest.txt`
-          IMAGE_ARM64=${IMAGE}@`cat artifacts-arm64/digest.txt`
-          VCS_REF="${{ github.sha }}"
-          VCS_URL="${{ github.server_url }}/${{ github.repository }}"
+          IMAGE_AMD64=${IMAGE}@$(cat artifacts-amd64/digest.txt)
+          IMAGE_ARM64=${IMAGE}@$(cat artifacts-arm64/digest.txt)
 
           mkdir artifacts
           podman manifest create ${IMAGE_SHA}
-          podman manifest add ${IMAGE_SHA} ${IMAGE_AMD64}
-          podman manifest add ${IMAGE_SHA} ${IMAGE_ARM64}
+          podman manifest add ${IMAGE_SHA} "${IMAGE_AMD64}"
+          podman manifest add ${IMAGE_SHA} "${IMAGE_ARM64}"
           podman tag ${IMAGE_SHA} ${IMAGE}:latest ${IMAGE}:${{ github.ref_name }}
           podman manifest push ${IMAGE}:${{ github.ref_name }} \
               --digestfile artifacts/digest.txt
@@ -221,9 +219,11 @@ jobs:
       - name: Retrieve digests
         id: retrieve-digests
         run: |
-          echo amd64_digest=`cat artifacts-amd64/digest.txt` >> $GITHUB_OUTPUT
-          echo arm64_digest=`cat artifacts-arm64/digest.txt` >> $GITHUB_OUTPUT
-          echo manifest_digest=`cat artifacts-manifest/digest.txt` >> $GITHUB_OUTPUT
+          {
+            echo "amd64_digest=$(cat artifacts-amd64/digest.txt)"
+            echo "arm64_digest=$(cat artifacts-arm64/digest.txt)"
+            echo "manifest_digest=$(cat artifacts-manifest/digest.txt)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Attest amd64 SBOM
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 #v4.2.2
