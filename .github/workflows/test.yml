@@ -38,14 +38,11 @@ jobs:
       uses: taiki-e/install-action@6c6fd71fe4fb72c3697d269963d0e15df8adedad # v2.85.10
       with:
         tool: cargo-llvm-cov
-    - name: Cache Cargo registry
-      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-        key: cargo-registry-${{ hashFiles('Cargo.lock') }}
-        restore-keys: cargo-registry-
+    - name: Cache Cargo registry and build artifacts
+      # This cache only ever feeds this test workflow. release.yml builds
+      # release binaries from scratch on purpose, without touching this
+      # (or any other) build cache.
+      uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7  # v2.9.2
     - name: Fetch Rust dependencies
       run: cargo fetch --locked
     - name: Check formatting
