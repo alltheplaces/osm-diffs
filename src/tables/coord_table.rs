@@ -50,9 +50,10 @@ const FILE_SIGNATURE: &[u8; 8] = b"coords_0";
 ///
 /// The table is built once with [CoordTable::create] and then reopened
 /// with [CoordTable::open], possibly by a different process. Keys must be
-/// unique and are looked up with [CoordTable::get] via binary search, so
-/// lookups are `O(log n)` and touch only the pages that are actually
-/// needed, rather than requiring the whole table to be resident in RAM.
+/// unique and are looked up with [CoordTable::get] via
+/// [super::sorted_u64_index], so lookups touch only the pages that are
+/// actually needed, rather than requiring the whole table to be resident
+/// in RAM.
 pub struct CoordTable<'a> {
     file: File,
     _mmap: Mmap,
@@ -151,16 +152,12 @@ impl<'a> CoordTable<'a> {
 
     /// Returns the coordinate stored for `key`, or `None` if `key` is absent.
     pub fn get(&self, key: u64) -> Option<Coord> {
-        let idx = self.keys.partition_point(|&k| u64::from_le(k) < key);
-        if idx < self.keys.len() && self.keys[idx] == key {
-            let val = u64::from_le(self.coords[idx]);
-            Some(Coord {
-                x: (((val >> 32) as i32) as f64) * 1e-7,
-                y: ((val as i32) as f64) * 1e-7,
-            })
-        } else {
-            None
-        }
+        let idx = super::sorted_u64_index::search(self.keys, key)?;
+        let val = u64::from_le(self.coords[idx]);
+        Some(Coord {
+            x: (((val >> 32) as i32) as f64) * 1e-7,
+            y: ((val as i32) as f64) * 1e-7,
+        })
     }
 
     /// Returns the number of entries in the table.

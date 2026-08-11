@@ -14,6 +14,7 @@ mod geometry_table;
 mod graph;
 #[allow(unused)]
 mod records;
+mod sorted_u64_index;
 mod string_counts;
 mod string_pool;
 mod u64_set;

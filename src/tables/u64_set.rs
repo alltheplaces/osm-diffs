@@ -5,11 +5,9 @@
 //! set of all OpenStreetMap nodes that are members of ways whose tags
 //! indicate potential conflation candidates.
 //!
-//! Containment test ([U64Set::contains]) is currently implemented as a
-//! regular binary search. To make it faster, we could use hashing or
-//! Cache-Sensitive Skip Lists. However, this would complicate the code,
-//! so let’s keep it simple as long as we don’t have an actual performance
-//! problem.
+//! Containment test ([U64Set::contains]) is implemented via
+//! [super::sorted_u64_index], shared with [crate::tables::BlobTable] and
+//! [crate::tables::CoordTable], which do the same kind of lookup.
 //!
 //! # File format
 //!
@@ -99,11 +97,7 @@ impl U64Set {
             std::slice::from_raw_parts(ptr, self.entries_count)
         };
 
-        if cfg!(target_endian = "little") {
-            slice.binary_search(&n).is_ok()
-        } else {
-            slice.binary_search_by(|x| x.swap_bytes().cmp(&n)).is_ok()
-        }
+        super::sorted_u64_index::search(slice, n).is_some()
     }
 
     /// Returns the number of elements in the set.
