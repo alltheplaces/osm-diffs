@@ -40,6 +40,22 @@ changed.
 Both are generated from real, current build state, not maintained by
 hand — see [`scripts/sbom/README.md`](../scripts/sbom/README.md) for how.
 
+## Minimal containers
+
+`Containerfile` builds in two stages, and only the second one ships:
+`FROM scratch`, containing nothing but the `osm-diffs` and `tippecanoe`
+binaries. The entire build toolchain (Rust, a C compiler, `apk`, `git`,
+...) stays behind in the discarded first stage. Both binaries are
+statically linked against musl (Alpine’s C library) rather than
+dynamically against glibc, so there isn’t even a shared C library in the
+final image — let alone a shell or a package manager. The process also
+runs as an unprivileged user, not `root`. If someone found a way to run
+arbitrary code inside this container, there’s nothing there to run: no
+`/bin/sh`, nothing to fetch a second-stage payload with, and no root
+privileges to do more damage with even so. This is the same idea behind
+[Distroless](https://github.com/GoogleContainerTools/distroless) images,
+not something specific to `osm-diffs`.
+
 ## CycloneDX
 
 We publish our SBOM (and CBOM) in [CycloneDX](https://cyclonedx.org/)
@@ -60,6 +76,14 @@ build provenance attestation records: a cryptographically signed
 statement, tied to the exact artifact digest, that says “this was built
 by workflow W, from commit C, on GitHub-hosted infrastructure, triggered
 by event E.”
+
+This specifically targets
+[SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3):
+provenance that isn’t just signed, but generated somewhere the build
+itself can’t influence or forge. That’s why `release.yml`’s `attest` job
+runs as a separate job from `build`/`manifest` — the credentials used to
+sign the provenance are never exposed to the steps that actually compile
+arbitrary code, which is the part an attacker is more likely to reach.
 
 We use GitHub’s native
 [artifact attestations](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds)
