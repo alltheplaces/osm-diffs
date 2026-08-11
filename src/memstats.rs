@@ -21,6 +21,20 @@
 //! kill a pod" -- but they don't exist on macOS, hence the
 //! [`MemStats::rss_peak_bytes`] fallback, which is available everywhere.
 //!
+//! On Linux outside a container -- a VM or bare metal -- the `cgroup_*`
+//! fields usually still populate: systemd puts every login session and
+//! service unit into its own cgroup, so `/sys/fs/cgroup/memory.current`
+//! is normally still readable. `cgroup_max_bytes` then reads as `None`
+//! unless an admin set an explicit limit on that unit (the raw file
+//! reads literally "max", which [`MemStats::cgroup_usage_fraction`]
+//! treats the same as "unavailable"), and `cgroup_current_bytes`'s scope
+//! is whatever cgroup the process happens to be in -- tightly scoped to
+//! just this pipeline if it runs as its own systemd service, but shared
+//! with everything else in the session if run by hand from an
+//! interactive shell. Older/non-systemd setups, cgroup v1, or cgroups
+//! disabled entirely leave all three `cgroup_*` fields `None`, the same
+//! graceful fallback as macOS.
+//!
 //! A read-only mmap'd page, once touched, is resident and *is* charged
 //! to `memory.current` -- but only as reclaimable clean page cache, as
 //! long as the mapped file is genuinely disk-backed: the kernel can drop
@@ -95,6 +109,20 @@ pub struct MemStats {
     /// bytes. Requires Linux 5.19+ (`memory.peak`); `None` on older
     /// kernels.
     pub cgroup_peak_bytes: Option<u64>,
+}
+
+impl MemStats {
+    /// The cgroup's current memory usage as a fraction of its limit --
+    /// 0.0 meaning empty, 1.0 meaning exactly at the limit, above 1.0
+    /// meaning already over it. `None` if either `cgroup_current_bytes`
+    /// or `cgroup_max_bytes` is unavailable (e.g. on macOS, or when the
+    /// cgroup has no limit configured). A container whose usage
+    /// approaches 1.0 is at risk of being OOM-killed by the kernel.
+    pub fn cgroup_usage_fraction(&self) -> Option<f64> {
+        let current = self.cgroup_current_bytes?;
+        let max = self.cgroup_max_bytes?;
+        (max > 0).then(|| current as f64 / max as f64)
+    }
 }
 
 impl std::fmt::Display for MemStats {
@@ -340,5 +368,52 @@ mod tests {
     #[test]
     fn test_display_empty_when_nothing_available() {
         assert_eq!(MemStats::default().to_string(), "");
+    }
+
+    #[test]
+    fn test_cgroup_usage_fraction() {
+        let stats = MemStats {
+            cgroup_current_bytes: Some(80),
+            cgroup_max_bytes: Some(100),
+            ..MemStats::default()
+        };
+        assert_eq!(stats.cgroup_usage_fraction(), Some(0.8));
+    }
+
+    #[test]
+    fn test_cgroup_usage_fraction_over_limit() {
+        let stats = MemStats {
+            cgroup_current_bytes: Some(120),
+            cgroup_max_bytes: Some(100),
+            ..MemStats::default()
+        };
+        assert_eq!(stats.cgroup_usage_fraction(), Some(1.2));
+    }
+
+    #[test]
+    fn test_cgroup_usage_fraction_missing_fields() {
+        assert_eq!(MemStats::default().cgroup_usage_fraction(), None);
+        let current_only = MemStats {
+            cgroup_current_bytes: Some(80),
+            ..MemStats::default()
+        };
+        assert_eq!(current_only.cgroup_usage_fraction(), None);
+        let max_only = MemStats {
+            cgroup_max_bytes: Some(100),
+            ..MemStats::default()
+        };
+        assert_eq!(max_only.cgroup_usage_fraction(), None);
+    }
+
+    #[test]
+    fn test_cgroup_usage_fraction_zero_limit() {
+        // A zero-byte limit shouldn't happen in practice, but must not
+        // divide by zero either way.
+        let stats = MemStats {
+            cgroup_current_bytes: Some(0),
+            cgroup_max_bytes: Some(0),
+            ..MemStats::default()
+        };
+        assert_eq!(stats.cgroup_usage_fraction(), None);
     }
 }
