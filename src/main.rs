@@ -1,4 +1,3 @@
-// sccache A/B timing experiment; this branch is not meant to be merged.
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
@@ -36,7 +35,7 @@ fn main() -> Result<()> {
             let client = build_client();
             osm_diffs::run_pipeline(&client, workdir)
         }
-        None => Err(anyhow!("no subcommand given")),
+        None => Err(anyhow!("no subcommand given (sccache A/B experiment marker)")),
     }
 }
 
