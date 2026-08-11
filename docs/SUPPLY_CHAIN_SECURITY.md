@@ -4,7 +4,9 @@ This document explains the concepts behind the supply-chain security
 practices used in this project’s release process (see
 [`RELEASING.md`](RELEASING.md) for the actual, repo-specific steps). It’s
 written for someone who can code but hasn’t necessarily done release
-engineering before.
+engineering before. None of it is original to `osm-diffs` — everything
+described here is standard practice; this document just explains it in
+one place.
 
 ## Bill of Materials (BOM)
 
@@ -46,9 +48,11 @@ hand — see [`scripts/sbom/README.md`](../scripts/sbom/README.md) for how.
 `FROM scratch`, containing nothing but the `osm-diffs` and `tippecanoe`
 binaries. The entire build toolchain (Rust, a C compiler, `apk`, `git`,
 ...) stays behind in the discarded first stage. Both binaries are
-statically linked against musl (Alpine’s C library) rather than
-dynamically against glibc, so there isn’t even a shared C library in the
-final image — let alone a shell or a package manager. The process also
+statically linked against [musl](https://en.wikipedia.org/wiki/Musl),
+Alpine’s lightweight, security-focused C library
+([musl.libc.org explains why](https://musl.libc.org/about.html)), so
+there isn’t even a shared C library in the final image, let alone a
+shell or a package manager. The process also
 runs as an unprivileged user, not `root`. If someone found a way to run
 arbitrary code inside this container, there’s nothing there to run: no
 `/bin/sh`, nothing to fetch a second-stage payload with, and no root
@@ -77,7 +81,7 @@ statement, tied to the exact artifact digest, that says “this was built
 by workflow W, from commit C, on GitHub-hosted infrastructure, triggered
 by event E.”
 
-This specifically targets
+We target
 [SLSA Build Level 3](https://slsa.dev/spec/v1.2/build-track-basics#build-l3):
 provenance that isn’t just signed, but generated somewhere the build
 itself can’t influence or forge. That’s why `release.yml`’s `attest` job
