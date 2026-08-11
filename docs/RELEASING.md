@@ -68,7 +68,13 @@ Once you run `cut-release.sh vX.Y.Z`:
    [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md#immutable-releases)).
 5. **That tag push triggers
    [`.github/workflows/release.yml`](../.github/workflows/release.yml)**,
-   entirely independently of the script:
+   entirely independently of the script. `release.yml` itself is just a
+   thin caller: it hands off to
+   [`.github/workflows/release-build.yml`](../.github/workflows/release-build.yml)
+   as a reusable workflow — a separate file with its own identity is what
+   gets this to SLSA Build Level 3 rather than Level 2 (see
+   [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md#build-provenance-and-attestations)).
+   The called workflow runs:
    - `verify-version`: re-checks the tag matches `Cargo.toml`’s version
      (a server-side safety net — this should never fail if you used the
      script, since the script only ever tags a version it just set).
