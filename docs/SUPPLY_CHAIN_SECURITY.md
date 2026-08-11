@@ -15,10 +15,18 @@ to run — binaries, libraries, configuration — into a single, portable
 unit that behaves the same way regardless of the machine underneath it.
 It’s much lighter weight than a full virtual machine, since it shares
 the host machine’s kernel instead of running its own, while still
-keeping what’s inside isolated from everything else on that host. We
-publish `osm-diffs` as an [OCI](https://opencontainers.org/) image — the
-open, vendor-neutral standard most container tooling implements today —
-to GitHub’s container registry.
+keeping what’s inside isolated from everything else on that host.
+
+We publish `osm-diffs` as an [OCI](https://opencontainers.org/) image —
+the open, vendor-neutral standard most container tooling implements
+today — to a
+[container registry](https://www.redhat.com/en/topics/cloud-native-apps/what-is-a-container-registry)
+(GitHub’s, specifically): a place to store and distribute container
+images, the same way a package registry does for libraries.
+[`Containerfile`](../Containerfile) is the
+[recipe that builds our image](https://github.com/containers/container-libs/blob/main/common/docs/Containerfile.5.md):
+a plain-text file listing the steps to assemble it, one instruction per
+line.
 
 ## Minimal containers
 
@@ -37,6 +45,24 @@ arbitrary code inside this container, there’s nothing there to run: no
 privileges to do more damage with even so — see
 [this explanation of container attack-surface reduction](https://www.minimus.io/post/container-image-attack-surface-reduction)
 for more background on why that matters.
+
+## Multi-architecture containers
+
+Our container image is published for both `amd64` and `arm64`. The main
+reason: this is meant to run as a weekly batch job in a datacenter, but
+if something goes wrong, a developer should be able to just pull the
+image and run it locally to debug — including on an Apple Silicon Mac,
+without hunting down an old Intel machine first. ARM is also more
+power-efficient than x86 and gaining ground in datacenter infrastructure
+for that reason; publishing both architectures now makes an eventual
+production move easier, if that ever happens.
+
+Mechanically, a multi-architecture image is just an
+[image index](https://github.com/opencontainers/image-spec/blob/main/image-index.md)
+(also called a manifest list): a small document that points to one
+architecture-specific image per platform. Pulling the image by its tag
+automatically fetches the right one for your machine — you never have to
+pick `amd64` or `arm64` yourself.
 
 ## Bill of Materials (BOM)
 
