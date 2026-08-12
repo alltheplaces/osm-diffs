@@ -274,7 +274,17 @@ fn assemble_ways<'a>(
                         // a Point, LineString, Polygon, MultiLineString, or MultiPolygon.
                         let is_closed = way_members_count >= 2
                             && way_members[0] == way_members[way_members_count - 1];
-                        let geometry = if is_area(is_closed, way.tags()) {
+                        // `is_area()`'s tag heuristic can misfire on a closed way that's
+                        // really a degenerate line -- e.g. a linear feature (like
+                        // man_made=tunnel) whose start node got reused as its end node,
+                        // "closing" a path with only one interior node and thus no
+                        // possible area. Route those straight to `build_line` instead of
+                        // calling `build_ring` just to watch it correctly reject an
+                        // unbuildable ring (and drop the feature).
+                        // See https://github.com/alltheplaces/osm-diffs/issues/627.
+                        let geometry = if is_area(is_closed, way.tags())
+                            && ring_is_geometrically_possible(way_members_count)
+                        {
                             build_ring(coords)
                         } else {
                             build_line(coords)
@@ -351,6 +361,19 @@ struct AssembledLeafRelations<'a> {
     /// have geometry (or anything derived from geometry, such as
     /// s2 cell coverage). Keyed by osm_id of the relation.
     super_relations: BlobTable<'a>,
+}
+
+/// Whether a closed way with `way_members_count` raw node refs (counting
+/// the repeated closing one) could possibly enclose any area at all.
+///
+/// A ring needs at least 3 distinct vertices to be non-degenerate, which
+/// takes at least 4 raw refs once closed (e.g. `A, B, C, A`). Below that
+/// -- e.g. `A, B, A`, a path that goes out and immediately doubles back
+/// on itself -- `build_ring` is guaranteed to return `None`, no matter
+/// what `is_area()`'s tag heuristic says. See
+/// <https://github.com/alltheplaces/osm-diffs/issues/627>.
+fn ring_is_geometrically_possible(way_members_count: usize) -> bool {
+    way_members_count >= 4
 }
 
 fn assemble_leaf_relations<'a>(
@@ -925,4 +948,29 @@ fn lookup_relation_member_geometry<'a>(
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ring_is_geometrically_possible_requires_at_least_four_refs() {
+        // 0/1: not even a valid way. 2: e.g. `A, A` -- a single distinct
+        // point. 3: e.g. `A, B, A` -- way/1464457914's case, only 2
+        // distinct points. None of these can enclose area.
+        for n in 0..=3 {
+            assert!(
+                !ring_is_geometrically_possible(n),
+                "{n} raw refs should not be considered a possible ring"
+            );
+        }
+        // 4: e.g. `A, B, C, A` -- 3 distinct points, a triangle at minimum.
+        for n in 4..=6 {
+            assert!(
+                ring_is_geometrically_possible(n),
+                "{n} raw refs should be considered a possible ring"
+            );
+        }
+    }
 }
