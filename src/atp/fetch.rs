@@ -148,11 +148,12 @@ async fn download_atp(
     Ok(metadata)
 }
 
-/// Queries `history_url` (`history.json`) and returns the metadata for the
-/// most recent run that's both complete and passes a basic sanity check
-/// (see [`MIN_SPIDERS`] and friends), as long as it isn't older than
-/// [`MAX_STALENESS`]. `history.json` entries are assumed to be listed
-/// oldest-first, as AllThePlaces does today, so we scan from the end.
+/// Queries `history_url` (`history.json`) and returns the metadata for
+/// whichever entry has the latest `start_time` among those that are both
+/// complete and pass a basic sanity check (see [`MIN_SPIDERS`] and
+/// friends), as long as it isn't older than [`MAX_STALENESS`]. Examines
+/// every entry rather than assuming `history.json` lists them in any
+/// particular order.
 async fn fetch_latest_run(client: &Client, history_url: &str) -> Result<AtpMetadata> {
     let response = client
         .get(history_url)
@@ -167,29 +168,18 @@ async fn fetch_latest_run(client: &Client, history_url: &str) -> Result<AtpMetad
         .as_array()
         .ok_or_else(|| anyhow!("{} did not return a JSON array", history_url))?;
 
-    let now = UtcDateTime::now();
     let mut rejected: Vec<String> = Vec::new();
-    for entry in entries.iter().rev() {
+    let mut newest: Option<AtpMetadata> = None;
+    for entry in entries {
         match parse_run(entry, history_url) {
             std::result::Result::Ok(metadata) => {
-                let age: SignedDuration = now - metadata.end_time;
-                if age <= MAX_STALENESS {
-                    return Ok(metadata);
+                let is_newer = match &newest {
+                    None => true,
+                    Some(current) => metadata.start_time > current.start_time,
+                };
+                if is_newer {
+                    newest = Some(metadata);
                 }
-                // Entries are chronological, so anything further back
-                // can only be even older -- no point scanning further.
-                return Err(anyhow!(
-                    "newest usable AllThePlaces run ({}) ended {} days ago, past the {}-week \
-                     staleness limit; newer entries were rejected because: {}",
-                    metadata.run_id,
-                    age.whole_days(),
-                    MAX_STALENESS.whole_weeks(),
-                    if rejected.is_empty() {
-                        "(none newer)".to_string()
-                    } else {
-                        rejected.join("; ")
-                    }
-                ));
             }
             Err(reason) => {
                 log::warn!("Skipping AllThePlaces run entry: {reason}");
@@ -197,11 +187,31 @@ async fn fetch_latest_run(client: &Client, history_url: &str) -> Result<AtpMetad
             }
         }
     }
+
+    let Some(metadata) = newest else {
+        return Err(anyhow!(
+            "No usable AllThePlaces run found in {}: {}",
+            history_url,
+            if rejected.is_empty() {
+                "history.json has no entries".to_string()
+            } else {
+                rejected.join("; ")
+            }
+        ));
+    };
+
+    let age: SignedDuration = UtcDateTime::now() - metadata.end_time;
+    if age <= MAX_STALENESS {
+        return Ok(metadata);
+    }
     Err(anyhow!(
-        "No usable AllThePlaces run found in {}: {}",
-        history_url,
+        "newest usable AllThePlaces run ({}) ended {} days ago, past the {}-week staleness \
+         limit; other rejected entries: {}",
+        metadata.run_id,
+        age.whole_days(),
+        MAX_STALENESS.whole_weeks(),
         if rejected.is_empty() {
-            "history.json has no entries".to_string()
+            "(none)".to_string()
         } else {
             rejected.join("; ")
         }
@@ -379,6 +389,30 @@ mod tests {
         assert_eq!(result.output_url, "https://example.org/last.zip");
         assert_eq!(result.history_url, history_url);
         mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_fetch_latest_run_picks_max_start_time_regardless_of_array_order() {
+        // Don't just trust history.json to list entries oldest-first:
+        // put the more recent one first and make sure it still wins.
+        let mut server = Server::new_async().await;
+        server
+            .mock("GET", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                json!([
+                    fresh_entry("2026-03-18-13-32-34", "https://example.org/newer.zip", 2),
+                    fresh_entry("2017-12-14-02-01-04", "https://example.org/older.zip", 240),
+                ])
+                .to_string(),
+            )
+            .create_async()
+            .await;
+        let client = test_client(&server);
+        let result = fetch_latest_run(&client, &server.url()).await.unwrap();
+        assert_eq!(result.run_id, "2026-03-18-13-32-34");
+        assert_eq!(result.output_url, "https://example.org/newer.zip");
     }
 
     #[tokio::test]
