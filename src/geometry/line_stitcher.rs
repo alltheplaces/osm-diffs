@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use geo::algorithm::validation::Validation;
-use geo::{Coord, Geometry, LineString, MultiLineString, SimplifyVwPreserve};
+use geo::{Coord, Geometry, LineString, MultiLineString, Polygon, SimplifyVwPreserve};
 
 use super::{align_to_reference_x, centroid_x, cut_at_crossings, find_crossings};
 
@@ -74,7 +74,9 @@ enum ChainEnd {
 /// after stitching, since merging separate ways into longer chains can
 /// open up simplification headroom that per-way simplification during
 /// `add()` couldn't reach (it never simplifies across a not-yet-merged
-/// endpoint).
+/// endpoint). A chain that's already closed into a loop is simplified with
+/// a ring-aware floor rather than a plain path's — see [`compact`](Self::compact)'s
+/// own docs.
 ///
 /// Simplification tolerance (`epsilon`) is a plain distance in coordinate
 /// units, not a geodesic one — same planar, not-latitude-corrected
@@ -183,6 +185,23 @@ impl LineStitcher {
     /// (5000+ ways) never has to hold the whole un-simplified geometry in
     /// memory at once — peak memory stays roughly proportional to
     /// `max_coordinates`, not to the raw input size.
+    ///
+    /// A chain that's already closed into a loop (`front == back` — e.g. an
+    /// untagged closed way, routed here instead of through `build_ring`
+    /// because it has no area-indicating tag of its own; see
+    /// `GeometryBuilder`'s "promote closed stitched pieces" logic) is
+    /// simplified as a *ring*, not a plain path: wrapped in a throwaway
+    /// single-ring `Polygon` so `SimplifyVwPreserve`'s ring-aware 4-point
+    /// floor applies — the same trick `PolygonAssembler::compact` already
+    /// uses. Without this, the plain `LineString` impl's floor is 2 (just
+    /// the two, identical, endpoints), which lets simplification strip
+    /// every interior vertex from a closed loop and collapse it to a
+    /// zero-area point — silently erasing whatever area it was meant to
+    /// contribute. With enough small closed members (e.g. an OSM
+    /// `power=generator`/`generator:source=solar` multipolygon mapped
+    /// panel-by-panel), every single one can collapse this way, and the
+    /// whole relation's geometry vanishes. See
+    /// <https://github.com/alltheplaces/osm-diffs/issues/635>.
     fn compact(&mut self) {
         for _ in 0..40 {
             if self.total_coords <= self.max_coordinates {
@@ -191,19 +210,28 @@ impl LineStitcher {
             let mut new_total = 0;
             let mut can_still_shrink = false;
             for chain in &mut self.lines {
-                if chain.len() <= 2 {
+                let closed = chain.len() > 1 && chain[0] == *chain.back().unwrap();
+                let floor = if closed { 4 } else { 2 };
+                if chain.len() <= floor {
                     new_total += chain.len();
-                    continue; // already at the floor: just the two endpoints
+                    continue; // already at the floor
                 }
                 can_still_shrink = true;
                 let ls = LineString::new(chain.iter().copied().collect());
-                let simplified = ls.simplify_vw_preserve(self.epsilon);
+                let simplified = if closed {
+                    Polygon::new(ls, vec![])
+                        .simplify_vw_preserve(self.epsilon)
+                        .exterior()
+                        .clone()
+                } else {
+                    ls.simplify_vw_preserve(self.epsilon)
+                };
                 new_total += simplified.0.len();
                 *chain = simplified.0.into_iter().collect();
             }
             self.total_coords = new_total;
             if !can_still_shrink {
-                return; // every line is down to its two endpoints already
+                return; // every line is down to its floor already
             }
             self.epsilon *= 2.0;
         }
@@ -737,6 +765,58 @@ mod tests {
         // we can't get below 100 total -- but we should be much closer to
         // that floor than the original 2500.
         assert!(count < 500, "expected substantial reduction, got {count}");
+    }
+
+    #[test]
+    fn many_small_closed_loops_survive_compaction_as_valid_rings() {
+        // Regression test for https://github.com/alltheplaces/osm-diffs/issues/635:
+        // a large `type=multipolygon` relation whose member ways are each
+        // individually closed but untagged (so `assemble_ways` routes them
+        // through `build_line`/`LineStitcher` rather than `build_ring`,
+        // relying on `GeometryBuilder`'s "promote closed stitched pieces"
+        // logic to recover them as rings -- see that struct's docs). A real
+        // instance of this (a solar farm mapped panel-by-panel, OSM
+        // relation/13606088, 808 member ways) lost *all* its geometry:
+        // every closed loop collapsed to two identical points during
+        // `compact()`, which used to have no ring-aware floor, and every
+        // resulting degenerate loop was then rejected as invalid and
+        // dropped.
+        //
+        // 40 small disjoint closed squares (5 coordinates each, 200 total),
+        // added under a budget small enough that `add()`'s incremental
+        // `compact()` has to run repeatedly, well past the point a single
+        // pass would clear.
+        let mut a = LineStitcher::with_max_coordinates(60);
+        let n = 40;
+        for i in 0..n {
+            let base = (i * 1000) as f64;
+            a.add(&ls(&[
+                (base, 0.0),
+                (base + 1.0, 0.0),
+                (base + 1.0, 1.0),
+                (base, 1.0),
+                (base, 0.0),
+            ]));
+        }
+
+        let geom = a.finish().expect("should still build geometry");
+        let pieces: Vec<LineString<f64>> = match geom {
+            Geometry::LineString(l) => vec![l],
+            Geometry::MultiLineString(m) => m.0,
+            other => panic!("unexpected geometry: {other:?}"),
+        };
+
+        // Every one of the 40 disjoint squares must survive as its own
+        // piece -- none dropped, none merged (they don't touch).
+        assert_eq!(pieces.len(), n, "expected all {n} closed loops to survive");
+        for piece in &pieces {
+            assert_eq!(piece.0.first(), piece.0.last(), "piece is no longer closed");
+            assert!(
+                piece.0.len() >= 4,
+                "closed loop over-simplified below a valid ring: {} points",
+                piece.0.len()
+            );
+        }
     }
 
     #[test]
