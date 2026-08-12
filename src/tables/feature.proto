@@ -43,7 +43,7 @@ message FeatureToIndex {
 
     // A set of S2 cell IDs that cover the geometry of the indexed feature,
     // for approximate spatial matching. Unlike `centroid_s2_cell_id`, this
-    // isn't a single point and isn't meant for sorting.
+    // isn't necessarily a single point and isn't meant for sorting.
     repeated uint64 coverage_s2_cell_id = 4;
 
     // Here would be a good place to store supplemental information
