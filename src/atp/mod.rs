@@ -13,7 +13,10 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
-use time::{OffsetDateTime, UtcDateTime, format_description::well_known::Iso8601};
+use time::{
+    OffsetDateTime, UtcDateTime,
+    format_description::well_known::{Iso8601, Rfc3339},
+};
 
 use crate::places::{ParquetWriter, Place};
 use crate::{PROGRESS_BAR_STYLE, matchers::MatchMask};
@@ -30,7 +33,27 @@ pub async fn import_atp(
         return Ok(out);
     }
 
-    let input_zip = fetch::fetch_atp(fetch::ATP_RUN_HISTORY_URL, client, progress, workdir).await?;
+    let (input_zip, atp_metadata) =
+        fetch::fetch_atp(fetch::ATP_RUN_HISTORY_URL, client, progress, workdir).await?;
+    let atp_start_time = atp_metadata
+        .start_time
+        .format(&Rfc3339)
+        .expect("UtcDateTime should always format as RFC3339");
+    let atp_end_time = atp_metadata
+        .end_time
+        .format(&Rfc3339)
+        .expect("UtcDateTime should always format as RFC3339");
+    log::info!(
+        run_id = atp_metadata.run_id.as_str(),
+        output_url = atp_metadata.output_url.as_str(),
+        history_url = atp_metadata.history_url.as_str(),
+        start_time = atp_start_time.as_str(),
+        end_time = atp_end_time.as_str(),
+        spiders = atp_metadata.spiders,
+        total_lines = atp_metadata.total_lines,
+        size_bytes = atp_metadata.size_bytes;
+        "fetched AllThePlaces dump"
+    );
 
     // To avoid deadlock, we must not use Rayon threads here.
     // https://dev.to/sgchris/scoped-threads-with-stdthreadscope-in-rust-163-48f9
