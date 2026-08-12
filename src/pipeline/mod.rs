@@ -60,11 +60,21 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
 /// the step succeeds or fails, so a step that errors out (e.g. due to
 /// an actual OOM) still gets its "end" snapshot, with an elapsed time,
 /// on the way out.
+///
+/// A step that returns `Err` also gets its error logged here, at ERROR
+/// level, with the full `anyhow` context chain -- this is the single
+/// place that does so, rather than every fallible call site logging its
+/// own error on top of returning it. Without this, an error would only
+/// ever surface via `main()`'s default unwind on the way out of the
+/// process, never in `pipeline.log` itself.
 fn run_step<T>(name: &str, step: impl FnOnce() -> Result<T>) -> Result<T> {
     let start = Instant::now();
     log_snapshot(name, "start", None);
     let result = step();
     log_snapshot(name, "end", Some(start.elapsed().as_secs_f64()));
+    if let Err(e) = &result {
+        log::error!(step = name; "{name} failed: {e:#}");
+    }
     result
 }
 
