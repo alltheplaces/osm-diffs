@@ -384,6 +384,39 @@ mod tests {
         }
     }
 
+    /// An inner ring that touches the outer ring at exactly two points
+    /// (not along an overlapping edge, not crossing) so removing it splits
+    /// the outer into two disjoint pieces rather than leaving one polygon
+    /// with a hole. Mirrors `geometry_multipolygon/8` from `nimix/osm_conv_tests`
+    /// (2012, unlicensed, not vendored here -- we only inspected it to see
+    /// whether it had any test cases `osm-testdata`'s vendored `grid`
+    /// fixtures lack). `grid` covers a single-point inner/outer touch
+    /// (`7/754`-`7/758`) and touching along a shared line (`7/756`,
+    /// `7/757`), but not this two-point-touch-splits-the-outer-in-two
+    /// case, so this test closes that one gap directly in our own suite.
+    #[test]
+    fn inner_touching_outer_at_two_points_splits_it_into_two_pieces() {
+        let mut a = PolygonAssembler::new();
+        // Outer: a rectangle with redundant midpoints on its top and
+        // bottom edges -- the exact points the inner ring below touches.
+        a.add_ring(&ring(&[
+            (0.0, 0.0),
+            (2.0, 0.0), // bottom midpoint, shared with the inner ring
+            (4.0, 0.0),
+            (4.0, 2.0),
+            (2.0, 2.0), // top midpoint, shared with the inner ring
+            (0.0, 2.0),
+        ]));
+        // Inner: a diamond whose top and bottom vertices land exactly on
+        // the outer's midpoints above, touching but never crossing.
+        a.add_ring(&ring(&[(2.0, 2.0), (1.0, 1.0), (2.0, 0.0), (3.0, 1.0)]));
+
+        match a.finish() {
+            Some(Geometry::MultiPolygon(mp)) => assert_eq!(mp.0.len(), 2),
+            other => panic!("expected the outer split into two pieces, got {other:?}"),
+        }
+    }
+
     /// https://github.com/alltheplaces/osm-diffs/issues/532, mirroring
     /// grid fixture `7/790`: a ring added twice (the same OSM way listed
     /// twice as a member) must not cancel itself out under the even-odd
