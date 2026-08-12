@@ -12,6 +12,8 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{SyncSender, sync_channel};
 use std::thread;
+use time::UtcDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::coverage::Coverage;
 use crate::make_progress_bar;
@@ -45,6 +47,17 @@ pub fn import_osm(
     let pbf_error = || format!("could not open file `{:?}`", pbf);
     let mut file = File::open(&pbf).with_context(pbf_error)?;
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
+    let header = reader.header();
+    let replication_timestamp = header
+        .replication_timestamp
+        .format(&Rfc3339)
+        .expect("UtcDateTime should always format as RFC3339");
+    log::info!(
+        replication_timestamp = replication_timestamp.as_str(),
+        source = header.source.as_deref(),
+        writing_program = header.writing_program.as_deref();
+        "opened OpenStreetMap planet file"
+    );
 
     let prunings = Prunings::create(&mut reader, progress, workdir)?;
     let _assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
@@ -234,9 +247,22 @@ fn build_relation_parents<R: Read + Seek + Send>(
     Ok(result)
 }
 
+/// Provenance metadata read from a PBF file's `OSMHeader` block: which
+/// OpenStreetMap replication state the data corresponds to, and what
+/// produced the file. Lets us embed the provenance of our input data
+/// into our output files.
+#[derive(Clone, Debug)]
+pub struct PbfHeader {
+    pub replication_timestamp: UtcDateTime,
+    pub source: Option<String>,
+    pub writing_program: Option<String>,
+}
+
 /// Reads data blobs from OpenStreetMap PBF files.
 struct BlobReader<'a, R: Read + Seek + Send> {
     reader: &'a mut R,
+
+    header: PbfHeader,
 
     /// Offset and size of each data blob.
     blobs: Vec<(u64, usize)>,
@@ -259,31 +285,42 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
         }
         let mut pos = 0_u64;
         let mut blobs = Vec::<(u64, usize)>::new();
+        let mut header: Option<PbfHeader> = None;
         while pos < file_size {
             reader.seek(SeekFrom::Start(pos))?;
             let blob_header = Self::read_blob_header(reader)?;
             let Some((blob_type, data_size)) = Self::parse_blob_header(&blob_header) else {
                 return Err(anyhow!("bad blob header at offset {}", pos));
             };
+            let offset = pos + 4_u64 + (blob_header.len() as u64);
             match blob_type {
-                b"OSMHeader" => {}
+                b"OSMHeader" => {
+                    let blob = Self::read_blob(reader, offset, data_size)?;
+                    header = Some(Self::parse_header_block(&blob.into_data())?);
+                }
                 b"OSMData" => {
-                    blobs.push((pos + 4_u64 + (blob_header.len() as u64), data_size));
+                    blobs.push((offset, data_size));
                 }
                 _ => {}
             }
             pos += 4_u64 + (blob_header.len() as u64) + (data_size as u64);
         }
+        let header = header.ok_or_else(|| anyhow!("PBF file has no OSMHeader block"))?;
 
         let (nodes_end, ways_end) = Self::partition(reader, &blobs)?;
         let relations_end = blobs.len();
         Ok(BlobReader {
             reader,
+            header,
             blobs,
             node_blobs: 0..nodes_end,
             way_blobs: nodes_end.saturating_sub(1)..ways_end,
             relation_blobs: ways_end.saturating_sub(1)..relations_end,
         })
+    }
+
+    pub fn header(&self) -> &PbfHeader {
+        &self.header
     }
 
     pub fn count_node_blobs(&self) -> usize {
@@ -428,6 +465,53 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
             }
         }
         Some((blob_type?, data_size?))
+    }
+
+    /// Parses the fields we care about out of a decoded `OSMHeader` blob,
+    /// i.e. the `HeaderBlock` message from OSM's `osmformat.proto`.
+    /// `osm_pbf_iter`/`protobuf_iter` don't support this message, so we
+    /// pick out the fields we need by hand:
+    ///
+    /// - `writingprogram` (tag 16, string)
+    /// - `source` (tag 17, string)
+    /// - `osmosis_replication_timestamp` (tag 32, int64)
+    fn parse_header_block(data: &[u8]) -> Result<PbfHeader> {
+        const WRITING_PROGRAM: u32 = 16;
+        const SOURCE: u32 = 17;
+        const OSMOSIS_REPLICATION_TIMESTAMP: u32 = 32;
+
+        let mut replication_timestamp = None;
+        let mut source = None;
+        let mut writing_program = None;
+        for m in MessageIter::new(data) {
+            match m.tag {
+                WRITING_PROGRAM => {
+                    writing_program =
+                        Some(String::from_utf8_lossy(m.value.get_data()).into_owned());
+                }
+                SOURCE => {
+                    source = Some(String::from_utf8_lossy(m.value.get_data()).into_owned());
+                }
+                OSMOSIS_REPLICATION_TIMESTAMP => {
+                    // NB: `osmosis_replication_timestamp` is a plain `int64`,
+                    // not `sint64`, so it is *not* zigzag-encoded on the
+                    // wire. Go through `u64::from` (which returns the raw
+                    // varint) rather than protobuf_iter's `i64::from`, which
+                    // always zigzag-decodes and would silently corrupt the
+                    // value here.
+                    let secs = u64::from(m.value) as i64;
+                    replication_timestamp = Some(UtcDateTime::from_unix_timestamp(secs)?);
+                }
+                _ => {}
+            }
+        }
+
+        Ok(PbfHeader {
+            replication_timestamp: replication_timestamp
+                .ok_or_else(|| anyhow!("OSMHeader block has no osmosis_replication_timestamp"))?,
+            source,
+            writing_program,
+        })
     }
 }
 
@@ -584,6 +668,12 @@ mod tests {
         let mut file = File::open(test_data_path("zugerland.osm.pbf"))?;
         let mut reader = BlobReader::open(&mut file)?;
         assert_eq!(reader.blobs, &[(119, 16681), (16816, 15278), (32110, 8616)]);
+        assert_eq!(
+            reader.header().replication_timestamp,
+            UtcDateTime::from_unix_timestamp(1769501462)? // 2026-01-27T08:11:02Z
+        );
+        assert_eq!(reader.header().source, None);
+        assert_eq!(reader.header().writing_program, Some("osmx".to_owned()));
         assert_eq!(reader.node_blobs, 0..1);
         assert_eq!(reader.way_blobs, 0..2);
         assert_eq!(reader.relation_blobs, 1..3);
