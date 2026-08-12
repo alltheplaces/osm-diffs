@@ -11,6 +11,9 @@ changelog:
     - title: 🔗 Dependencies
       labels:
         - dependencies
+    - title: 📚 Documentation
+      labels:
+        - documentation
     - title: 🚧 Maintenance
       labels:
         - '*'
@@ -18,4 +21,5 @@ changelog:
         labels:
           - bug
           - dependencies
+          - documentation
           - enhancement
