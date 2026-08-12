@@ -24,17 +24,27 @@ message RelationMember {
   uint64 id = 2;
 }
 
-// An OpenStreetMap feature to be indexed.
+// An OpenStreetMap feature to be indexed. This is an internal, ephemeral
+// data structure: it only ever lives in files under the pipeline's scratch
+// working directory, and is never sent over the wire or stored long-term.
+// Field numbers are free to be renumbered as the message evolves.
 message FeatureToIndex {
+    // S2 cell ID of the feature geometry's centroid. Numerically sorting by
+    // this key clusters spatially nearby features together, since S2 cell
+    // IDs are ordered along a Hilbert curve.
+    fixed64 centroid_s2_cell_id = 1;
+
     // The OpenStreetMap feature to index.
-    Feature feature = 1;
+    Feature feature = 2;
 
     // A bitmask to quickly skip over features that cannot possibly match
     // the query feature. See matchers::MatchMask.
-    uint32 match_mask = 2;
+    uint32 match_mask = 3;
 
-    // A set of S2 cell IDs that cover the geometry of the indexed feature.
-    repeated uint64 s2_cell_id = 3;
+    // A set of S2 cell IDs that cover the geometry of the indexed feature,
+    // for approximate spatial matching. Unlike `centroid_s2_cell_id`, this
+    // isn't a single point and isn't meant for sorting.
+    repeated uint64 coverage_s2_cell_id = 4;
 
     // Here would be a good place to store supplemental information
     // that is needed to find the closest match in OpenStreetMap

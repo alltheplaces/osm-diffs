@@ -170,7 +170,7 @@ fn assemble_nodes(
                         if let Some(feature) = &mut fti.feature {
                             write_point(&mut feature.geometry_wkb, &point, &WKB_WRITE_OPTIONS)?;
                         }
-                        assemble_geometry(&Geometry::Point(point), &mut fti.s2_cell_id);
+                        assemble_geometry(&Geometry::Point(point), &mut fti);
                         if assemble_tags(node.tags.iter().cloned(), strings, &mut fti) {
                             feature_tx.send(fti.encode_to_vec())?;
                         }
@@ -303,7 +303,7 @@ fn assemble_ways<'a>(
                         }
 
                         if is_interesting && assemble_tags(way.tags(), strings, &mut fti) {
-                            assemble_geometry(&geometry, &mut fti.s2_cell_id);
+                            assemble_geometry(&geometry, &mut fti);
                             feature_tx.send(fti.encode_to_vec())?;
                         }
                     }
@@ -469,7 +469,7 @@ fn assemble_leaf_relations<'a>(
                         }
 
                         if is_interesting && got_tags {
-                            assemble_geometry(&geometry, &mut fti.s2_cell_id);
+                            assemble_geometry(&geometry, &mut fti);
                             feature_tx.send(fti.encode_to_vec())?;
                         }
                     }
@@ -613,12 +613,10 @@ fn assemble_super_relations(
                 // the parents.
                 geometry_store.insert(rel_id, &rel_geometry)?;
 
-                // Modify fti: Store rel_geometry, s2 cells.
-                // TODO: Also store the s2 cell of the centroid (for sort key), once
-                // we look at that part of the TODO in a later change.
+                // Modify fti: store rel_geometry, s2 cells, and the centroid sort key.
                 let feature = fti.feature.as_mut().expect("feature");
                 write_geometry(&mut feature.geometry_wkb, &rel_geometry, &WKB_WRITE_OPTIONS)?;
-                assemble_geometry(&rel_geometry, &mut fti.s2_cell_id);
+                assemble_geometry(&rel_geometry, &mut fti);
                 feature_tx.send(fti.encode_to_vec())?;
             }
             drop(feature_tx);
@@ -669,7 +667,16 @@ fn assemble_feature(id: u64, info: &Option<osm_pbf_iter::info::Info<'_>>) -> Fea
 // as it may seem; when looking for OpenStreetMap features near an AllThePlaces
 // feature, we construct an S2 cap (search circle) for several hundred meters
 // to a few kilometers depending on the tags in ATP.
-fn assemble_geometry(g: &Geometry, s2_cell_ids: &mut Vec<u64>) {
+//
+// Also sets `fti.centroid_s2_cell_id`, the spatial sort key, from the same
+// centroid computation used below for geometry kinds that don't already
+// compute one of their own (Point, MultiPoint, LineString, ...) -- so
+// callers get both in one pass over the geometry.
+fn assemble_geometry(g: &Geometry, fti: &mut FeatureToIndex) {
+    let centroid = g.centroid();
+    fti.centroid_s2_cell_id = centroid.map_or(0, |c| s2_cell_id_for_point(&c).0);
+
+    let s2_cell_ids = &mut fti.coverage_s2_cell_id;
     s2_cell_ids.clear();
     match g {
         Geometry::Point(p) => {
@@ -722,7 +729,7 @@ fn assemble_geometry(g: &Geometry, s2_cell_ids: &mut Vec<u64>) {
         }
 
         _ => {
-            if let Some(centroid) = g.centroid() {
+            if let Some(centroid) = centroid {
                 s2_cell_ids.reserve(1);
                 s2_cell_ids.push(s2_cell_id_for_point(&centroid).0);
             };
