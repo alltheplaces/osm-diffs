@@ -9,6 +9,7 @@ mod matchers;
 mod memstats;
 mod pipeline;
 mod places;
+mod provenance;
 mod s2_util;
 mod tables;
 

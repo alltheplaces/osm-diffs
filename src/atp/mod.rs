@@ -23,6 +23,12 @@ use crate::{PROGRESS_BAR_STYLE, matchers::MatchMask};
 
 mod fetch;
 
+// Only these two re-exported crate-wide (rather than making all of
+// `fetch` pub(crate)): crate::provenance needs them to assemble this
+// pipeline's provenance BOM, nothing outside `atp` needs the rest of
+// fetch's API (fetch_atp, ATP_RUN_HISTORY_URL, ...).
+pub(crate) use fetch::{AtpMetadata, read_cached_metadata};
+
 pub async fn import_atp(
     client: &Client,
     progress: &MultiProgress,

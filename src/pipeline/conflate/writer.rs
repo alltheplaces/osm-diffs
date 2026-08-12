@@ -11,7 +11,7 @@ use deepsize::DeepSizeOf;
 use parquet::{
     arrow::{ArrowWriter, arrow_writer::ArrowWriterOptions},
     basic::{Compression, ZstdLevel},
-    file::properties::WriterProperties,
+    file::{metadata::KeyValue, properties::WriterProperties},
     schema::types::ColumnPath,
 };
 use serde::{Deserialize, Serialize};
@@ -73,14 +73,29 @@ pub struct ParquetRow {
     atp_shape_wkb: Vec<u8>,
 }
 
+/// Key under which the CycloneDX provenance BOM (see `crate::provenance`)
+/// is stored in this file's Parquet key-value metadata.
+const PROVENANCE_KEY: &str = "cyclonedx.bom";
+
 impl ParquetWriter {
-    pub fn create(path: &Path, max_rows_per_group: usize) -> Result<ParquetWriter> {
+    /// `provenance_bom` is the CycloneDX document from `crate::provenance`,
+    /// already serialized to a JSON string -- embedded verbatim as this
+    /// file's `PROVENANCE_KEY` key-value metadata.
+    pub fn create(
+        path: &Path,
+        max_rows_per_group: usize,
+        provenance_bom: &str,
+    ) -> Result<ParquetWriter> {
         let mut tmp_path = PathBuf::from(path);
         tmp_path.add_extension("tmp");
         let schema = SchemaRef::new(schema::build_schema());
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::try_new(22)?))
             .set_max_row_group_row_count(Some(max_rows_per_group))
+            .set_key_value_metadata(Some(vec![KeyValue::new(
+                PROVENANCE_KEY.to_string(),
+                provenance_bom.to_string(),
+            )]))
             .set_column_bloom_filter_enabled(Self::column_path("atp.spider"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.key"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.value"), true)
