@@ -75,7 +75,16 @@ pub struct ParquetRow {
 
 /// Key under which the CycloneDX provenance BOM (see `crate::provenance`)
 /// is stored in this file's Parquet key-value metadata.
-const PROVENANCE_KEY: &str = "cyclonedx.bom";
+///
+/// Neither CycloneDX nor Parquet defines a convention for this: CycloneDX
+/// is transport-agnostic (a BOM is normally a sibling file, an OCI
+/// artifact, or an in-toto/SLSA attestation, none of which map to a
+/// Parquet key), and Parquet's `key_value_metadata` is just a flat list
+/// of arbitrary strings that tools namespace themselves (e.g. GeoParquet
+/// uses `geo`, GDAL `gdal:schema`, Spark
+/// `org.apache.spark.sql.parquet.row.metadata`, Arrow `ARROW:schema`).
+/// `org.cyclonedx.bom` follows that same reverse-DNS-style namespacing.
+const PROVENANCE_KEY: &str = "org.cyclonedx.bom";
 
 impl ParquetWriter {
     /// `provenance_bom` is the CycloneDX document from `crate::provenance`,

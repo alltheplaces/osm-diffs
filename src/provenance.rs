@@ -31,12 +31,17 @@ pub fn build(workdir: &Path) -> Result<Value> {
     let osm_metadata =
         pipeline::read_header(&osm_planet).context("could not read OpenStreetMap provenance")?;
 
+    // TODO: metadata.component isn't modeled correctly yet. We're
+    // describing the provenance of a *data* file here (which sources,
+    // and which software, built our output), not shipping a BOM for a
+    // piece of software -- so `type: "application"` is wrong for this
+    // component. To be fixed in a follow-up.
     Ok(json!({
         "bomFormat": "CycloneDX",
         "specVersion": "1.7",
         "metadata": {
             "component": {
-                "type": "application",
+                "type": "data",
                 "name": "osm-diffs",
                 "version": env!("CARGO_PKG_VERSION"),
             }
