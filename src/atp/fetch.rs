@@ -11,6 +11,12 @@ use tokio::{fs::File, io::AsyncWriteExt};
 
 pub const ATP_RUN_HISTORY_URL: &str = "https://data.alltheplaces.xyz/runs/history.json";
 
+/// Filename, within `workdir`, of the [`AtpMetadata`] persisted alongside
+/// `alltheplaces.zip`. Shared between [`fetch_atp`] (which writes it) and
+/// [`read_cached_metadata`] (which reads it back independently, e.g. when
+/// assembling this pipeline's provenance BOM).
+const META_JSON_FILENAME: &str = "alltheplaces.meta.json";
+
 /// Minimum plausible stats for an AllThePlaces run (see [`AtpMetadata`]).
 /// Below these, we treat the run as broken or incomplete and fall back to
 /// an older one instead of trusting it. Deliberately loose: real runs are
@@ -29,7 +35,7 @@ const MAX_STALENESS: SignedDuration = SignedDuration::weeks(6);
 /// Provenance metadata about a single AllThePlaces run, read from
 /// `history.json` (see [`ATP_RUN_HISTORY_URL`]). Lets us embed the
 /// provenance of our input data into our output files, the same way
-/// `PbfHeader` (see `src/pipeline/osm/mod.rs`) does for OpenStreetMap
+/// `OsmMetadata` (see `src/pipeline/osm/mod.rs`) does for OpenStreetMap
 /// planet dumps.
 ///
 /// All fields are required: `history.json` is only supposed to list
@@ -92,7 +98,7 @@ pub async fn fetch_atp(
     workdir: &Path,
 ) -> Result<(PathBuf, AtpMetadata)> {
     let out_path: PathBuf = workdir.join("alltheplaces.zip");
-    let meta_json_path = workdir.join("alltheplaces.meta.json");
+    let meta_json_path = workdir.join(META_JSON_FILENAME);
     if out_path.exists() {
         let metadata = read_meta_json(&meta_json_path).await.with_context(|| {
             format!(
@@ -283,6 +289,19 @@ async fn write_meta_json(metadata: &AtpMetadata, dest: &Path) -> Result<()> {
 async fn read_meta_json(path: &Path) -> Result<AtpMetadata> {
     let data = tokio::fs::read_to_string(path)
         .await
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    serde_json::from_str(&data).with_context(|| format!("Failed to parse {}", path.display()))
+}
+
+/// Reads back the [`AtpMetadata`] persisted for a prior `fetch_atp` call
+/// in `workdir`. Synchronous, unlike `fetch_atp`/`read_meta_json`
+/// themselves: by the time this is useful -- assembling this pipeline's
+/// provenance BOM once AllThePlaces has already been fetched, e.g. from
+/// `conflate()` -- there's no tokio runtime running, and no need to
+/// start one just to read a small JSON file that's already on disk.
+pub fn read_cached_metadata(workdir: &Path) -> Result<AtpMetadata> {
+    let path = workdir.join(META_JSON_FILENAME);
+    let data = std::fs::read_to_string(&path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
     serde_json::from_str(&data).with_context(|| format!("Failed to parse {}", path.display()))
 }

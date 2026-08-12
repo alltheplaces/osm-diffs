@@ -6,7 +6,7 @@ use crate::{
     places::{Place, PlaceIndex},
     s2_util::MergedCellRanges,
 };
-use anyhow::{Ok, Result};
+use anyhow::{Context, Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use indicatif::{MultiProgress, ProgressBar};
 use rayon::prelude::*;
@@ -171,7 +171,11 @@ fn write_conflated(
         std::io::Result::Ok(row)
     }))?;
     progress.set_length(row_count.load(Ordering::SeqCst));
-    let mut writer = ParquetWriter::create(out, /* max_rows_per_group */ 200_000)?;
+    let provenance_bom = crate::provenance::build(workdir)
+        .context("could not assemble provenance BOM")?
+        .to_string();
+    let mut writer =
+        ParquetWriter::create(out, /* max_rows_per_group */ 200_000, &provenance_bom)?;
     for row in sorted {
         writer.write(row?)?;
         progress.inc(1);

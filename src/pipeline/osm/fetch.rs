@@ -8,7 +8,7 @@ use std::time::Duration;
 const OSM_TORRENT_URL: &str = "https://planet.openstreetmap.org/pbf/planet-latest.osm.pbf.torrent";
 
 pub fn fetch_planet(progress: &MultiProgress, workdir: &Path) -> Result<PathBuf> {
-    let pbf_path: PathBuf = workdir.join("osm-planet.pbf");
+    let pbf_path: PathBuf = workdir.join(super::PLANET_PBF_FILENAME);
     if pbf_path.exists() {
         return Ok(pbf_path);
     }

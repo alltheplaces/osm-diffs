@@ -247,22 +247,55 @@ fn build_relation_parents<R: Read + Seek + Send>(
     Ok(result)
 }
 
+/// Filename, within `workdir`, that `fetch::fetch_planet` downloads the
+/// OSM planet PBF to. Shared with `crate::provenance`, which needs to
+/// find it again (via `read_header`) without re-fetching.
+pub(crate) const PLANET_PBF_FILENAME: &str = "osm-planet.pbf";
+
 /// Provenance metadata read from a PBF file's `OSMHeader` block: which
 /// OpenStreetMap replication state the data corresponds to, and what
 /// produced the file. Lets us embed the provenance of our input data
 /// into our output files.
 #[derive(Clone, Debug)]
-pub struct PbfHeader {
+pub struct OsmMetadata {
     pub replication_timestamp: UtcDateTime,
     pub source: Option<String>,
     pub writing_program: Option<String>,
+}
+
+/// Reads just the `OSMHeader` block from the very start of a PBF file --
+/// a few hundred bytes -- without scanning the rest of the file for data
+/// blobs the way `BlobReader::open()` does. Cheap enough to call on
+/// demand wherever `OsmMetadata` is needed (e.g. when assembling this
+/// pipeline's provenance BOM), independent of whatever `BlobReader`'s
+/// callers do with the rest of the file.
+///
+/// Every `.osm.pbf` file starts with exactly one `OSMHeader` blob, so
+/// this only ever reads the first blob; if that's not `OSMHeader`, it
+/// errors out rather than scanning further for one.
+pub fn read_header(path: &Path) -> Result<OsmMetadata> {
+    let mut file = File::open(path).with_context(|| format!("could not open file `{:?}`", path))?;
+    let blob_header = BlobReader::<File>::read_blob_header(&mut file)?;
+    let Some((blob_type, data_size)) = BlobReader::<File>::parse_blob_header(&blob_header) else {
+        return Err(anyhow!("bad blob header at start of `{:?}`", path));
+    };
+    if blob_type != b"OSMHeader" {
+        return Err(anyhow!(
+            "expected an OSMHeader blob at the start of `{:?}`, found {:?}",
+            path,
+            String::from_utf8_lossy(blob_type)
+        ));
+    }
+    let offset = 4_u64 + (blob_header.len() as u64);
+    let blob = BlobReader::<File>::read_blob(&mut file, offset, data_size)?;
+    BlobReader::<File>::parse_header_block(&blob.into_data())
 }
 
 /// Reads data blobs from OpenStreetMap PBF files.
 struct BlobReader<'a, R: Read + Seek + Send> {
     reader: &'a mut R,
 
-    header: PbfHeader,
+    header: OsmMetadata,
 
     /// Offset and size of each data blob.
     blobs: Vec<(u64, usize)>,
@@ -285,7 +318,7 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
         }
         let mut pos = 0_u64;
         let mut blobs = Vec::<(u64, usize)>::new();
-        let mut header: Option<PbfHeader> = None;
+        let mut header: Option<OsmMetadata> = None;
         while pos < file_size {
             reader.seek(SeekFrom::Start(pos))?;
             let blob_header = Self::read_blob_header(reader)?;
@@ -319,7 +352,7 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
         })
     }
 
-    pub fn header(&self) -> &PbfHeader {
+    pub fn header(&self) -> &OsmMetadata {
         &self.header
     }
 
@@ -484,7 +517,7 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
     /// which `state.txt` sequence number a given dump corresponds to:
     /// <https://github.com/zerebubuth/planet-dump-ng/issues/16>, blocked
     /// on <https://github.com/zerebubuth/planet-dump-ng/issues/6>.
-    fn parse_header_block(data: &[u8]) -> Result<PbfHeader> {
+    fn parse_header_block(data: &[u8]) -> Result<OsmMetadata> {
         const WRITING_PROGRAM: u32 = 16;
         const SOURCE: u32 = 17;
         const OSMOSIS_REPLICATION_TIMESTAMP: u32 = 32;
@@ -515,7 +548,7 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
             }
         }
 
-        Ok(PbfHeader {
+        Ok(OsmMetadata {
             replication_timestamp: replication_timestamp
                 .ok_or_else(|| anyhow!("OSMHeader block has no osmosis_replication_timestamp"))?,
             source,
@@ -693,6 +726,60 @@ mod tests {
             return Err(anyhow!("failed to read blob"));
         }
         Ok(())
+    }
+
+    #[test]
+    fn test_read_header() -> Result<()> {
+        // Must agree with what BlobReader::open() -- which scans the
+        // whole file -- reports for the same fixture.
+        let metadata = read_header(&test_data_path("zugerland.osm.pbf"))?;
+        assert_eq!(
+            metadata.replication_timestamp,
+            UtcDateTime::from_unix_timestamp(1769501462)? // 2026-01-27T08:11:02Z
+        );
+        assert_eq!(metadata.source, None);
+        assert_eq!(metadata.writing_program, Some("osmx".to_owned()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_header_rejects_bad_blob_header() {
+        use std::io::Write;
+
+        // A zero-length blob header (same bad input as
+        // test_blob_reader_bad_data's b"\0\0\0\0" case): read_blob_header
+        // succeeds trivially, but parse_blob_header then finds neither a
+        // blob type nor a data size in the (empty) header.
+        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
+        file.write_all(b"\0\0\0\0").expect("write");
+        let err = read_header(file.path()).unwrap_err();
+        assert!(err.to_string().contains("bad blob header"));
+    }
+
+    #[test]
+    fn test_read_header_rejects_wrong_first_blob_type() {
+        use std::io::Write;
+
+        // A well-formed blob header, but for an "OSMData" blob rather
+        // than "OSMHeader" -- as if handed a PBF file's data blob
+        // directly, without the header block that should precede it.
+        let mut file = tempfile::NamedTempFile::new().expect("tempfile");
+        let mut blob_header = Vec::new();
+        // Tag 1 (blob_type, string): "OSMData".
+        blob_header.extend_from_slice(&[0x0a, 7]);
+        blob_header.extend_from_slice(b"OSMData");
+        // Tag 3 (datasize, varint): 0.
+        blob_header.extend_from_slice(&[0x18, 0]);
+        file.write_all(&(blob_header.len() as u32).to_be_bytes())
+            .expect("write");
+        file.write_all(&blob_header).expect("write");
+        let err = read_header(file.path()).unwrap_err();
+        assert!(err.to_string().contains("OSMData"));
+    }
+
+    #[test]
+    fn test_read_header_missing_file() {
+        assert!(read_header(Path::new("/no/such/file.osm.pbf")).is_err());
     }
 
     #[test]
