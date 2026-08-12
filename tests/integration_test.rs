@@ -13,6 +13,13 @@ fn test_pipeline() -> Result<()> {
     atp.push("tests/test_data/alltheplaces.zip");
     symlink(&atp, workdir.path().join("alltheplaces.zip"))?;
 
+    // fetch_atp() requires the metadata sidecar alongside a pre-existing
+    // alltheplaces.zip (see AtpMetadata in src/atp/fetch.rs), so it has to
+    // be symlinked in too, not just the zip itself.
+    let mut atp_meta = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    atp_meta.push("tests/test_data/alltheplaces.meta.json");
+    symlink(&atp_meta, workdir.path().join("alltheplaces.meta.json"))?;
+
     let mut osm = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     osm.push("tests/test_data/zugerland.osm.pbf");
     symlink(&osm, workdir.path().join("osm-planet.pbf"))?;
