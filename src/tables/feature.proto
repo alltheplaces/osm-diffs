@@ -5,29 +5,61 @@ syntax = "proto3";
 
 package tables.features;
 
-// An OpenStreetMap feature stored by a FeatureTable.
+// An OpenStreetMap feature (node, way, or relation) stored by a
+// FeatureTable, keyed by `id`. `way_members` is only populated for ways,
+// and `relation_members` only for relations.
+//
+// This is an internal, ephemeral data structure: it only ever lives in
+// files under the pipeline's scratch working directory, and is never sent
+// over the wire or stored long-term. Field numbers are free to be
+// renumbered as the message evolves.
 message Feature {
     // id = (osm_id * 10) + 1 for nodes; + 2 for ways; + 3 for relations.
     uint64 id = 1;
+
+    // OSM edit version of this element, as assigned by OpenStreetMap
+    // (starts at 1, incremented on every edit to this feature). 0 if
+    // unknown.
     uint32 version = 2;
+
+    // ID of the OpenStreetMap changeset that last modified this element.
+    // 0 if unknown.
     uint64 changeset = 3;
+
+    // Unix timestamp (seconds since 1970-01-01 UTC) of the last edit.
+    // 0 if unknown.
     uint64 timestamp = 4;
+
+    // OSM tags, flattened into (key, value) pairs of indices into the
+    // pipeline's `tables::StringPool`: `tags[2*i]` is the i-th tag's key
+    // string index, and `tags[2*i+1]` is its value string index.
     repeated uint32 tags = 5;
+
+    // The feature's geometry, as OGC Simple Features Well-Known Binary
+    // (WKB), little-endian, with (longitude, latitude) coordinate order.
     bytes geometry_wkb = 6;
+
+    // The way's node references, in OSM's declared order, as raw OSM node
+    // IDs. Note this is *not* the `id`-encoded form `RelationMember.id`
+    // uses below -- these are plain OSM node IDs, unencoded.
     repeated uint64 way_members = 16;
+
+    // The relation's members, in OSM's declared order.
     repeated RelationMember relation_members = 17;
 }
 
 message RelationMember {
+  // Index into the pipeline's `tables::StringPool` for this member's role
+  // string (e.g. "outer", "inner", or "" if the member has no role).
   uint32 role = 1;
+
   // id = (osm_id * 10) + 1 for nodes; + 2 for ways; + 3 for relations.
   uint64 id = 2;
 }
 
-// An OpenStreetMap feature to be indexed. This is an internal, ephemeral
-// data structure: it only ever lives in files under the pipeline's scratch
-// working directory, and is never sent over the wire or stored long-term.
-// Field numbers are free to be renumbered as the message evolves.
+// An OpenStreetMap feature to be indexed. Like `Feature` above, this is an
+// internal, ephemeral data structure never sent over the wire or stored
+// long-term, so field numbers are free to be renumbered as it evolves.
 message FeatureToIndex {
     // S2 cell ID of the feature geometry's centroid. Numerically sorting by
     // this key clusters spatially nearby features together, since S2 cell
@@ -48,8 +80,8 @@ message FeatureToIndex {
 
     // Here would be a good place to store supplemental information
     // that is needed to find the closest match in OpenStreetMap
-    // for a query feature from AllThePlaces, but that should’t
-    // get copied into the finalm conflated output. For example,
+    // for a query feature from AllThePlaces, but that shouldn't
+    // get copied into the final conflated output. For example,
     // if we ever want to compute the Token Sort Ratio metric
     // for fuzzy matching of place names, add the pre-sorted
     // token IDs here.
