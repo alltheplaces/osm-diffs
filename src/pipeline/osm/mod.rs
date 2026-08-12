@@ -475,6 +475,15 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
     /// - `writingprogram` (tag 16, string)
     /// - `source` (tag 17, string)
     /// - `osmosis_replication_timestamp` (tag 32, int64)
+    ///
+    /// Deliberately not parsed: `osmosis_replication_sequence_number`
+    /// (tag 33, int64). `planet-dump-ng` -- which produces the actual
+    /// planet dumps we process (confirmed as of this writing, on the
+    /// dump timestamped 2026-07-27T15:16:41Z) -- never writes it; this
+    /// is a known, still-open upstream gap, blocked on figuring out
+    /// which `state.txt` sequence number a given dump corresponds to:
+    /// <https://github.com/zerebubuth/planet-dump-ng/issues/16>, blocked
+    /// on <https://github.com/zerebubuth/planet-dump-ng/issues/6>.
     fn parse_header_block(data: &[u8]) -> Result<PbfHeader> {
         const WRITING_PROGRAM: u32 = 16;
         const SOURCE: u32 = 17;
