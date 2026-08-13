@@ -300,9 +300,10 @@ impl ParquetWriter {
 }
 
 impl ParquetRow {
-    /// Replaces the old `TryFrom<ConflatedFeature>` -- unlike a `TryFrom`
-    /// impl, this can take the extra `osm_strings` parameter needed to
-    /// resolve an OSM `Feature`'s tag ids into actual strings.
+    /// Builds a `ParquetRow` from a matched (or unmatched) ATP/OSM pair.
+    /// An inherent function rather than a `TryFrom` impl so it can take
+    /// `osm_strings`, needed to resolve an OSM `Feature`'s tag ids into
+    /// actual strings.
     pub(super) fn from_conflated(
         cf: ConflatedFeature,
         osm_strings: &StringPool,
@@ -330,7 +331,7 @@ impl ParquetRow {
             let centroid = candidate
                 .geometry()?
                 .centroid()
-                .context("OSM feature geometry has no centroid")?;
+                .with_context(|| format!("OSM feature {} geometry has no centroid", feature.id))?;
             let ll = s2::latlng::LatLng::from_degrees(centroid.y(), centroid.x());
             s2::cellid::CellID::from(ll).0
         } else {
