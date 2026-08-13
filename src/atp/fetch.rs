@@ -1,5 +1,6 @@
 use crate::make_download_bar;
 use anyhow::{Context, Ok, Result, anyhow};
+use aws_lc_rs::digest::{Context as DigestContext, SHA256};
 use futures_util::StreamExt;
 use indicatif::MultiProgress;
 use reqwest::Client;
@@ -71,6 +72,16 @@ pub struct AtpMetadata {
 
     /// Size, in bytes, of `output.zip` as reported by AllThePlaces.
     pub size_bytes: u64,
+
+    /// SHA-256 of the downloaded `output.zip`, as lowercase hex --
+    /// computed by us, not reported by AllThePlaces. Unlike every other
+    /// field here, this is `None` for a candidate run fresh out of
+    /// `history.json` (nothing downloaded yet to hash) and only ever
+    /// `Some` once [`fetch_atp`] has actually downloaded and hashed the
+    /// file, right before persisting it. Absence isn't a sign of
+    /// distrust the way it would be for the other fields (see the
+    /// struct doc) -- it's just a different lifecycle stage.
+    pub sha256: Option<String>,
 }
 
 /// (De)serializes [`UtcDateTime`] as RFC 3339 strings, e.g.
@@ -127,7 +138,7 @@ async fn download_atp(
         .await
         .with_context(|| format!("Failed to create file {}", dest.display()))?;
 
-    let metadata = fetch_latest_run(client, url).await?;
+    let mut metadata = fetch_latest_run(client, url).await?;
     let response = client
         .get(&metadata.output_url)
         .timeout(Duration::from_secs(120))
@@ -139,8 +150,19 @@ async fn download_atp(
     let content_length = response.content_length();
     let mut stream = response.bytes_stream();
     let bar = make_download_bar(progress, "atp.fetch     ", content_length);
+    // SHA-256 of the downloaded bytes, via aws-lc-rs -- the same crypto
+    // library this crate already uses for TLS (see build_client() in
+    // main.rs) -- rather than a second, separate hashing implementation.
+    // Note: this build links aws-lc-sys (the general-purpose backend),
+    // not aws-lc-fips-sys, so this isn't running through AWS-LC's
+    // FIPS 140-3-validated module (see scripts/sbom/pipeline.jq's CBOM
+    // entry for that module's own certification) -- just the same
+    // non-FIPS-mode library, for one less dependency, not for FIPS
+    // compliance.
+    let mut hasher = DigestContext::new(&SHA256);
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.context("Error reading chunk from response stream")?;
+        hasher.update(&chunk);
         file.write_all(&chunk)
             .await
             .context("Failed to write chunk to disk")?;
@@ -149,9 +171,19 @@ async fn download_atp(
     file.flush()
         .await
         .with_context(|| format!("Failed to flush {}", dest.display()))?;
+    metadata.sha256 = Some(to_hex(hasher.finish().as_ref()));
     write_meta_json(&metadata, meta_json_dest).await?;
     bar.finish();
     Ok(metadata)
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    hex
 }
 
 /// Queries `history_url` (`history.json`) and returns the metadata for
@@ -271,6 +303,7 @@ fn parse_run(entry: &serde_json::Value, history_url: &str) -> Result<AtpMetadata
         spiders,
         total_lines,
         size_bytes,
+        sha256: None,
     })
 }
 
@@ -360,6 +393,13 @@ mod tests {
 
         assert!(path.exists());
         assert_eq!(tokio::fs::read(&path).await?, b"data");
+        // Independently-known SHA-256 of the literal bytes b"data" --
+        // verifies the actual digest, not just that some string ended
+        // up in the field.
+        assert_eq!(
+            metadata.sha256.as_deref(),
+            Some("3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7")
+        );
         assert_eq!(metadata.run_id, "2026-03-04-15-16-17");
         assert_eq!(metadata.output_url, output_url);
         assert_eq!(metadata.history_url, mock_history_url);
@@ -549,5 +589,21 @@ mod tests {
             .no_proxy()
             .build()
             .expect("failed to build test client")
+    }
+
+    #[test]
+    fn test_sha256_matches_nist_test_vector() {
+        // Exercises the exact same aws_lc_rs::digest call path
+        // download_atp() uses (DigestContext::new(&SHA256), .update(),
+        // .finish(), to_hex()), against SHA-256's standard "abc" test
+        // vector.
+        let mut hasher = DigestContext::new(&SHA256);
+        hasher.update(b"abc");
+        // Expected SHA-256("abc"), as per
+        // https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Standards-and-Guidelines/documents/examples/SHA256.pdf
+        assert_eq!(
+            to_hex(hasher.finish().as_ref()),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 }
