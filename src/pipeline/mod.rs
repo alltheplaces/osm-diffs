@@ -10,11 +10,11 @@ mod edits;
 mod geostats; // TODO: Move into crate::geometry?
 mod osm;
 
-// Only these two re-exported crate-wide (rather than making all of
+// Only these three re-exported crate-wide (rather than making all of
 // `osm` pub(crate)): crate::provenance needs them to assemble this
 // pipeline's provenance BOM, nothing outside `pipeline` needs the rest
 // of osm's API (BlobReader, Node/Way/Relation, import_osm, ...).
-pub(crate) use osm::{OsmMetadata, PLANET_PBF_FILENAME, read_header};
+pub(crate) use osm::{OsmMetadata, PLANET_PBF_FILENAME, read_cached_metadata};
 mod tiles;
 mod upload;
 

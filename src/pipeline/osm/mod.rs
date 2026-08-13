@@ -1,4 +1,5 @@
 use anyhow::{Context, Ok, Result, anyhow};
+use aws_lc_rs::digest::{Context as DigestContext, SHA256};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use protobuf_iter::MessageIter;
@@ -16,7 +17,8 @@ use time::UtcDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::coverage::Coverage;
-use crate::make_progress_bar;
+use crate::utils::to_hex;
+use crate::{make_download_bar, make_progress_bar};
 
 mod assemble;
 mod coords;
@@ -43,7 +45,7 @@ pub fn import_osm(
         return Ok((out_path, Box::new(store)));
     }
 
-    let pbf = fetch::fetch_planet(progress, workdir)?;
+    let (pbf, fetch_metadata) = fetch::fetch_planet(progress, workdir)?;
     let pbf_error = || format!("could not open file `{:?}`", pbf);
     let mut file = File::open(&pbf).with_context(pbf_error)?;
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
@@ -55,7 +57,8 @@ pub fn import_osm(
     log::info!(
         replication_timestamp = replication_timestamp.as_str(),
         source = header.source.as_deref(),
-        writing_program = header.writing_program.as_deref();
+        writing_program = header.writing_program.as_deref(),
+        sha256 = fetch_metadata.sha256.as_deref();
         "opened OpenStreetMap planet file"
     );
 
@@ -258,11 +261,23 @@ pub(crate) const PLANET_PBF_FILENAME: &str = "planet-latest.osm.pbf";
 /// OpenStreetMap replication state the data corresponds to, and what
 /// produced the file. Lets us embed the provenance of our input data
 /// into our output files.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OsmMetadata {
+    #[serde(with = "crate::utils::rfc3339")]
     pub replication_timestamp: UtcDateTime,
     pub source: Option<String>,
     pub writing_program: Option<String>,
+
+    /// SHA-256 of the downloaded planet file, as lowercase hex --
+    /// computed by us, not reported by OpenStreetMap. `None` for a
+    /// value built by `parse_header_block`/`read_header` (which only
+    /// ever reads the small `OSMHeader` block, not the rest of the
+    /// file -- there's no hash to give); `Some` only for the value
+    /// `compute_and_persist_metadata` builds after actually hashing the
+    /// whole file. Same shape as `AtpMetadata::sha256`, for an
+    /// analogous reason: this struct is used both before and after the
+    /// point where a hash becomes available.
+    pub sha256: Option<String>,
 }
 
 /// Reads just the `OSMHeader` block from the very start of a PBF file --
@@ -291,6 +306,78 @@ pub fn read_header(path: &Path) -> Result<OsmMetadata> {
     let offset = 4_u64 + (blob_header.len() as u64);
     let blob = BlobReader::<File>::read_blob(&mut file, offset, data_size)?;
     BlobReader::<File>::parse_header_block(&blob.into_data())
+}
+
+/// Filename, within `workdir`, that [`compute_and_persist_metadata`]
+/// persists a fully-populated [`OsmMetadata`] (including `sha256`) to.
+/// Derived from [`PLANET_PBF_FILENAME`] rather than a separate literal,
+/// so it can't drift if that ever changes again (see #648).
+fn meta_json_path(workdir: &Path) -> PathBuf {
+    workdir.join(format!("{PLANET_PBF_FILENAME}.meta.json"))
+}
+
+/// Reads back the [`OsmMetadata`] persisted for a prior
+/// `fetch::fetch_planet` call in `workdir`.
+pub(crate) fn read_cached_metadata(workdir: &Path) -> Result<OsmMetadata> {
+    let path = meta_json_path(workdir);
+    let data = std::fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    serde_json::from_str(&data).with_context(|| format!("Failed to parse {}", path.display()))
+}
+
+/// Computes a fully-populated [`OsmMetadata`] for a freshly downloaded
+/// planet file at `pbf_path` -- its header (cheap, via [`read_header`])
+/// and the SHA-256 of its entire contents (not cheap: one dedicated
+/// sequential read pass over the whole file, see [`hash_file`]) -- and
+/// persists it to `workdir`, so a later call in the same `workdir` reads
+/// it back via [`read_cached_metadata`] instead of re-hashing.
+pub(crate) fn compute_and_persist_metadata(
+    pbf_path: &Path,
+    workdir: &Path,
+    progress: &MultiProgress,
+) -> Result<OsmMetadata> {
+    let header = read_header(pbf_path)?;
+    let sha256 = hash_file(pbf_path, progress)?;
+    let metadata = OsmMetadata {
+        sha256: Some(sha256),
+        ..header
+    };
+    let path = meta_json_path(workdir);
+    let data = serde_json::to_string(&metadata)?;
+    std::fs::write(&path, &data).with_context(|| format!("Failed to write {}", path.display()))?;
+    Ok(metadata)
+}
+
+/// Reads `path` sequentially in fixed-size chunks and returns its
+/// SHA-256 as lowercase hex, via the same `aws_lc_rs` crypto library
+/// this crate already uses for TLS (see `build_client()` in
+/// `main.rs`), not a second, separate hashing implementation.
+///
+/// Deliberately a plain buffered read, not `memmap2::Mmap` (which this
+/// crate does use elsewhere, e.g. for the AllThePlaces zip): `path`
+/// here is the OSM planet dump, tens of GB, and mmap'ing something that
+/// large risks inflating RSS/page-cache accounting in ways that could
+/// trip this pipeline's own cgroup memory-limit warnings (see
+/// `crate::memstats`) for no benefit -- a small fixed buffer keeps
+/// memory flat regardless of file size.
+fn hash_file(path: &Path, progress: &MultiProgress) -> Result<String> {
+    let mut file = File::open(path).with_context(|| format!("could not open file `{:?}`", path))?;
+    let len = file.metadata().map(|m| m.len()).ok();
+    let bar = make_download_bar(progress, "osm.hash      ", len);
+    let mut hasher = DigestContext::new(&SHA256);
+    let mut buf = vec![0u8; 8 * 1024 * 1024]; // 8 MiB
+    loop {
+        let n = file
+            .read(&mut buf)
+            .with_context(|| format!("could not read file `{:?}`", path))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+        bar.inc(n as u64);
+    }
+    bar.finish();
+    Ok(to_hex(hasher.finish().as_ref()))
 }
 
 /// Reads data blobs from OpenStreetMap PBF files.
@@ -555,6 +642,7 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
                 .ok_or_else(|| anyhow!("OSMHeader block has no osmosis_replication_timestamp"))?,
             source,
             writing_program,
+            sha256: None,
         })
     }
 }

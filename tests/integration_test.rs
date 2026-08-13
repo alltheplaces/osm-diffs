@@ -24,6 +24,18 @@ fn test_pipeline() -> Result<()> {
     osm.push("tests/test_data/zugerland.osm.pbf");
     symlink(&osm, workdir.path().join("planet-latest.osm.pbf"))?;
 
+    // fetch_planet() requires the metadata sidecar alongside a
+    // pre-existing planet-latest.osm.pbf (see OsmMetadata in
+    // src/pipeline/osm/mod.rs), analogous to alltheplaces.meta.json
+    // above -- otherwise it would try to download a fresh copy from
+    // OSM's torrent.
+    let mut osm_meta = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    osm_meta.push("tests/test_data/planet-latest.osm.pbf.meta.json");
+    symlink(
+        &osm_meta,
+        workdir.path().join("planet-latest.osm.pbf.meta.json"),
+    )?;
+
     Command::new(cargo_bin!("osm-diffs"))
         .arg("run")
         .arg("--workdir")

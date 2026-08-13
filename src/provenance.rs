@@ -8,7 +8,7 @@
 //!
 //! Reads each input source's metadata straight back from `workdir` --
 //! [`AtpMetadata`] via [`crate::atp::read_cached_metadata`],
-//! [`OsmMetadata`] via [`crate::pipeline::read_header`] -- rather than
+//! [`OsmMetadata`] via [`crate::pipeline::read_cached_metadata`] -- rather than
 //! having it threaded through from `import_atp`/`import_osm`'s return
 //! values, so this stays decoupled from however those importers (and
 //! whatever indexing they feed into) end up wired together.
@@ -104,9 +104,8 @@ pub fn build_bom_for_conflated_parquet(
 ) -> Result<Value> {
     let atp_metadata =
         atp::read_cached_metadata(workdir).context("could not read AllThePlaces provenance")?;
-    let osm_planet = workdir.join(pipeline::PLANET_PBF_FILENAME);
-    let osm_metadata =
-        pipeline::read_header(&osm_planet).context("could not read OpenStreetMap provenance")?;
+    let osm_metadata = pipeline::read_cached_metadata(workdir)
+        .context("could not read OpenStreetMap provenance")?;
 
     let run_timestamp = format_rfc3339(UtcDateTime::now());
     let start_timestamp = format_rfc3339(pipeline_start_time);
@@ -127,7 +126,7 @@ pub fn build_bom_for_conflated_parquet(
         },
         "components": [
             atp_component(&atp_metadata)?,
-            osm_component(&osm_metadata),
+            osm_component(&osm_metadata)?,
         ],
         // Declares conflated.parquet's two inputs as *its* dependencies,
         // so the dependency graph has a single root (conflated.parquet)
@@ -224,9 +223,18 @@ fn atp_component(atp: &AtpMetadata) -> Result<Value> {
     }))
 }
 
-fn osm_component(osm: &OsmMetadata) -> Value {
+fn osm_component(osm: &OsmMetadata) -> Result<Value> {
     let replication_timestamp = format_rfc3339(osm.replication_timestamp);
-    json!({
+    // Always Some by the time this runs: import_osm (which computes it,
+    // see OsmMetadata::sha256's doc comment) is a prerequisite pipeline
+    // step that always runs before conflate. Erroring rather than
+    // falling back to a placeholder if it's ever missing -- e.g. a
+    // workdir left over from before this field existed -- matches how
+    // atp_component treats AtpMetadata::sha256.
+    let sha256 = osm.sha256.as_deref().context(
+        "OpenStreetMap metadata has no sha256 (workdir from an older osm-diffs version?)",
+    )?;
+    Ok(json!({
         // Reference PLANET_PBF_FILENAME rather than a literal, so this
         // can't drift from the file's actual local name (see #648 for a
         // proposal to rename it to match upstream's own convention).
@@ -237,16 +245,15 @@ fn osm_component(osm: &OsmMetadata) -> Value {
         "supplier": osm_supplier(),
         "licenses": license("ODbL-1.0", ODBL_URL),
         "copyright": OSM_COPYRIGHT,
-        // TODO(#646): checksum is a placeholder until we compute a real
-        // SHA-256 hash of the downloaded .osm.pbf; the purl is invalid
-        // until then, expected to be fixed before this ever runs in
-        // production.
-        "purl": format!("pkg:generic/openstreetmap/planet@{replication_timestamp}?checksum=sha256:TODO"),
+        "hashes": [{"alg": "SHA-256", "content": sha256}],
+        "purl": format!(
+            "pkg:generic/openstreetmap/planet@{replication_timestamp}?checksum=sha256:{sha256}"
+        ),
         "data": [{"type": "dataset"}],
         "externalReferences": [
             license_external_reference(ODBL_URL),
         ],
-    })
+    }))
 }
 
 /// Ties `tool_component()`, the two input `*_component()`s, and
@@ -311,6 +318,19 @@ mod tests {
         let mut pbf_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         pbf_path.push("tests/test_data/zugerland.osm.pbf");
         std::os::unix::fs::symlink(&pbf_path, workdir.join(pipeline::PLANET_PBF_FILENAME))?;
+        // read_cached_metadata reads this sidecar rather than re-hashing
+        // zugerland.osm.pbf on every test run; sha256 is that file's
+        // real SHA-256 (`shasum -a 256 tests/test_data/zugerland.osm.pbf`),
+        // the other fields match test_blob_reader's known values for it.
+        fs::write(
+            workdir.join(format!("{}.meta.json", pipeline::PLANET_PBF_FILENAME)),
+            r#"{
+                "replication_timestamp": "2026-01-27T08:11:02Z",
+                "source": null,
+                "writing_program": "osmx",
+                "sha256": "56e12b62871018c7a969c9924bcfb1bdce15676bee706156260f101db809b9e1"
+            }"#,
+        )?;
         Ok(())
     }
 
@@ -390,9 +410,15 @@ mod tests {
         assert_eq!(osm["licenses"][0]["license"]["id"], "ODbL-1.0");
         assert_eq!(osm["licenses"][0]["license"]["url"], ODBL_URL);
         assert_eq!(osm["copyright"], OSM_COPYRIGHT);
+        assert_eq!(osm["hashes"][0]["alg"], "SHA-256");
+        assert_eq!(
+            osm["hashes"][0]["content"],
+            "56e12b62871018c7a969c9924bcfb1bdce15676bee706156260f101db809b9e1"
+        );
         assert_eq!(
             osm["purl"],
-            "pkg:generic/openstreetmap/planet@2026-01-27T08:11:02Z?checksum=sha256:TODO"
+            "pkg:generic/openstreetmap/planet@2026-01-27T08:11:02Z?checksum=sha256:\
+             56e12b62871018c7a969c9924bcfb1bdce15676bee706156260f101db809b9e1"
         );
 
         // Single-rooted dependency graph: conflated.parquet depends on

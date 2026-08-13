@@ -1,4 +1,5 @@
 use crate::make_download_bar;
+use crate::utils::to_hex;
 use anyhow::{Context, Ok, Result, anyhow};
 use aws_lc_rs::digest::{Context as DigestContext, SHA256};
 use futures_util::StreamExt;
@@ -56,11 +57,11 @@ pub struct AtpMetadata {
     pub history_url: String,
 
     /// When AllThePlaces started running the spiders for this run.
-    #[serde(with = "rfc3339")]
+    #[serde(with = "crate::utils::rfc3339")]
     pub start_time: UtcDateTime,
 
     /// When AllThePlaces finished running the spiders for this run.
-    #[serde(with = "rfc3339")]
+    #[serde(with = "crate::utils::rfc3339")]
     pub end_time: UtcDateTime,
 
     /// Number of spiders (individual data sources) included in this run.
@@ -82,24 +83,6 @@ pub struct AtpMetadata {
     /// distrust the way it would be for the other fields (see the
     /// struct doc) -- it's just a different lifecycle stage.
     pub sha256: Option<String>,
-}
-
-/// (De)serializes [`UtcDateTime`] as RFC 3339 strings, e.g.
-/// "2026-03-04T15:16:17Z". `time`'s own `serde` feature would do this for
-/// us, but isn't enabled in this crate; this is small enough not to be
-/// worth the extra dependency surface.
-mod rfc3339 {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error as _, ser::Error as _};
-    use time::{UtcDateTime, format_description::well_known::Rfc3339};
-
-    pub fn serialize<S: Serializer>(t: &UtcDateTime, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&t.format(&Rfc3339).map_err(S::Error::custom)?)
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<UtcDateTime, D::Error> {
-        let text = String::deserialize(d)?;
-        UtcDateTime::parse(&text, &Rfc3339).map_err(D::Error::custom)
-    }
 }
 
 pub async fn fetch_atp(
@@ -175,15 +158,6 @@ async fn download_atp(
     write_meta_json(&metadata, meta_json_dest).await?;
     bar.finish();
     Ok(metadata)
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut hex = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        write!(hex, "{byte:02x}").expect("writing to a String cannot fail");
-    }
-    hex
 }
 
 /// Queries `history_url` (`history.json`) and returns the metadata for
