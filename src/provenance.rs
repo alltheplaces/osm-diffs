@@ -146,6 +146,10 @@ fn atp_component(atp: &AtpMetadata) -> Value {
         "name": "alltheplaces",
         "version": &start_time,
         "supplier": supplier(),
+        // Using AllThePlaces data in OpenStreetMap (this pipeline's
+        // purpose) was discussed with -- and not objected to by -- the
+        // OSM Foundation's Licensing Working Group:
+        // https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources
         "licenses": license("CC0-1.0"),
         // TODO(#646): checksum is a placeholder until we compute a real
         // SHA-256 hash of the downloaded zip; the purl is invalid until
