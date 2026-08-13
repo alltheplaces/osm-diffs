@@ -18,8 +18,16 @@ use std::{
         mpsc::{Receiver, SyncSender, sync_channel},
     },
     thread,
+    time::{Duration, Instant},
 };
 use time::UtcDateTime;
+
+/// How often [produce_rows] logs a progress/memory snapshot while
+/// running -- a wall-clock interval, not a feature count, since what
+/// matters here is watching RSS/page-cache behavior *over time* as this
+/// repeatedly queries and decodes from `OsmFeatureIndex`'s mmap'd
+/// tables, not RSS at a fixed fraction of progress.
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
 mod writer;
 use writer::{ParquetRow, ParquetWriter};
@@ -90,12 +98,29 @@ fn produce_rows(
         level_mod: 1,
     };
 
+    let start = Instant::now();
+    let atp_features_processed = AtomicU64::new(0);
+    let osm_candidates_decoded = AtomicU64::new(0);
+    // Wall-clock timestamp (millis since `start`) of the last progress
+    // log line, so concurrent workers can race on a compare_exchange to
+    // decide who logs next -- occasionally missing or double-logging a
+    // snapshot at the boundary is fine for a diagnostic like this.
+    let last_progress_log_ms = AtomicU64::new(0);
+
     for group in atp_index.scan_row_groups() {
         // Each group is processed by the Rayon thread pool in parallel,
         // but the outer loop is sequential — so nearby places (within a
         // group) always go to nearby workers, preserving spatial locality.
         group?.par_iter().try_for_each(|atp| {
             progress_bar.inc(1);
+            atp_features_processed.fetch_add(1, Ordering::Relaxed);
+            maybe_log_progress(start, &last_progress_log_ms, || {
+                (
+                    atp_features_processed.load(Ordering::Relaxed),
+                    osm_candidates_decoded.load(Ordering::Relaxed),
+                )
+            });
+
             let Some(matcher) = create_matcher(atp) else {
                 return Ok(());
             };
@@ -115,6 +140,7 @@ fn produce_rows(
             for (lo, hi) in MergedCellRanges::new(covering) {
                 for r in osm.index.query(lo..=hi, atp.mask) {
                     let feature = osm.index.get_feature(r)?;
+                    osm_candidates_decoded.fetch_add(1, Ordering::Relaxed);
                     let candidate = OsmCandidate {
                         feature: &feature,
                         strings: &osm.strings,
@@ -135,7 +161,57 @@ fn produce_rows(
     }
 
     progress_bar.finish();
+    log::info!(
+        elapsed_seconds = start.elapsed().as_secs_f64(),
+        atp_features_processed = atp_features_processed.load(Ordering::Relaxed),
+        osm_candidates_decoded = osm_candidates_decoded.load(Ordering::Relaxed);
+        "conflate.match: done"
+    );
     Ok(())
+}
+
+/// Logs a `conflate.match: progress` snapshot (elapsed time, the two
+/// counts from `counts`, and a `crate::memstats` snapshot -- `rss_bytes`/
+/// `rss_file_bytes` in particular, since that's where resident pages of
+/// `OsmFeatureIndex`'s mmap'd tables are expected to show up) at most
+/// once per [PROGRESS_LOG_INTERVAL], across however many parallel
+/// callers race to call this. `counts` is a closure, not plain
+/// arguments, so the (relaxed, so individually cheap) atomic loads to
+/// build it only happen on the rare call that actually ends up logging.
+fn maybe_log_progress(
+    start: Instant,
+    last_log_ms: &AtomicU64,
+    counts: impl FnOnce() -> (u64, u64),
+) {
+    let now_ms = start.elapsed().as_millis() as u64;
+    let last = last_log_ms.load(Ordering::Relaxed);
+    let interval_ms = PROGRESS_LOG_INTERVAL.as_millis() as u64;
+    if now_ms.saturating_sub(last) < interval_ms {
+        return;
+    }
+    if last_log_ms
+        .compare_exchange(last, now_ms, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return; // another thread already logged this interval
+    }
+
+    let (atp_features_processed, osm_candidates_decoded) = counts();
+    let stats = crate::memstats::snapshot();
+    log::info!(
+        elapsed_seconds = start.elapsed().as_secs_f64(),
+        atp_features_processed = atp_features_processed,
+        osm_candidates_decoded = osm_candidates_decoded,
+        rss_bytes = stats.rss_bytes,
+        rss_peak_bytes = stats.rss_peak_bytes,
+        rss_anon_bytes = stats.rss_anon_bytes,
+        rss_file_bytes = stats.rss_file_bytes,
+        rss_shmem_bytes = stats.rss_shmem_bytes,
+        cgroup_current_bytes = stats.cgroup_current_bytes,
+        cgroup_max_bytes = stats.cgroup_max_bytes,
+        cgroup_peak_bytes = stats.cgroup_peak_bytes;
+        "conflate.match: progress"
+    );
 }
 
 fn write_conflated(
@@ -146,6 +222,7 @@ fn write_conflated(
     pipeline_run_id: &str,
     pipeline_start_time: UtcDateTime,
 ) -> Result<()> {
+    let start = Instant::now();
     let row_count = AtomicU64::new(0);
     let sorter: ExternalSorter<ParquetRow, std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
@@ -172,5 +249,10 @@ fn write_conflated(
     }
     writer.close()?;
     progress.finish();
+    log::info!(
+        elapsed_seconds = start.elapsed().as_secs_f64(),
+        rows_written = row_count.load(Ordering::SeqCst);
+        "conflate.write: done"
+    );
     Ok(())
 }
