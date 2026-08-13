@@ -57,7 +57,8 @@ pub async fn import_atp(
         end_time = atp_end_time.as_str(),
         spiders = atp_metadata.spiders,
         total_lines = atp_metadata.total_lines,
-        size_bytes = atp_metadata.size_bytes;
+        size_bytes = atp_metadata.size_bytes,
+        sha256 = atp_metadata.sha256.as_deref();
         "fetched AllThePlaces dump"
     );
 

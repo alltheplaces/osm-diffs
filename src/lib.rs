@@ -12,6 +12,7 @@ mod places;
 mod provenance;
 mod s2_util;
 mod tables;
+mod utils;
 
 // Re-exported for main.rs.
 pub use pipeline::run_pipeline;
