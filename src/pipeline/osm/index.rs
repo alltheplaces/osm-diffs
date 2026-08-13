@@ -43,6 +43,7 @@ pub fn build_index<'a>(
     out: &Path,
 ) -> Result<OsmFeatureIndex<'a>> {
     if OsmFeatureIndex::exists(out) {
+        log::info!("skipping OsmFeatureIndex build, already found {:?}", out);
         return OsmFeatureIndex::open(out);
     }
 
