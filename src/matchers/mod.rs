@@ -1,12 +1,21 @@
 //! Logic for matching AllThePlaces with OpenStreetMap features.
 
 use crate::places::Place;
+use crate::tables::{Feature, StringPool};
+use anyhow::{Context, Result};
 use deepsize::DeepSizeOf;
+use geo_traits::to_geo::ToGeoGeometry;
 use s2::{cellid::CellID, point::Point, s1::ChordAngle};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
+use wkb::reader::read_wkb;
 
 mod poi_matcher;
+
+/// Mean Earth radius, in meters -- used throughout this module to turn
+/// S2 `Angle`s (dimensionless, on the unit sphere) into real-world
+/// distances.
+const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
 
 /// A bitmask to speed up the matching of AllThePlaces with OpenStreetMap.
 ///
@@ -233,17 +242,62 @@ static LARGE_DISTANCE: LazyLock<ChordAngle> = LazyLock::new(|| meters_to_chord_a
 
 fn meters_to_chord_angle(radius_meters: f64) -> ChordAngle {
     use s2::s1::angle::{Angle, Rad};
-    const EARTH_RADIUS_METERS: f64 = 6_371_000.0;
     ChordAngle::from(Angle::from(Rad(radius_meters / EARTH_RADIUS_METERS)))
 }
 
-/// Trait for objects that can score a `Place`.
+/// An OpenStreetMap feature under consideration as a match candidate.
+/// Kept as its own type (rather than threading `&Feature`/`&StringPool`
+/// through `Matcher` separately) so a future hydration step -- for
+/// derived data that's *not* cheap to recompute on every access, e.g. a
+/// decoded `geo::Geometry` for Hausdorff-distance scoring, or a
+/// pre-tokenized name for Token Sort Ratio matching -- can attach fields
+/// here without another trait-signature change.
+#[allow(unused)]
+pub struct OsmCandidate<'a> {
+    pub feature: &'a Feature,
+    pub strings: &'a StringPool<'a>,
+}
+
+#[allow(unused)]
+impl<'a> OsmCandidate<'a> {
+    /// Decodes `feature.tags` -- flat `[key_id, value_id, ...]` pairs of
+    /// `StringPool` indices -- into `(key, value)` string pairs. Cheap: a
+    /// handful of string-pool lookups.
+    pub fn tags(&self) -> impl Iterator<Item = (&'a str, &'a str)> + '_ {
+        self.feature.tags.chunks_exact(2).map(move |kv| {
+            (
+                self.strings.get(kv[0] as usize),
+                self.strings.get(kv[1] as usize),
+            )
+        })
+    }
+
+    /// Decodes `feature.geometry_wkb` into a `geo::Geometry`. Not cheap
+    /// -- allocates real nested structures, non-trivially so for a
+    /// complex polygon -- so callers should only do this when they
+    /// actually need the shape (e.g. to compute a centroid for distance
+    /// scoring), not on every candidate unconditionally.
+    pub fn geometry(&self) -> Result<geo::Geometry<f64>> {
+        Ok(read_wkb(&self.feature.geometry_wkb)
+            .context("failed to decode feature geometry")?
+            .to_geometry())
+    }
+}
+
+/// Trait for objects that can score a match candidate.
 pub trait Matcher {
     /// Returns a score between 0.0 and 1.0 indicating how well the place matches.
     /// A high score means a good match; 0.0 means the place is clearly not a match.
     fn score(&self, place: &Place) -> f64;
 
     fn suggest_edit(&self, osm_feature: &Place) -> Option<Place>;
+
+    /// Like `score`, but against an [OsmCandidate] backed by the new,
+    /// geometry-aware `OsmFeatureIndex` path instead of `Place`. Landing
+    /// alongside `score`/`suggest_edit` rather than replacing them, as
+    /// part of a staged migration of OSM-side matching off `Place`.
+    #[allow(unused)]
+    fn score_osm_candidate(&self, candidate: &OsmCandidate) -> f64;
 }
 
 /// Construct a matcher for a given AllThePlaces feature.
@@ -265,11 +319,34 @@ pub fn create_matcher(place: &Place) -> Option<Box<dyn Matcher + '_>> {
 
 fn distance(pt: &Point, place: &Place) -> f64 {
     let pt2 = Point(CellID(place.s2_cell_id).raw_point().normalize());
-    pt.distance(&pt2).rad() * 6_371_000.0
+    pt.distance(&pt2).rad() * EARTH_RADIUS_METERS
 }
 
 fn distance_score(pt: &Point, place: &Place, max_meters: f64) -> f64 {
     let dist = distance(pt, place);
+    if dist <= max_meters {
+        (max_meters - dist) / max_meters
+    } else {
+        0.0
+    }
+}
+
+/// Like `distance`, but against a plain geographic point (longitude,
+/// latitude) instead of a `Place`'s stored S2 cell -- `Feature` (unlike
+/// `Place`) doesn't carry a precomputed position, so callers scoring an
+/// [OsmCandidate] compute one themselves (e.g. a decoded geometry's
+/// centroid) and pass it in here.
+#[allow(unused)]
+fn geo_point_distance(pt: &Point, geo_pt: &geo::Point<f64>) -> f64 {
+    let ll = s2::latlng::LatLng::from_degrees(geo_pt.y(), geo_pt.x());
+    let pt2 = Point::from(ll);
+    pt.distance(&pt2).rad() * EARTH_RADIUS_METERS
+}
+
+/// Like `distance_score`, but for [geo_point_distance].
+#[allow(unused)]
+fn geo_point_distance_score(pt: &Point, geo_pt: &geo::Point<f64>, max_meters: f64) -> f64 {
+    let dist = geo_point_distance(pt, geo_pt);
     if dist <= max_meters {
         (max_meters - dist) / max_meters
     } else {
@@ -288,6 +365,9 @@ fn parse_wikidata_id(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use s2::{cell::Cell, latlng::LatLng};
+    use tempfile::TempDir;
+    use wkb::writer::{WriteOptions, write_point};
 
     #[test]
     fn test_match_distance() {
@@ -297,5 +377,97 @@ mod tests {
         mask.add_tag("amenity", "bench");
         mask.add_tag("shop", "yes");
         assert!(match_distance(&mask) == match_distance(&MatchMask::SHOP));
+    }
+
+    const WKB_OPTS: WriteOptions = WriteOptions {
+        endianness: wkb::Endianness::LittleEndian,
+    };
+
+    #[test]
+    fn osm_candidate_tags_decodes_string_pool_indices() {
+        let dir = TempDir::new().expect("tempdir");
+        let strings = ["shop", "clothes", "brand", "New Yorker"];
+        let pool = StringPool::create(
+            strings.iter().map(|s| s.to_string()),
+            dir.path(),
+            &dir.path().join("strings"),
+        )
+        .expect("StringPool::create");
+
+        let feature = Feature {
+            id: 1,
+            tags: vec![
+                pool.lookup("shop").unwrap() as u32,
+                pool.lookup("clothes").unwrap() as u32,
+                pool.lookup("brand").unwrap() as u32,
+                pool.lookup("New Yorker").unwrap() as u32,
+            ],
+            ..Default::default()
+        };
+        let candidate = OsmCandidate {
+            feature: &feature,
+            strings: &pool,
+        };
+        let tags: Vec<(&str, &str)> = candidate.tags().collect();
+        assert_eq!(tags, vec![("shop", "clothes"), ("brand", "New Yorker")]);
+    }
+
+    #[test]
+    fn osm_candidate_geometry_decodes_wkb() {
+        let dir = TempDir::new().expect("tempdir");
+        let pool = StringPool::create(std::iter::empty(), dir.path(), &dir.path().join("strings"))
+            .expect("StringPool::create");
+
+        let mut geometry_wkb = Vec::new();
+        write_point(
+            &mut geometry_wkb,
+            &geo::Point::new(7.4478123, 46.9479801),
+            &WKB_OPTS,
+        )
+        .expect("wkb encode");
+        let feature = Feature {
+            id: 1,
+            geometry_wkb,
+            ..Default::default()
+        };
+        let candidate = OsmCandidate {
+            feature: &feature,
+            strings: &pool,
+        };
+
+        match candidate.geometry().expect("geometry decode") {
+            geo::Geometry::Point(p) => {
+                assert!((p.x() - 7.4478123).abs() < 1e-6);
+                assert!((p.y() - 46.9479801).abs() < 1e-6);
+            }
+            other => panic!("expected a point, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osm_candidate_geometry_rejects_invalid_wkb() {
+        let dir = TempDir::new().expect("tempdir");
+        let pool = StringPool::create(std::iter::empty(), dir.path(), &dir.path().join("strings"))
+            .expect("StringPool::create");
+        let feature = Feature {
+            id: 1,
+            geometry_wkb: vec![0xff, 0x00, 0x01],
+            ..Default::default()
+        };
+        let candidate = OsmCandidate {
+            feature: &feature,
+            strings: &pool,
+        };
+        assert!(candidate.geometry().is_err());
+    }
+
+    #[test]
+    fn geo_point_distance_score_close_vs_far() {
+        let center = Cell::from(CellID::from(LatLng::from_degrees(46.9479801, 7.4478123))).center();
+        let close = geo::Point::new(7.4478123, 46.9479801); // same spot
+        let far = geo::Point::new(-122.4194, 37.7749); // San Francisco
+
+        assert!(geo_point_distance_score(&center, &close, 400.0) > 0.99);
+        assert_eq!(geo_point_distance_score(&center, &far, 400.0), 0.0);
     }
 }

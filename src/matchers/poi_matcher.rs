@@ -1,7 +1,20 @@
-use super::{MatchMask, Matcher, distance_score, parse_wikidata_id};
+use super::{
+    MatchMask, Matcher, OsmCandidate, distance_score, geo_point_distance_score, parse_wikidata_id,
+};
 use crate::places::Place;
+use geo::Centroid;
 use s2::{cell::Cell, cellid::CellID, point::Point};
 use std::collections::HashMap;
+
+/// Finds the first `brand:wikidata` tag in `tags` and parses its value.
+/// Shared by `for_place`, `score`, and `score_osm_candidate` -- same
+/// lookup, three different tag representations (`Place.tags`,
+/// `Place.tags` again, and `OsmCandidate::tags()`).
+fn find_brand_wikidata<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Option<u64> {
+    tags.into_iter()
+        .find(|&(k, _)| k == "brand:wikidata")
+        .and_then(|(_, v)| parse_wikidata_id(v))
+}
 
 pub struct PoiMatcher<'a> {
     atp_place: &'a Place,
@@ -18,24 +31,14 @@ impl<'a> PoiMatcher<'a> {
         if !place.mask.intersects(&MatchMask::SHOP) {
             return None;
         }
-        let mut brand_wikidata: Option<u64> = None;
-        for (k, v) in place.tags.iter() {
-            if k.as_str() == "brand:wikidata" {
-                brand_wikidata = parse_wikidata_id(v);
-                break;
-            }
-        }
-
-        if let Some(brand_wikidata) = brand_wikidata {
-            let center = Cell::from(CellID(place.s2_cell_id)).center();
-            Some(PoiMatcher {
-                atp_place: place,
-                center,
-                brand_wikidata,
-            })
-        } else {
-            None
-        }
+        let tags = place.tags.iter().map(|(k, v)| (k.as_str(), v.as_str()));
+        let brand_wikidata = find_brand_wikidata(tags)?;
+        let center = Cell::from(CellID(place.s2_cell_id)).center();
+        Some(PoiMatcher {
+            atp_place: place,
+            center,
+            brand_wikidata,
+        })
     }
 
     /// Tells whether we trust an AllThePlaces tag enough to suggest an OpenStreetMap edit.
@@ -54,20 +57,26 @@ impl<'a> PoiMatcher<'a> {
 
 impl<'a> Matcher for PoiMatcher<'a> {
     fn score(&self, candidate: &Place) -> f64 {
-        let mut candidate_brand_wikidata: Option<u64> = None;
-        for (k, v) in candidate.tags.iter() {
-            if k.as_str() == "brand:wikidata" {
-                candidate_brand_wikidata = parse_wikidata_id(v);
-                break;
-            }
+        let tags = candidate.tags.iter().map(|(k, v)| (k.as_str(), v.as_str()));
+        if find_brand_wikidata(tags) != Some(self.brand_wikidata) {
+            return 0.0;
         }
+        distance_score(&self.center, candidate, 400.0)
+    }
 
-        let distance_score = distance_score(&self.center, candidate, 400.0);
-        if Some(self.brand_wikidata) == candidate_brand_wikidata {
-            distance_score
-        } else {
-            0.0
+    fn score_osm_candidate(&self, candidate: &OsmCandidate) -> f64 {
+        // Cheap check first: only decode the (potentially large) geometry
+        // for candidates that actually match on brand.
+        if find_brand_wikidata(candidate.tags()) != Some(self.brand_wikidata) {
+            return 0.0;
         }
+        let Result::Ok(geometry) = candidate.geometry() else {
+            return 0.0;
+        };
+        let Some(centroid) = geometry.centroid() else {
+            return 0.0;
+        };
+        geo_point_distance_score(&self.center, &centroid, 400.0)
     }
 
     // TODO: This is not really a Matcher task. Move this elsewhere,
@@ -220,5 +229,86 @@ mod tests {
         assert!(ch_clothes_matcher.score(&CH_KIOSK_OSM) == 0.0);
         assert!(ch_kiosk_matcher.score(&CH_CLOTHES_OSM) == 0.0);
         assert!(ch_kiosk_matcher.score(&CH_KIOSK_OSM) > 0.5);
+    }
+
+    /// Same scenario as `test_poi_matcher`, ported to the new
+    /// `OsmCandidate` path: same brands, same real-world positions
+    /// (reused from `CH_CLOTHES_OSM`/`CH_KIOSK_OSM`'s `s2_cell_id`s, so
+    /// this exercises `score_osm_candidate`'s WKB-decode-then-centroid
+    /// distance computation against genuine coordinates, not synthetic
+    /// ones), but as a `Feature` + `StringPool` instead of a `Place`.
+    #[test]
+    fn test_poi_matcher_osm_candidate() {
+        use crate::tables::{Feature, StringPool};
+        use s2::{cellid::CellID, latlng::LatLng};
+        use tempfile::TempDir;
+        use wkb::writer::{WriteOptions, write_point};
+
+        const WKB_OPTS: WriteOptions = WriteOptions {
+            endianness: wkb::Endianness::LittleEndian,
+        };
+
+        let dir = TempDir::new().expect("tempdir");
+        let strings = [
+            "brand:wikidata",
+            "Q706421",
+            "shop",
+            "clothes",
+            "Q60381703",
+            "kiosk",
+        ];
+        let pool = StringPool::create(
+            strings.iter().map(|s| s.to_string()),
+            dir.path(),
+            &dir.path().join("strings"),
+        )
+        .expect("StringPool::create");
+
+        let make_feature = |tags: &[(&str, &str)], s2_cell_id: u64| -> Feature {
+            let mut flat_tags = Vec::with_capacity(tags.len() * 2);
+            for (k, v) in tags {
+                flat_tags.push(pool.lookup(k).expect("key in pool") as u32);
+                flat_tags.push(pool.lookup(v).expect("value in pool") as u32);
+            }
+            let ll = LatLng::from(CellID(s2_cell_id));
+            let mut geometry_wkb = Vec::new();
+            write_point(
+                &mut geometry_wkb,
+                &geo::Point::new(ll.lng.deg(), ll.lat.deg()),
+                &WKB_OPTS,
+            )
+            .expect("wkb encode");
+            Feature {
+                id: 1,
+                tags: flat_tags,
+                geometry_wkb,
+                ..Default::default()
+            }
+        };
+
+        let clothes_feature = make_feature(
+            &[("brand:wikidata", "Q706421"), ("shop", "clothes")],
+            CH_CLOTHES_OSM.s2_cell_id,
+        );
+        let kiosk_feature = make_feature(
+            &[("brand:wikidata", "Q60381703"), ("shop", "kiosk")],
+            CH_KIOSK_OSM.s2_cell_id,
+        );
+        let clothes_candidate = OsmCandidate {
+            feature: &clothes_feature,
+            strings: &pool,
+        };
+        let kiosk_candidate = OsmCandidate {
+            feature: &kiosk_feature,
+            strings: &pool,
+        };
+
+        let ch_clothes_matcher =
+            PoiMatcher::for_place(&CH_CLOTHES_ATP).expect("should create matcher");
+        let ch_kiosk_matcher = PoiMatcher::for_place(&CH_KIOSK_ATP).expect("should create matcher");
+        assert!(ch_clothes_matcher.score_osm_candidate(&clothes_candidate) > 0.5);
+        assert!(ch_clothes_matcher.score_osm_candidate(&kiosk_candidate) == 0.0);
+        assert!(ch_kiosk_matcher.score_osm_candidate(&clothes_candidate) == 0.0);
+        assert!(ch_kiosk_matcher.score_osm_candidate(&kiosk_candidate) > 0.5);
     }
 }
