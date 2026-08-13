@@ -26,6 +26,18 @@ use uuid::Uuid;
 /// `metadata.tools.components[0]`'s external references and purl.
 const REPO_URL: &str = "https://github.com/alltheplaces/osm-diffs";
 
+/// Supplier declared for this BOM and both input components. Copied
+/// verbatim from `scripts/sbom/merge.jq`'s `metadata.supplier` (the
+/// container-image SBOM) rather than kept in sync programmatically --
+/// the project name won't change, and if it ever does, a grep finds
+/// both places.
+fn supplier() -> Value {
+    json!({
+        "name": "All The Places",
+        "url": ["https://github.com/alltheplaces/"]
+    })
+}
+
 /// Builds the CycloneDX provenance document for `conflated.parquet`,
 /// from whatever `import_atp`/`import_osm` already left behind in
 /// `workdir`. `pipeline_run_id` becomes
@@ -54,6 +66,7 @@ pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) ->
         "version": 1,
         "metadata": {
             "timestamp": run_timestamp,
+            "supplier": supplier(),
             "tools": {
                 "components": [tool_component()],
             },
@@ -63,6 +76,16 @@ pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) ->
             atp_component(&atp_metadata),
             osm_component(&osm_metadata),
         ],
+        // Declares conflated.parquet's two inputs as *its* dependencies,
+        // so the dependency graph has a single root (conflated.parquet)
+        // instead of three unlinked ones -- an NTIA-minimum-elements
+        // validator flags components no other component depends on as
+        // extra roots. Same pattern as scripts/sbom/pipeline.jq uses for
+        // the container-image SBOM.
+        "dependencies": [{
+            "ref": "conflated.parquet",
+            "dependsOn": ["alltheplaces.zip", pipeline::PLANET_PBF_FILENAME],
+        }],
         "formulation": [formulation(pipeline_run_id)],
     }))
 }
@@ -110,6 +133,7 @@ fn atp_component(atp: &AtpMetadata) -> Value {
         "type": "data",
         "name": "alltheplaces",
         "version": format_rfc3339(atp.start_time),
+        "supplier": supplier(),
         "data": [{"type": "dataset", "contents": {"url": atp.output_url}}],
         "externalReferences": [
             {"type": "distribution", "url": atp.output_url},
@@ -120,6 +144,7 @@ fn atp_component(atp: &AtpMetadata) -> Value {
 }
 
 fn osm_component(osm: &OsmMetadata) -> Value {
+    let replication_timestamp = format_rfc3339(osm.replication_timestamp);
     json!({
         // Reference PLANET_PBF_FILENAME rather than a literal, so this
         // can't drift from the file's actual local name (see #648 for a
@@ -127,10 +152,14 @@ fn osm_component(osm: &OsmMetadata) -> Value {
         "bom-ref": pipeline::PLANET_PBF_FILENAME,
         "type": "data",
         "name": pipeline::PLANET_PBF_FILENAME,
-        "version": format_rfc3339(osm.replication_timestamp),
+        "version": &replication_timestamp,
+        "supplier": supplier(),
+        // TODO(#646): checksum is a placeholder until we compute a real
+        // SHA-256 hash of the downloaded .osm.pbf; the purl is invalid
+        // until then, expected to be fixed before this ever runs in
+        // production.
+        "purl": format!("pkg:generic/openstreetmap/planet@{replication_timestamp}?checksum=sha256:TODO"),
         "data": [{"type": "dataset"}],
-        // TODO(#646): add a "hashes" entry (SHA-256 of the downloaded
-        // .osm.pbf) once we compute one. Not done today.
     })
 }
 
@@ -199,6 +228,7 @@ mod tests {
         let serial_number = bom["serialNumber"].as_str().expect("serialNumber");
         assert!(serial_number.starts_with("urn:uuid:"));
         assert!(bom["metadata"]["timestamp"].as_str().is_some());
+        assert_eq!(bom["metadata"]["supplier"]["name"], "All The Places");
 
         let tool = &bom["metadata"]["tools"]["components"][0];
         assert_eq!(tool["bom-ref"], "tool-osm-diffs");
@@ -228,6 +258,7 @@ mod tests {
         assert_eq!(atp["type"], "data");
         assert_eq!(atp["name"], "alltheplaces");
         assert_eq!(atp["version"], "2026-03-04T15:16:17Z");
+        assert_eq!(atp["supplier"]["name"], "All The Places");
         assert_eq!(
             atp["data"][0]["contents"]["url"],
             "https://example.org/output.zip"
@@ -238,6 +269,25 @@ mod tests {
         assert_eq!(osm["type"], "data");
         assert_eq!(osm["name"], pipeline::PLANET_PBF_FILENAME);
         assert_eq!(osm["version"], "2026-01-27T08:11:02Z");
+        assert_eq!(osm["supplier"]["name"], "All The Places");
+        assert_eq!(
+            osm["purl"],
+            "pkg:generic/openstreetmap/planet@2026-01-27T08:11:02Z?checksum=sha256:TODO"
+        );
+
+        // Single-rooted dependency graph: conflated.parquet depends on
+        // both inputs, so neither shows up as an orphan root.
+        assert_eq!(bom["dependencies"][0]["ref"], "conflated.parquet");
+        let depends_on = bom["dependencies"][0]["dependsOn"]
+            .as_array()
+            .expect("dependsOn array")
+            .iter()
+            .map(|v| v.as_str().expect("dependsOn entry"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            depends_on,
+            vec!["alltheplaces.zip", pipeline::PLANET_PBF_FILENAME]
+        );
 
         // None of the deliberately-dropped ATP/OSM fields (run-health
         // stats, or values constant across every run) should leak into
