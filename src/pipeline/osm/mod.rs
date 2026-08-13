@@ -26,6 +26,7 @@ mod cover;
 mod fetch;
 mod filter;
 mod id_tagging_schema;
+mod index;
 mod old_assemble;
 mod prune;
 
@@ -63,7 +64,13 @@ pub fn import_osm(
     );
 
     let prunings = Prunings::create(&mut reader, progress, workdir)?;
-    let _assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
+    let assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
+    let _osm_index = index::build_index(
+        &assembly,
+        progress,
+        workdir,
+        &workdir.join("osm-features.index"),
+    )?;
     if false {
         todo!();
     }
