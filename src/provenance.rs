@@ -38,6 +38,12 @@ fn supplier() -> Value {
     })
 }
 
+/// A CycloneDX `licenses` array for a single SPDX-recognized license,
+/// e.g. `license("CC0-1.0")`.
+fn license(spdx_id: &str) -> Value {
+    json!([{"license": {"id": spdx_id}}])
+}
+
 /// Builds the CycloneDX provenance document for `conflated.parquet`,
 /// from whatever `import_atp`/`import_osm` already left behind in
 /// `workdir`. `pipeline_run_id` becomes
@@ -118,6 +124,11 @@ fn output_component(run_timestamp: &str) -> Value {
         "mime-type": "application/vnd.apache.parquet",
         "version": run_timestamp,
         "description": "Conflated AllThePlaces/OpenStreetMap dataset.",
+        // ODbL, not CC0: ODbL's share-alike clause propagates to any
+        // produced/derivative work incorporating OpenStreetMap data,
+        // regardless of what else (here, CC0-licensed AllThePlaces
+        // data) was combined with it.
+        "licenses": license("ODbL-1.0"),
         "externalReferences": [
             // TODO(#645): docs/CONFLATED_OUTPUT.md doesn't exist yet --
             // this link is intentionally broken until it's written.
@@ -135,6 +146,7 @@ fn atp_component(atp: &AtpMetadata) -> Value {
         "name": "alltheplaces",
         "version": &start_time,
         "supplier": supplier(),
+        "licenses": license("CC0-1.0"),
         // TODO(#646): checksum is a placeholder until we compute a real
         // SHA-256 hash of the downloaded zip; the purl is invalid until
         // then, expected to be fixed before this ever runs in
@@ -161,6 +173,7 @@ fn osm_component(osm: &OsmMetadata) -> Value {
         "name": pipeline::PLANET_PBF_FILENAME,
         "version": &replication_timestamp,
         "supplier": supplier(),
+        "licenses": license("ODbL-1.0"),
         // TODO(#646): checksum is a placeholder until we compute a real
         // SHA-256 hash of the downloaded .osm.pbf; the purl is invalid
         // until then, expected to be fixed before this ever runs in
@@ -256,6 +269,7 @@ mod tests {
         assert_eq!(output["name"], "conflated.parquet");
         assert_eq!(output["mime-type"], "application/vnd.apache.parquet");
         assert!(output["version"].as_str().is_some());
+        assert_eq!(output["licenses"][0]["license"]["id"], "ODbL-1.0");
 
         let components = bom["components"].as_array().expect("components array");
         assert_eq!(components.len(), 2);
@@ -266,6 +280,7 @@ mod tests {
         assert_eq!(atp["name"], "alltheplaces");
         assert_eq!(atp["version"], "2026-03-04T15:16:17Z");
         assert_eq!(atp["supplier"]["name"], "All The Places");
+        assert_eq!(atp["licenses"][0]["license"]["id"], "CC0-1.0");
         assert_eq!(
             atp["purl"],
             "pkg:generic/alltheplaces.zip@2026-03-04T15:16:17Z\
@@ -282,6 +297,7 @@ mod tests {
         assert_eq!(osm["name"], pipeline::PLANET_PBF_FILENAME);
         assert_eq!(osm["version"], "2026-01-27T08:11:02Z");
         assert_eq!(osm["supplier"]["name"], "All The Places");
+        assert_eq!(osm["licenses"][0]["license"]["id"], "ODbL-1.0");
         assert_eq!(
             osm["purl"],
             "pkg:generic/openstreetmap/planet@2026-01-27T08:11:02Z?checksum=sha256:TODO"
