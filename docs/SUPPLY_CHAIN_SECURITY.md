@@ -179,7 +179,7 @@ a maintainer identity patiently built up over two years, then used to
 slip a remote-code-execution backdoor into a library linked into most
 Linux SSH servers — is the starkest recent example, but it’s one of
 many; the
-[`event-stream` npm compromise](https://en.wikipedia.org/wiki/Event-stream)
+[`event-stream` npm compromise](https://sentinel-project.eu/sites/default/files/docs/A-Systematic-Analysis-of-the-Event-Stream-Incident.pdf)
 and the
 [SolarWinds breach](https://en.wikipedia.org/wiki/2020_United_States_federal_government_data_breach)
 show the pattern isn’t a fluke. Regulators have taken notice too:
