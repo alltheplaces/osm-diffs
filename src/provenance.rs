@@ -89,7 +89,7 @@ fn tool_component() -> Value {
 /// which is `tool_component()` instead).
 fn output_component(run_timestamp: &str) -> Value {
     json!({
-        "bom-ref": "output-conflated",
+        "bom-ref": "conflated.parquet",
         "type": "data",
         "name": "conflated.parquet",
         "mime-type": "application/vnd.apache.parquet",
@@ -106,7 +106,7 @@ fn output_component(run_timestamp: &str) -> Value {
 
 fn atp_component(atp: &AtpMetadata) -> Value {
     json!({
-        "bom-ref": "src-alltheplaces",
+        "bom-ref": "alltheplaces.zip",
         "type": "data",
         "name": "alltheplaces",
         "version": format_rfc3339(atp.start_time),
@@ -121,9 +121,9 @@ fn atp_component(atp: &AtpMetadata) -> Value {
 
 fn osm_component(osm: &OsmMetadata) -> Value {
     json!({
-        "bom-ref": "src-openstreetmap-planet",
+        "bom-ref": "planet.osm.pbf",
         "type": "data",
-        "name": "openstreetmap-planet",
+        "name": "planet.osm.pbf",
         "version": format_rfc3339(osm.replication_timestamp),
         "data": [{"type": "dataset"}],
         // TODO(#646): add a "hashes" entry (SHA-256 of the downloaded
@@ -144,10 +144,10 @@ fn formulation(pipeline_run_id: &str) -> Value {
             "taskTypes": ["build"],
             "resourceReferences": [{"ref": "tool-osm-diffs"}],
             "inputs": [
-                {"resource": {"ref": "src-alltheplaces"}},
-                {"resource": {"ref": "src-openstreetmap-planet"}},
+                {"resource": {"ref": "alltheplaces.zip"}},
+                {"resource": {"ref": "planet.osm.pbf"}},
             ],
-            "outputs": [{"resource": {"ref": "output-conflated"}}],
+            "outputs": [{"resource": {"ref": "conflated.parquet"}}],
         }],
     })
 }
@@ -211,7 +211,7 @@ mod tests {
         );
 
         let output = &bom["metadata"]["component"];
-        assert_eq!(output["bom-ref"], "output-conflated");
+        assert_eq!(output["bom-ref"], "conflated.parquet");
         assert_eq!(output["type"], "data");
         assert_eq!(output["name"], "conflated.parquet");
         assert_eq!(output["mime-type"], "application/vnd.apache.parquet");
@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(components.len(), 2);
 
         let atp = &components[0];
-        assert_eq!(atp["bom-ref"], "src-alltheplaces");
+        assert_eq!(atp["bom-ref"], "alltheplaces.zip");
         assert_eq!(atp["type"], "data");
         assert_eq!(atp["name"], "alltheplaces");
         assert_eq!(atp["version"], "2026-03-04T15:16:17Z");
@@ -231,9 +231,9 @@ mod tests {
         );
 
         let osm = &components[1];
-        assert_eq!(osm["bom-ref"], "src-openstreetmap-planet");
+        assert_eq!(osm["bom-ref"], "planet.osm.pbf");
         assert_eq!(osm["type"], "data");
-        assert_eq!(osm["name"], "openstreetmap-planet");
+        assert_eq!(osm["name"], "planet.osm.pbf");
         assert_eq!(osm["version"], "2026-01-27T08:11:02Z");
 
         // None of the deliberately-dropped ATP/OSM fields (run-health
@@ -259,9 +259,9 @@ mod tests {
         // Every bom-ref the formulation refers to must actually exist.
         let known_refs = [
             "tool-osm-diffs",
-            "output-conflated",
-            "src-alltheplaces",
-            "src-openstreetmap-planet",
+            "conflated.parquet",
+            "alltheplaces.zip",
+            "planet.osm.pbf",
         ];
         let formulation = &bom["formulation"][0]["workflows"][0];
         assert_eq!(formulation["uid"], "k8s-job-42");
@@ -275,7 +275,7 @@ mod tests {
         }
         assert_eq!(
             formulation["outputs"][0]["resource"]["ref"],
-            "output-conflated"
+            "conflated.parquet"
         );
 
         Ok(())
