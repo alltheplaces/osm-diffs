@@ -103,7 +103,14 @@ const INVERTED_INDEX_FILE_SIGNATURE: &[u8; 8] = b"featinv0";
 /// layout for a one-field tuple struct already has the same size as its
 /// field in practice; `repr(transparent)` would only make that a
 /// documented *guarantee*, which nothing here relies on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// `Ord`/`PartialOrd`/`Serialize`/`Deserialize` are derived so this can be
+/// used directly as [Pass2Item]'s `local_index` field -- pass 1 computes
+/// exactly this value (a feature's position in feature storage) before
+/// it's ever wrapped and handed to a caller; ordering it just delegates
+/// to the wrapped `u32` and carries no meaning beyond "some position",
+/// same as for any other field [Pass2Item] is sorted by.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct LocalFeatureRef(u32);
 
 /// Read-only, memory-mapped spatial index over [Feature] protos. See the
@@ -133,6 +140,7 @@ pub struct OsmFeatureIndex<'a> {
 #[derive(Clone, Debug, DeepSizeOf, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 struct Pass1Item {
     centroid_s2_cell_id: u64,
+    /// Encoded `FeatureToIndex` proto (`FeatureToIndex::encode_to_vec()`).
     fti_bytes: Vec<u8>,
 }
 
@@ -145,7 +153,7 @@ struct Pass1Item {
 struct Pass2Item {
     coverage_cell_id: u64,
     match_mask: u32,
-    local_index: u32,
+    local_index: LocalFeatureRef,
 }
 
 impl<'a> OsmFeatureIndex<'a> {
@@ -651,7 +659,7 @@ impl InvertedIndexWriter {
         })
     }
 
-    fn write(&mut self, cell_id: u64, match_mask: u32, local_index: u32) -> Result<()> {
+    fn write(&mut self, cell_id: u64, match_mask: u32, local_index: LocalFeatureRef) -> Result<()> {
         if self.entries_count > 0 && cell_id < self.last_cell_id {
             anyhow::bail!(
                 "coverage cell ids must be written in non-decreasing order, but {} < {}",
@@ -663,7 +671,7 @@ impl InvertedIndexWriter {
         self.writer.write_all(&cell_id.to_le_bytes())?;
         self.last_cell_id = cell_id;
 
-        let packed = ((match_mask as u64) << 32) | (local_index as u64);
+        let packed = ((match_mask as u64) << 32) | (local_index.0 as u64);
         self.packed_writer.write_all(&packed.to_le_bytes())?;
 
         self.entries_count += 1;
@@ -721,7 +729,7 @@ impl Iterator for Pass2Reader {
             Ok(()) => Some(Pass2Item {
                 coverage_cell_id: u64::from_le_bytes(buf[0..8].try_into().unwrap()),
                 match_mask: u32::from_le_bytes(buf[8..12].try_into().unwrap()),
-                local_index: u32::from_le_bytes(buf[12..16].try_into().unwrap()),
+                local_index: LocalFeatureRef(u32::from_le_bytes(buf[12..16].try_into().unwrap())),
             }),
             Err(_) => None,
         }
