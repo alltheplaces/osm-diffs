@@ -5,6 +5,15 @@ use std::{
 };
 use time::UtcDateTime;
 
+/// Target chunk size, in bytes, for external sorts that spill to disk
+/// across this pipeline (see the `ext_sort` crate). Chunk sizes for
+/// external sorts have grown ad hoc over time and are currently uneven
+/// across call sites for no good reason; this constant exists so new
+/// code has a shared default to reach for instead of picking another
+/// arbitrary number. Not yet applied to existing call sites -- see
+/// https://github.com/alltheplaces/osm-diffs/issues/657 for that cleanup.
+pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
+
 mod conflate;
 mod edits;
 mod geostats; // TODO: Move into crate::geometry?

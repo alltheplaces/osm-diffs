@@ -33,13 +33,16 @@
 //! byte 8..16:  entry count, u64 little-endian
 //! byte 16..24: offset of the `id` array, u64 little-endian
 //! byte 24..32: offset of the `starts` array, u64 little-endian
-//! byte 32..40: offset of the `blob` region, u64 little-endian
+//! byte 32..40: offset of the `blobs` region, u64 little-endian
 //! byte 40..64: reserved, zero-filled
 //!
 //! id array:     `entry count` OSM feature ids, u64 little-endian each
-//! starts array: `entry count + 1` byte offsets into `blob`, u64
-//!               little-endian each
-//! blob region:  concatenated `Feature.encode_to_vec()` bytes
+//! starts array: `entry count + 1` byte offsets into `blobs`, u64
+//!               little-endian each -- the last entry is a sentinel
+//!               (the total size of `blobs`), so every feature's byte
+//!               range is `starts[i]..starts[i+1]` without special-casing
+//!               the final entry
+//! blobs region: concatenated `Feature.encode_to_vec()` bytes
 //! ```
 //!
 //! Inverted index (`out` with an added `.inverted` extension):
@@ -47,26 +50,32 @@
 //! ```text
 //! byte 0..8:   magic "featinv0"
 //! byte 8..16:  entry count, u64 little-endian
-//! byte 16..24: offset of the `coverage_cell_id` array, u64 little-endian
+//! byte 16..24: offset of the `coverage_cell_ids` array, u64 little-endian
 //! byte 24..32: offset of the `packed` array, u64 little-endian
 //! byte 32..64: reserved, zero-filled
 //!
-//! coverage_cell_id array: `entry count` S2 cell ids, u64 little-endian
-//!                         each, sorted ascending (duplicates allowed)
-//! packed array:           `entry count` values, u64 little-endian each,
-//!                         aligned 1:1 with coverage_cell_id: high 32
-//!                         bits are the feature's MatchMask, low 32 bits
-//!                         are its LocalFeatureRef (position in feature
-//!                         storage)
+//! coverage_cell_ids array: `entry count` S2 cell ids, u64 little-endian
+//!                          each, sorted ascending (duplicates allowed)
+//! packed array:            `entry count` values, u64 little-endian each,
+//!                          aligned 1:1 with coverage_cell_ids: high 32
+//!                          bits are the feature's MatchMask, low 32 bits
+//!                          are its LocalFeatureRef (position in feature
+//!                          storage)
 //! ```
 
 use crate::matchers::MatchMask;
+use crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES;
 use crate::tables::{Feature, FeatureToIndex};
 use anyhow::{Context, Result};
-use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
+use deepsize::DeepSizeOf;
+use ext_sort::{
+    ExternalSorter, ExternalSorterBuilder,
+    buffer::{LimitedBufferBuilder, mem::MemoryLimitedBufferBuilder},
+};
 use memmap2::Mmap;
 use prost::Message;
 use s2::cellid::CellID;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{File, remove_file, rename},
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
@@ -79,13 +88,21 @@ use std::{
 /// Size of each file's header, in bytes: see the "File format" section above.
 const HEADER_SIZE: usize = 8 * 8;
 
-const STORAGE_FILE_SIGNATURE: &[u8; 8] = b"featstg0";
-const INVERTED_FILE_SIGNATURE: &[u8; 8] = b"featinv0";
+const FEATURES_FILE_SIGNATURE: &[u8; 8] = b"featstg0";
+const INVERTED_INDEX_FILE_SIGNATURE: &[u8; 8] = b"featinv0";
 
 /// An opaque reference to a feature's position in an [OsmFeatureIndex]'s
 /// feature storage. Cheap to copy and hold onto (it's just an array
 /// index); not meaningful outside the [OsmFeatureIndex] that produced it,
 /// and not an OSM id -- see [OsmFeatureIndex::feature_id].
+///
+/// Not `#[repr(transparent)]`: that attribute buys ABI/layout guarantees
+/// for FFI or unsafe transmutation between `LocalFeatureRef` and `u32` --
+/// neither applies here, this stays entirely inside pure Rust code, never
+/// crosses an FFI boundary, and is never transmuted. Rust's default
+/// layout for a one-field tuple struct already has the same size as its
+/// field in practice; `repr(transparent)` would only make that a
+/// documented *guarantee*, which nothing here relies on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LocalFeatureRef(u32);
 
@@ -93,22 +110,47 @@ pub struct LocalFeatureRef(u32);
 /// module documentation for the on-disk layout and the reasoning behind
 /// splitting this into two structures.
 pub struct OsmFeatureIndex<'a> {
-    storage_file: File,
-    _storage_mmap: Mmap,
+    features_file: File,
+    _features_mmap: Mmap,
     entries_count: usize,
     id: &'a [u64],
     starts: &'a [u64],
-    blob: &'a [u8],
+    blobs: &'a [u8],
 
-    inverted_file: File,
-    _inverted_mmap: Mmap,
-    coverage_cell_id: &'a [u64],
+    inverted_index_file: File,
+    _inverted_index_mmap: Mmap,
+    coverage_cell_ids: &'a [u64],
     packed: &'a [u64],
+}
+
+/// One item [OsmFeatureIndex::create]'s pass 1 external-sorts by
+/// `centroid_s2_cell_id`. A named struct (rather than a raw tuple, as
+/// e.g. [crate::tables::BlobTable::create] sorts) so it can derive
+/// [DeepSizeOf]: `fti_bytes`' actual heap size varies a lot between a bare
+/// node and a feature with a large polygon geometry, so the sort buffer
+/// needs to budget by real memory use ([MemoryLimitedBufferBuilder]), not
+/// item count.
+#[derive(Clone, Debug, DeepSizeOf, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct Pass1Item {
+    centroid_s2_cell_id: u64,
+    fti_bytes: Vec<u8>,
+}
+
+/// One item [OsmFeatureIndex::create]'s pass 2 external-sorts by
+/// `coverage_cell_id` -- one per entry in a feature's
+/// `coverage_s2_cell_id`. Fixed-size (unlike [Pass1Item]), so the sort
+/// buffer can budget by a plain item count ([LimitedBufferBuilder])
+/// instead of [DeepSizeOf].
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+struct Pass2Item {
+    coverage_cell_id: u64,
+    match_mask: u32,
+    local_index: u32,
 }
 
 impl<'a> OsmFeatureIndex<'a> {
     /// Path of the inverted-index file that accompanies `out`/`path`.
-    fn inverted_path(path: &Path) -> PathBuf {
+    fn inverted_index_path(path: &Path) -> PathBuf {
         let mut p = PathBuf::from(path);
         p.add_extension("inverted");
         p
@@ -133,7 +175,7 @@ impl<'a> OsmFeatureIndex<'a> {
         workdir: &Path,
         out: &Path,
     ) -> Result<OsmFeatureIndex<'a>> {
-        let inverted_path = Self::inverted_path(out);
+        let inverted_index_path = Self::inverted_index_path(out);
         let pass2_spool_path = {
             let mut p = PathBuf::from(out);
             p.add_extension("pass2.tmp");
@@ -141,55 +183,75 @@ impl<'a> OsmFeatureIndex<'a> {
         };
 
         // Pass 1.
-        let sorter1: ExternalSorter<(u64, Vec<u8>), std::io::Error, LimitedBufferBuilder> =
+        let sorter1: ExternalSorter<Pass1Item, std::io::Error, MemoryLimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
-                .with_buffer(LimitedBufferBuilder::new(
-                    64 * 1024 * 1024,
-                    /* preallocate */ true,
+                .with_buffer(MemoryLimitedBufferBuilder::new(
+                    EXTERNAL_SORT_CHUNK_BYTES as u64,
                 ))
                 .build()?;
         let sorted1 = sorter1.sort(fti.map(|f| {
-            let key = f.centroid_s2_cell_id;
-            std::io::Result::Ok((key, f.encode_to_vec()))
+            std::io::Result::Ok(Pass1Item {
+                centroid_s2_cell_id: f.centroid_s2_cell_id,
+                fti_bytes: f.encode_to_vec(),
+            })
         }))?;
 
-        let mut storage_writer = StorageWriter::create(out)?;
+        let mut feature_storage_writer = FeatureStorageWriter::create(out)?;
         let mut pass2_writer =
             BufWriter::with_capacity(64 * 1024, File::create(&pass2_spool_path)?);
-        for (local_index, item) in (0_u32..).zip(sorted1) {
-            let (_, bytes) = item?;
-            let fti = FeatureToIndex::decode(bytes.as_slice())
+        for (i, item) in sorted1.enumerate() {
+            // A LocalFeatureRef can only address up to u32::MAX features.
+            // Current planet-wide pruning keeps on the order of 500M
+            // features, well within range, but a future change to the
+            // pruning logic could conceivably push this past 2^32 --
+            // fail loudly rather than silently truncate/wrap.
+            let local_index = u32::try_from(i).context(
+                "OsmFeatureIndex: more than u32::MAX features, \
+                 LocalFeatureRef can no longer address them all",
+            )?;
+            let item = item?;
+            let fti = FeatureToIndex::decode(item.fti_bytes.as_slice())
                 .context("failed to decode a FeatureToIndex spooled during pass 1")?;
             let feature = fti.feature.expect("feature");
-            storage_writer.write(feature.id, &feature.encode_to_vec())?;
+            feature_storage_writer.write(feature.id, &feature.encode_to_vec())?;
             for cell_id in &fti.coverage_s2_cell_id {
                 pass2_writer.write_all(&cell_id.to_le_bytes())?;
                 pass2_writer.write_all(&fti.match_mask.to_le_bytes())?;
                 pass2_writer.write_all(&local_index.to_le_bytes())?;
             }
         }
-        storage_writer.close()?;
+        feature_storage_writer.close()?;
         pass2_writer.flush()?;
         drop(pass2_writer);
 
         // Pass 2.
+        let pass2_spool_bytes = std::fs::metadata(&pass2_spool_path)?.len();
+        log::info!(
+            bytes = pass2_spool_bytes,
+            path = pass2_spool_path.display().to_string();
+            "OsmFeatureIndex::create: pass 1 → pass 2 spool file"
+        );
         let pass2_records = Pass2Reader::open(&pass2_spool_path)?;
-        let sorter2: ExternalSorter<(u64, u32, u32), std::io::Error, LimitedBufferBuilder> =
+        let sorter2: ExternalSorter<Pass2Item, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    32 * 1024 * 1024,
+                    EXTERNAL_SORT_CHUNK_BYTES / size_of::<Pass2Item>(),
                     /* preallocate */ true,
                 ))
                 .build()?;
         let sorted2 = sorter2.sort(pass2_records.map(std::io::Result::Ok))?;
-        let mut inverted_writer = InvertedWriter::create(&inverted_path)?;
+        let mut inverted_index_writer = InvertedIndexWriter::create(&inverted_index_path)?;
         for item in sorted2 {
-            let (cell_id, match_mask, local_index) = item?;
-            inverted_writer.write(cell_id, match_mask, local_index)?;
+            let Pass2Item {
+                coverage_cell_id,
+                match_mask,
+                local_index,
+            } = item?;
+            inverted_index_writer.write(coverage_cell_id, match_mask, local_index)?;
         }
-        inverted_writer.close()?;
+        inverted_index_writer.close()?;
         remove_file(&pass2_spool_path)?;
 
         Self::open(out)
@@ -199,99 +261,107 @@ impl<'a> OsmFeatureIndex<'a> {
     /// [OsmFeatureIndex::create], mapping both files into memory rather
     /// than reading them into heap-allocated buffers.
     pub fn open(path: &Path) -> Result<OsmFeatureIndex<'a>> {
-        let storage_file = File::open(path)
+        let features_file = File::open(path)
             .with_context(|| format!("could not open feature storage {}", path.display()))?;
 
         // SAFETY: We don't modify the file while it is mapped into memory.
-        let storage_mmap = unsafe { Mmap::map(&storage_file)? };
-        if storage_mmap.len() < HEADER_SIZE || &storage_mmap[0..8] != STORAGE_FILE_SIGNATURE {
+        let features_mmap = unsafe { Mmap::map(&features_file)? };
+        if features_mmap.len() < HEADER_SIZE || &features_mmap[0..8] != FEATURES_FILE_SIGNATURE {
             anyhow::bail!(
                 "not feature storage for OsmFeatureIndex: {}",
                 path.display()
             );
         }
 
-        // SAFETY: storage_mmap.len() checked above; offset 0 is aligned for u64.
+        // SAFETY: features_mmap.len() checked above; offset 0 is aligned for u64.
         let header = unsafe {
-            let ptr = storage_mmap.as_ptr() as *const u64;
+            let ptr = features_mmap.as_ptr() as *const u64;
             std::slice::from_raw_parts(ptr, HEADER_SIZE / size_of::<u64>())
         };
         let entries_count = usize::try_from(u64::from_le(header[1]))?;
 
         let id = read_u64_array(
-            &storage_mmap,
+            &features_mmap,
             usize::try_from(u64::from_le(header[2]))?,
             entries_count,
             path,
             "id",
         )?;
+        // entries_count + 1: `starts` carries a final sentinel entry (the
+        // total size of `blobs`), so every feature's byte range is
+        // `starts[i]..starts[i+1]` without special-casing the last one.
         let starts = read_u64_array(
-            &storage_mmap,
+            &features_mmap,
             usize::try_from(u64::from_le(header[3]))?,
             entries_count + 1,
             path,
             "starts",
         )?;
-        let blob = {
-            let blob_offset = usize::try_from(u64::from_le(header[4]))?;
-            if blob_offset <= storage_mmap.len() {
+        let blobs = {
+            let blobs_offset = usize::try_from(u64::from_le(header[4]))?;
+            if blobs_offset <= features_mmap.len() {
                 // SAFETY: Verified length; no alignment constraints on &[u8].
                 unsafe {
-                    let ptr = storage_mmap.as_ptr().add(blob_offset);
-                    std::slice::from_raw_parts(ptr, storage_mmap.len() - blob_offset)
+                    let ptr = features_mmap.as_ptr().add(blobs_offset);
+                    std::slice::from_raw_parts(ptr, features_mmap.len() - blobs_offset)
                 }
             } else {
-                anyhow::bail!("misplaced blob in OsmFeatureIndex: {}", path.display());
+                anyhow::bail!("misplaced blobs in OsmFeatureIndex: {}", path.display());
             }
         };
 
-        let inverted_path = Self::inverted_path(path);
-        let inverted_file = File::open(&inverted_path).with_context(|| {
-            format!("could not open inverted index {}", inverted_path.display())
+        let inverted_index_path = Self::inverted_index_path(path);
+        let inverted_index_file = File::open(&inverted_index_path).with_context(|| {
+            format!(
+                "could not open inverted index {}",
+                inverted_index_path.display()
+            )
         })?;
 
         // SAFETY: We don't modify the file while it is mapped into memory.
-        let inverted_mmap = unsafe { Mmap::map(&inverted_file)? };
-        if inverted_mmap.len() < HEADER_SIZE || &inverted_mmap[0..8] != INVERTED_FILE_SIGNATURE {
+        let inverted_index_mmap = unsafe { Mmap::map(&inverted_index_file)? };
+        if inverted_index_mmap.len() < HEADER_SIZE
+            || &inverted_index_mmap[0..8] != INVERTED_INDEX_FILE_SIGNATURE
+        {
             anyhow::bail!(
                 "not an inverted index for OsmFeatureIndex: {}",
-                inverted_path.display()
+                inverted_index_path.display()
             );
         }
 
-        // SAFETY: inverted_mmap.len() checked above; offset 0 is aligned for u64.
-        let inverted_header = unsafe {
-            let ptr = inverted_mmap.as_ptr() as *const u64;
+        // SAFETY: inverted_index_mmap.len() checked above; offset 0 is aligned for u64.
+        let inverted_index_header = unsafe {
+            let ptr = inverted_index_mmap.as_ptr() as *const u64;
             std::slice::from_raw_parts(ptr, HEADER_SIZE / size_of::<u64>())
         };
-        let inverted_entries_count = usize::try_from(u64::from_le(inverted_header[1]))?;
+        let inverted_index_entries_count = usize::try_from(u64::from_le(inverted_index_header[1]))?;
 
-        let coverage_cell_id = read_u64_array(
-            &inverted_mmap,
-            usize::try_from(u64::from_le(inverted_header[2]))?,
-            inverted_entries_count,
-            &inverted_path,
-            "coverage_cell_id",
+        let coverage_cell_ids = read_u64_array(
+            &inverted_index_mmap,
+            usize::try_from(u64::from_le(inverted_index_header[2]))?,
+            inverted_index_entries_count,
+            &inverted_index_path,
+            "coverage_cell_ids",
         )?;
         let packed = read_u64_array(
-            &inverted_mmap,
-            usize::try_from(u64::from_le(inverted_header[3]))?,
-            inverted_entries_count,
-            &inverted_path,
+            &inverted_index_mmap,
+            usize::try_from(u64::from_le(inverted_index_header[3]))?,
+            inverted_index_entries_count,
+            &inverted_index_path,
             "packed",
         )?;
 
         Ok(OsmFeatureIndex {
-            storage_file,
-            _storage_mmap: storage_mmap,
+            features_file,
+            _features_mmap: features_mmap,
             entries_count,
             id,
             starts,
-            blob,
+            blobs,
 
-            inverted_file,
-            _inverted_mmap: inverted_mmap,
-            coverage_cell_id,
+            inverted_index_file,
+            _inverted_index_mmap: inverted_index_mmap,
+            coverage_cell_ids,
             packed,
         })
     }
@@ -311,16 +381,18 @@ impl<'a> OsmFeatureIndex<'a> {
     /// single path to report; this is what a staleness check (see
     /// `conflate`) actually needs.
     pub fn modified(&self) -> Result<SystemTime> {
-        let a = self.storage_file.metadata()?.modified()?;
-        let b = self.inverted_file.metadata()?.modified()?;
+        let a = self.features_file.metadata()?.modified()?;
+        let b = self.inverted_index_file.metadata()?.modified()?;
         Ok(a.max(b))
     }
 
     /// Returns every feature whose `coverage_s2_cell_id` includes a cell
     /// in `range`, and whose `match_mask` intersects `query_mask`. A
-    /// cheap, decode-free scan over the inverted index: `partition_point`
-    /// for the range bounds, then a numeric `match_mask` check per hit.
-    /// No protobuf decode happens until [OsmFeatureIndex::get_feature] is
+    /// cheap, decode-free scan over the inverted index: one
+    /// `partition_point` binary search for the start of `range`, then a
+    /// linear scan forward (not a second binary search -- see
+    /// [QueryIter]) with a numeric `match_mask` check per hit. No
+    /// protobuf decode happens until [OsmFeatureIndex::get_feature] is
     /// called on a returned reference.
     ///
     /// `range` is expected to be one merged sub-range of an S2 covering
@@ -336,23 +408,16 @@ impl<'a> OsmFeatureIndex<'a> {
         range: RangeInclusive<CellID>,
         query_mask: MatchMask,
     ) -> impl Iterator<Item = LocalFeatureRef> + '_ {
-        let lo = range.start().0;
-        let hi = range.end().0;
         let start = self
-            .coverage_cell_id
-            .partition_point(|&k| u64::from_le(k) < lo);
-        let end = self
-            .coverage_cell_id
-            .partition_point(|&k| u64::from_le(k) <= hi);
-        (start..end).filter_map(move |i| {
-            let packed = u64::from_le(self.packed[i]);
-            let match_mask = MatchMask((packed >> 32) as u16);
-            if match_mask.intersects(&query_mask) {
-                Some(LocalFeatureRef((packed & 0xFFFF_FFFF) as u32))
-            } else {
-                None
-            }
-        })
+            .coverage_cell_ids
+            .partition_point(|&k| u64::from_le(k) < range.start().0);
+        QueryIter {
+            coverage_cell_ids: self.coverage_cell_ids,
+            packed: self.packed,
+            pos: start,
+            hi: range.end().0,
+            query_mask,
+        }
     }
 
     /// The OSM id of the feature `r` refers to -- `osm_id * 10 + {1,2,3}`
@@ -364,14 +429,49 @@ impl<'a> OsmFeatureIndex<'a> {
     }
 
     /// Fully decodes the feature `r` refers to. The only operation on
-    /// this index that costs a protobuf decode -- callers should only do
-    /// this for candidates that survive `MatchMask` filtering (and
-    /// typically, scoring).
+    /// this index that costs a protobuf decode.
     pub fn get_feature(&self, r: LocalFeatureRef) -> Result<Feature> {
         let i = r.0 as usize;
         let start = usize::try_from(u64::from_le(self.starts[i]))?;
         let end = usize::try_from(u64::from_le(self.starts[i + 1]))?;
-        Feature::decode(&self.blob[start..end]).context("failed to decode Feature")
+        Feature::decode(&self.blobs[start..end])
+            .with_context(|| format!("failed to decode Feature at {r:?}"))
+    }
+}
+
+/// Iterator behind [OsmFeatureIndex::query]. Finding the end of a query's
+/// matching range with a second `partition_point` call would be a second
+/// O(log n) binary search on every single query; on the full planet, n is
+/// on the order of 500 million entries, and this is the innermost loop of
+/// the whole conflation pipeline, so it matters. Instead, `start` is
+/// found by one binary search, and `next()` walks forward linearly from
+/// there, stopping as soon as a cell id exceeds `hi` -- O(k) in the
+/// number of entries actually scanned, with good cache locality since
+/// it's sequential right after the binary search lands nearby.
+struct QueryIter<'a> {
+    coverage_cell_ids: &'a [u64],
+    packed: &'a [u64],
+    pos: usize,
+    hi: u64,
+    query_mask: MatchMask,
+}
+
+impl Iterator for QueryIter<'_> {
+    type Item = LocalFeatureRef;
+
+    fn next(&mut self) -> Option<LocalFeatureRef> {
+        while self.pos < self.coverage_cell_ids.len() {
+            if u64::from_le(self.coverage_cell_ids[self.pos]) > self.hi {
+                return None;
+            }
+            let packed = u64::from_le(self.packed[self.pos]);
+            self.pos += 1;
+            let match_mask = MatchMask((packed >> 32) as u16);
+            if match_mask.intersects(&self.query_mask) {
+                return Some(LocalFeatureRef((packed & 0xFFFF_FFFF) as u32));
+            }
+        }
+        None
     }
 }
 
@@ -395,7 +495,7 @@ fn read_u64_array<'a>(
         // SAFETY: Verified alignment and length. The mmap'd region stays
         // valid for as long as the Mmap it came from is kept alive, which
         // callers do by storing it alongside this slice (see
-        // OsmFeatureIndex's _storage_mmap/_inverted_mmap fields).
+        // OsmFeatureIndex's _features_mmap/_inverted_index_mmap fields).
         Ok(unsafe {
             let ptr = mmap.as_ptr().add(offset) as *const u64;
             std::slice::from_raw_parts(ptr, count)
@@ -408,15 +508,16 @@ fn read_u64_array<'a>(
     }
 }
 
-/// Writer for the feature storage file: `id`, `starts` and `blob` arrays
+/// Writer for the feature storage file: `id`, `starts` and `blobs` arrays
 /// as described in the module documentation. Keys and packed coordinates
-/// are appended to separate temporary files as they arrive; [StorageWriter::close]
-/// then concatenates them behind a fixed-size header and atomically
-/// renames the result into place -- same technique as
-/// [crate::tables::BlobTable]'s private `Writer`, minus the ascending-key
-/// requirement: `id` here is a parallel data column, not a search key
-/// (features are looked up by [LocalFeatureRef] position, not by id).
-struct StorageWriter {
+/// are appended to separate temporary files as they arrive;
+/// [FeatureStorageWriter::close] then concatenates them behind a
+/// fixed-size header and atomically renames the result into place --
+/// same technique as [crate::tables::BlobTable]'s private `Writer`, minus
+/// the ascending-key requirement: `id` here is a parallel data column,
+/// not a search key (features are looked up by [LocalFeatureRef]
+/// position, not by id).
+struct FeatureStorageWriter {
     path: PathBuf,
     tmp_path: PathBuf,
     writer: BufWriter<File>,
@@ -424,14 +525,14 @@ struct StorageWriter {
     starts_path: PathBuf,
     starts_writer: BufWriter<File>,
 
-    blob_path: PathBuf,
-    blob_writer: BufWriter<File>,
+    blobs_path: PathBuf,
+    blobs_writer: BufWriter<File>,
 
     entries_count: u64,
 }
 
-impl StorageWriter {
-    fn create(path: &Path) -> Result<StorageWriter> {
+impl FeatureStorageWriter {
+    fn create(path: &Path) -> Result<FeatureStorageWriter> {
         let mut tmp_path = PathBuf::from(path);
         tmp_path.add_extension("tmp");
         let mut writer = BufWriter::with_capacity(32 * 1024, File::create(&tmp_path)?);
@@ -441,18 +542,18 @@ impl StorageWriter {
         starts_path.add_extension("starts.tmp");
         let starts_writer = BufWriter::with_capacity(32 * 1024, File::create(&starts_path)?);
 
-        let mut blob_path = PathBuf::from(path);
-        blob_path.add_extension("blob.tmp");
-        let blob_writer = BufWriter::with_capacity(32 * 1024, File::create(&blob_path)?);
+        let mut blobs_path = PathBuf::from(path);
+        blobs_path.add_extension("blobs.tmp");
+        let blobs_writer = BufWriter::with_capacity(32 * 1024, File::create(&blobs_path)?);
 
-        Ok(StorageWriter {
+        Ok(FeatureStorageWriter {
             path: PathBuf::from(path),
             tmp_path,
             writer,
             starts_path,
             starts_writer,
-            blob_path,
-            blob_writer,
+            blobs_path,
+            blobs_writer,
             entries_count: 0,
         })
     }
@@ -460,9 +561,9 @@ impl StorageWriter {
     /// Appends `feature_bytes` (a `Feature.encode_to_vec()`), recording
     /// `id` alongside it at the same position.
     fn write(&mut self, id: u64, feature_bytes: &[u8]) -> Result<()> {
-        let start: u64 = self.blob_writer.stream_position()?;
+        let start: u64 = self.blobs_writer.stream_position()?;
         self.starts_writer.write_all(&start.to_le_bytes())?;
-        self.blob_writer.write_all(feature_bytes)?;
+        self.blobs_writer.write_all(feature_bytes)?;
 
         self.writer.write_all(&id.to_le_bytes())?;
         self.entries_count += 1;
@@ -471,31 +572,31 @@ impl StorageWriter {
     }
 
     fn close(mut self) -> Result<()> {
-        let blob_size: u64 = self.blob_writer.stream_position()?;
-        self.starts_writer.write_all(&blob_size.to_le_bytes())?;
+        let blobs_size: u64 = self.blobs_writer.stream_position()?;
+        self.starts_writer.write_all(&blobs_size.to_le_bytes())?;
 
         let ids_offset = HEADER_SIZE as u64;
         let starts_offset = ids_offset + self.entries_count * 8;
-        let blob_offset = starts_offset + (self.entries_count + 1) * 8;
+        let blobs_offset = starts_offset + (self.entries_count + 1) * 8;
         assert_eq!(self.writer.stream_position()?, starts_offset);
 
         self.starts_writer.flush()?; // flush() returns errors
         drop(self.starts_writer); // drop() does not return errors
         std::io::copy(&mut File::open(&self.starts_path)?, &mut self.writer)?;
         remove_file(&self.starts_path)?;
-        assert_eq!(self.writer.stream_position()?, blob_offset);
+        assert_eq!(self.writer.stream_position()?, blobs_offset);
 
-        self.blob_writer.flush()?; // flush() returns errors
-        drop(self.blob_writer); // drop() does not return errors
-        std::io::copy(&mut File::open(&self.blob_path)?, &mut self.writer)?;
-        remove_file(&self.blob_path)?;
+        self.blobs_writer.flush()?; // flush() returns errors
+        drop(self.blobs_writer); // drop() does not return errors
+        std::io::copy(&mut File::open(&self.blobs_path)?, &mut self.writer)?;
+        remove_file(&self.blobs_path)?;
 
         self.writer.seek(SeekFrom::Start(0))?;
-        self.writer.write_all(STORAGE_FILE_SIGNATURE)?;
+        self.writer.write_all(FEATURES_FILE_SIGNATURE)?;
         self.writer.write_all(&self.entries_count.to_le_bytes())?;
         self.writer.write_all(&ids_offset.to_le_bytes())?;
         self.writer.write_all(&starts_offset.to_le_bytes())?;
-        self.writer.write_all(&blob_offset.to_le_bytes())?;
+        self.writer.write_all(&blobs_offset.to_le_bytes())?;
         assert!(self.writer.stream_position()? <= HEADER_SIZE as u64);
 
         self.writer.seek(SeekFrom::End(0))?;
@@ -507,18 +608,20 @@ impl StorageWriter {
     }
 }
 
-/// Writer for the inverted-index file: `coverage_cell_id` and `packed`
+/// Writer for the inverted-index file: `coverage_cell_ids` and `packed`
 /// arrays as described in the module documentation. Unlike
 /// [crate::tables::BlobTable]/[crate::tables::CoordTable]'s writers,
 /// duplicate keys are expected and allowed (only a *decreasing* key is
 /// rejected) -- a single S2 cell is routinely covered by several
 /// features, and a feature with non-point geometry can itself contribute
 /// more than one entry.
-struct InvertedWriter {
+struct InvertedIndexWriter {
     path: PathBuf,
     tmp_path: PathBuf,
     writer: BufWriter<File>,
 
+    // The packed (match_mask, local_index) values -- not Feature protos;
+    // those live in FeatureStorageWriter's blobs_path/blobs_writer.
     packed_path: PathBuf,
     packed_writer: BufWriter<File>,
 
@@ -526,8 +629,8 @@ struct InvertedWriter {
     last_cell_id: u64,
 }
 
-impl InvertedWriter {
-    fn create(path: &Path) -> Result<InvertedWriter> {
+impl InvertedIndexWriter {
+    fn create(path: &Path) -> Result<InvertedIndexWriter> {
         let mut tmp_path = PathBuf::from(path);
         tmp_path.add_extension("tmp");
         let mut writer = BufWriter::with_capacity(32 * 1024, File::create(&tmp_path)?);
@@ -537,7 +640,7 @@ impl InvertedWriter {
         packed_path.add_extension("packed.tmp");
         let packed_writer = BufWriter::with_capacity(32 * 1024, File::create(&packed_path)?);
 
-        Ok(InvertedWriter {
+        Ok(InvertedIndexWriter {
             path: PathBuf::from(path),
             tmp_path,
             writer,
@@ -578,7 +681,7 @@ impl InvertedWriter {
         remove_file(&self.packed_path)?;
 
         self.writer.seek(SeekFrom::Start(0))?;
-        self.writer.write_all(INVERTED_FILE_SIGNATURE)?;
+        self.writer.write_all(INVERTED_INDEX_FILE_SIGNATURE)?;
         self.writer.write_all(&self.entries_count.to_le_bytes())?;
         self.writer.write_all(&cell_ids_offset.to_le_bytes())?;
         self.writer.write_all(&packed_offset.to_le_bytes())?;
@@ -594,8 +697,8 @@ impl InvertedWriter {
 }
 
 /// Reads back the fixed-size `(cell_id: u64, match_mask: u32,
-/// local_index: u32)` tuples [OsmFeatureIndex::create]'s pass 1 spools to
-/// a plain temporary file (16 bytes each, no framing needed since the
+/// local_index: u32)` records [OsmFeatureIndex::create]'s pass 1 spools
+/// to a plain temporary file (16 bytes each, no framing needed since the
 /// record size is fixed) -- input to pass 2's external sort.
 struct Pass2Reader {
     reader: BufReader<File>,
@@ -610,16 +713,16 @@ impl Pass2Reader {
 }
 
 impl Iterator for Pass2Reader {
-    type Item = (u64, u32, u32);
+    type Item = Pass2Item;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut buf = [0u8; 16];
         match self.reader.read_exact(&mut buf) {
-            Ok(()) => Some((
-                u64::from_le_bytes(buf[0..8].try_into().unwrap()),
-                u32::from_le_bytes(buf[8..12].try_into().unwrap()),
-                u32::from_le_bytes(buf[12..16].try_into().unwrap()),
-            )),
+            Ok(()) => Some(Pass2Item {
+                coverage_cell_id: u64::from_le_bytes(buf[0..8].try_into().unwrap()),
+                match_mask: u32::from_le_bytes(buf[8..12].try_into().unwrap()),
+                local_index: u32::from_le_bytes(buf[12..16].try_into().unwrap()),
+            }),
             Err(_) => None,
         }
     }
@@ -770,13 +873,13 @@ mod tests {
         let (dir, index) = build(vec![fti(1, 1, &[1], MatchMask::SHOP.0)]);
         let modified = index.modified().expect("modified");
         let out = dir.path().join("osm-features.index");
-        let inverted = OsmFeatureIndex::inverted_path(&out);
-        let storage_modified = std::fs::metadata(&out).unwrap().modified().unwrap();
+        let inverted = OsmFeatureIndex::inverted_index_path(&out);
+        let features_modified = std::fs::metadata(&out).unwrap().modified().unwrap();
         let inverted_modified = std::fs::metadata(&inverted).unwrap().modified().unwrap();
         // Whichever of the two files was written last (the inverted
         // index, since create() writes it in a second pass, after the
-        // feature storage) -- not necessarily the storage file.
-        assert_eq!(modified, storage_modified.max(inverted_modified));
+        // feature storage) -- not necessarily the feature storage file.
+        assert_eq!(modified, features_modified.max(inverted_modified));
     }
 
     #[test]
