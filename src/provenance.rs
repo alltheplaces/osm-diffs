@@ -128,18 +128,25 @@ fn output_component(run_timestamp: &str) -> Value {
 }
 
 fn atp_component(atp: &AtpMetadata) -> Value {
+    let start_time = format_rfc3339(atp.start_time);
     json!({
         "bom-ref": "alltheplaces.zip",
         "type": "data",
         "name": "alltheplaces",
-        "version": format_rfc3339(atp.start_time),
+        "version": &start_time,
         "supplier": supplier(),
+        // TODO(#646): checksum is a placeholder until we compute a real
+        // SHA-256 hash of the downloaded zip; the purl is invalid until
+        // then, expected to be fixed before this ever runs in
+        // production.
+        "purl": format!(
+            "pkg:generic/alltheplaces.zip@{start_time}?download_url={}&checksum=sha256:TODO",
+            atp.output_url
+        ),
         "data": [{"type": "dataset", "contents": {"url": atp.output_url}}],
         "externalReferences": [
             {"type": "distribution", "url": atp.output_url},
         ],
-        // TODO(#646): add a "hashes" entry (SHA-256 of the downloaded
-        // zip) once we compute one. Not done today.
     })
 }
 
@@ -259,6 +266,11 @@ mod tests {
         assert_eq!(atp["name"], "alltheplaces");
         assert_eq!(atp["version"], "2026-03-04T15:16:17Z");
         assert_eq!(atp["supplier"]["name"], "All The Places");
+        assert_eq!(
+            atp["purl"],
+            "pkg:generic/alltheplaces.zip@2026-03-04T15:16:17Z\
+             ?download_url=https://example.org/output.zip&checksum=sha256:TODO"
+        );
         assert_eq!(
             atp["data"][0]["contents"]["url"],
             "https://example.org/output.zip"
