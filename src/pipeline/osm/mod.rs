@@ -249,8 +249,10 @@ fn build_relation_parents<R: Read + Seek + Send>(
 
 /// Filename, within `workdir`, that `fetch::fetch_planet` downloads the
 /// OSM planet PBF to. Shared with `crate::provenance`, which needs to
-/// find it again (via `read_header`) without re-fetching.
-pub(crate) const PLANET_PBF_FILENAME: &str = "osm-planet.pbf";
+/// find it again (via `read_header`) without re-fetching. Matches
+/// upstream's own name for this file (see `OSM_TORRENT_URL` in
+/// `fetch.rs`), rather than inventing a local one.
+pub(crate) const PLANET_PBF_FILENAME: &str = "planet-latest.osm.pbf";
 
 /// Provenance metadata read from a PBF file's `OSMHeader` block: which
 /// OpenStreetMap replication state the data corresponds to, and what

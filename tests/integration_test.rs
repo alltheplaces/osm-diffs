@@ -22,7 +22,7 @@ fn test_pipeline() -> Result<()> {
 
     let mut osm = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     osm.push("tests/test_data/zugerland.osm.pbf");
-    symlink(&osm, workdir.path().join("osm-planet.pbf"))?;
+    symlink(&osm, workdir.path().join("planet-latest.osm.pbf"))?;
 
     Command::new(cargo_bin!("osm-diffs"))
         .arg("run")
