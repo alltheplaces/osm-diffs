@@ -2739,6 +2739,7 @@ dependencies = [
  "tempfile",
  "time",
  "tokio",
+ "uuid",
  "webpki-roots",
  "wkb",
  "wkt",

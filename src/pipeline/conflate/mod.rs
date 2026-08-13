@@ -19,10 +19,12 @@ use std::{
     },
     thread,
 };
+use time::UtcDateTime;
 
 mod writer;
 use writer::{ParquetRow, ParquetWriter};
 
+#[allow(clippy::too_many_arguments)]
 pub fn conflate(
     atp: &Path,
     coverage: &Path,
@@ -30,6 +32,8 @@ pub fn conflate(
     osm_store: &dyn FeatureStore,
     progress: &MultiProgress,
     workdir: &Path,
+    pipeline_run_id: &str,
+    pipeline_start_time: UtcDateTime,
 ) -> Result<PathBuf> {
     let input_modified = last_modified(&[atp, coverage, osm])?;
     let out_path = workdir.join("conflated.parquet");
@@ -58,7 +62,14 @@ pub fn conflate(
             );
         });
         s.spawn(|| {
-            writer_result = write_conflated(rx, writer_progress, workdir, &out_path);
+            writer_result = write_conflated(
+                rx,
+                writer_progress,
+                workdir,
+                &out_path,
+                pipeline_run_id,
+                pipeline_start_time,
+            );
         });
     });
     writer_result?;
@@ -159,6 +170,8 @@ fn write_conflated(
     progress: ProgressBar,
     workdir: &Path,
     out: &Path,
+    pipeline_run_id: &str,
+    pipeline_start_time: UtcDateTime,
 ) -> Result<()> {
     let row_count = AtomicU64::new(0);
     let sorter: ExternalSorter<ParquetRow, std::io::Error, MemoryLimitedBufferBuilder> =
@@ -171,9 +184,13 @@ fn write_conflated(
         std::io::Result::Ok(row)
     }))?;
     progress.set_length(row_count.load(Ordering::SeqCst));
-    let provenance_bom = crate::provenance::build(workdir)
-        .context("could not assemble provenance BOM")?
-        .to_string();
+    let provenance_bom = crate::provenance::build_bom_for_conflated_parquet(
+        workdir,
+        pipeline_run_id,
+        pipeline_start_time,
+    )
+    .context("could not assemble provenance BOM")?
+    .to_string();
     let mut writer =
         ParquetWriter::create(out, /* max_rows_per_group */ 200_000, &provenance_bom)?;
     for row in sorted {

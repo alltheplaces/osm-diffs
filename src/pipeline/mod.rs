@@ -3,6 +3,7 @@ use std::{
     path::Path,
     time::{Instant, SystemTime},
 };
+use time::UtcDateTime;
 
 mod conflate;
 mod edits;
@@ -17,7 +18,16 @@ pub(crate) use osm::{OsmMetadata, PLANET_PBF_FILENAME, read_header};
 mod tiles;
 mod upload;
 
-pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()> {
+pub fn run_pipeline(
+    http_client: &reqwest::Client,
+    workdir: &Path,
+    pipeline_run_id: &str,
+) -> Result<()> {
+    // Captured before anything else runs, so it's a genuine start
+    // time for this invocation -- embedded into the provenance BOM
+    // (crate::provenance) as formulation[].workflows[].timeStart.
+    let pipeline_start_time = UtcDateTime::now();
+
     if !workdir.exists() {
         std::fs::create_dir(workdir)?;
     }
@@ -45,6 +55,8 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
             &*osm_store,
             &progress,
             workdir,
+            pipeline_run_id,
+            pipeline_start_time,
         )
     })?;
     let edits = run_step("suggest_edits", || {
