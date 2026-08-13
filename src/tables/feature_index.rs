@@ -164,6 +164,14 @@ impl<'a> OsmFeatureIndex<'a> {
         p
     }
 
+    /// Whether both files an `OsmFeatureIndex` at `path` needs already
+    /// exist -- same role as e.g. `FilteredFeatureStore::exists`, for
+    /// callers that memoize an expensive build step behind an existence
+    /// check rather than reopening unconditionally.
+    pub fn exists(path: &Path) -> bool {
+        path.exists() && Self::inverted_index_path(path).exists()
+    }
+
     /// Builds an `OsmFeatureIndex` from `fti`, which may be in any order.
     ///
     /// Two passes, since a feature's [LocalFeatureRef] is only known once
@@ -897,5 +905,24 @@ mod tests {
         std::fs::write(&bad, b"not the right file format at all, padded to 64+ bytes so it clears the header-size check")
             .expect("write");
         assert!(OsmFeatureIndex::open(&bad).is_err());
+    }
+
+    #[test]
+    fn exists_requires_both_files() {
+        let dir = TempDir::new().expect("tempdir");
+        let out = dir.path().join("osm-features.index");
+        assert!(!OsmFeatureIndex::exists(&out));
+
+        OsmFeatureIndex::create(
+            vec![fti(1, 1, &[1], MatchMask::SHOP.0)].into_iter(),
+            dir.path(),
+            &out,
+        )
+        .expect("create");
+        assert!(OsmFeatureIndex::exists(&out));
+
+        // Missing just the inverted-index half should still report false.
+        std::fs::remove_file(OsmFeatureIndex::inverted_index_path(&out)).expect("remove");
+        assert!(!OsmFeatureIndex::exists(&out));
     }
 }
