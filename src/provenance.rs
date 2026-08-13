@@ -38,6 +38,18 @@ fn supplier() -> Value {
     })
 }
 
+/// Supplier declared for the OSM input component only -- distinct from
+/// `supplier()`: the OpenStreetMap Foundation, not us, supplies the
+/// planet dump. Confirmed against openstreetmap.org/copyright ("...
+/// licensed under the Open Data Commons Open Database License (ODbL) by
+/// the OpenStreetMap Foundation").
+fn osm_supplier() -> Value {
+    json!({
+        "name": "OpenStreetMap Foundation",
+        "url": ["https://osmfoundation.org/"]
+    })
+}
+
 /// A CycloneDX `licenses` array for a single SPDX-recognized license,
 /// e.g. `license("CC0-1.0")`.
 fn license(spdx_id: &str) -> Value {
@@ -176,7 +188,7 @@ fn osm_component(osm: &OsmMetadata) -> Value {
         "type": "data",
         "name": pipeline::PLANET_PBF_FILENAME,
         "version": &replication_timestamp,
-        "supplier": supplier(),
+        "supplier": osm_supplier(),
         "licenses": license("ODbL-1.0"),
         // TODO(#646): checksum is a placeholder until we compute a real
         // SHA-256 hash of the downloaded .osm.pbf; the purl is invalid
@@ -300,7 +312,7 @@ mod tests {
         assert_eq!(osm["type"], "data");
         assert_eq!(osm["name"], pipeline::PLANET_PBF_FILENAME);
         assert_eq!(osm["version"], "2026-01-27T08:11:02Z");
-        assert_eq!(osm["supplier"]["name"], "All The Places");
+        assert_eq!(osm["supplier"]["name"], "OpenStreetMap Foundation");
         assert_eq!(osm["licenses"][0]["license"]["id"], "ODbL-1.0");
         assert_eq!(
             osm["purl"],
