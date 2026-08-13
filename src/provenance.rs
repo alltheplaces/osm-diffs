@@ -1,18 +1,17 @@
-//! Assembles this pipeline's provenance -- which input data, and which
-//! version of the pipeline itself, produced a given output file -- as a
-//! CycloneDX 1.7 Bill of Materials describing data lineage rather than
-//! code dependencies. See issue #644 for the target shape and the
-//! rationale behind each field (and its container-image counterpart,
-//! `scripts/sbom/pipeline.jq`, for how this repo already models "data"
-//! components and external tools in CycloneDX elsewhere).
+//! Assembles the provenance of this pipeline's public output: a
+//! machine-readable document describing which version of this pipeline,
+//! using exactly what input, and at what time, produced a given output
+//! file. We use the industry-standard CycloneDX JSON format for this,
+//! and embed the document into the output file's own metadata (for
+//! Parquet, that's key-value metadata -- see
+//! `pipeline::conflate::writer`).
 //!
-//! Deliberately reads each source's metadata straight back from
-//! `workdir` -- [`AtpMetadata`] via [`crate::atp::read_cached_metadata`],
+//! Reads each input source's metadata straight back from `workdir` --
+//! [`AtpMetadata`] via [`crate::atp::read_cached_metadata`],
 //! [`OsmMetadata`] via [`crate::pipeline::read_header`] -- rather than
 //! having it threaded through from `import_atp`/`import_osm`'s return
-//! values. That keeps BOM assembly decoupled from however those
-//! importers (and whatever indexing they feed into) end up wired
-//! together.
+//! values, so this stays decoupled from however those importers (and
+//! whatever indexing they feed into) end up wired together.
 
 use crate::atp::{self, AtpMetadata};
 use crate::pipeline::{self, OsmMetadata};
@@ -27,9 +26,18 @@ use uuid::Uuid;
 /// `metadata.tools.components[0]`'s external references and purl.
 const REPO_URL: &str = "https://github.com/alltheplaces/osm-diffs";
 
-/// Builds the CycloneDX provenance document for one pipeline run, from
-/// whatever `import_atp`/`import_osm` already left behind in `workdir`.
-pub fn build(workdir: &Path) -> Result<Value> {
+/// Builds the CycloneDX provenance document for `conflated.parquet`,
+/// from whatever `import_atp`/`import_osm` already left behind in
+/// `workdir`. `pipeline_run_id` becomes
+/// `formulation[].workflows[].uid` -- the identifier this pipeline
+/// invocation was given from outside (e.g. a Kubernetes Job run ID), if
+/// any; the empty string when run locally/interactively without one.
+/// CycloneDX's `uid` is *not* necessarily a UUID -- unlike
+/// `serialNumber` (this BOM document's own identity, which we do mint
+/// here), it identifies the actual workflow execution "within its
+/// deployment context", something this code has no way to know on its
+/// own.
+pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) -> Result<Value> {
     let atp_metadata =
         atp::read_cached_metadata(workdir).context("could not read AllThePlaces provenance")?;
     let osm_planet = workdir.join(pipeline::PLANET_PBF_FILENAME);
@@ -37,16 +45,7 @@ pub fn build(workdir: &Path) -> Result<Value> {
         pipeline::read_header(&osm_planet).context("could not read OpenStreetMap provenance")?;
 
     let run_timestamp = format_rfc3339(UtcDateTime::now());
-    // One UUID, reused for both: `serialNumber` identifies this BOM
-    // *document*, `formulation[].workflows[].uid` identifies the
-    // workflow *execution* it documents ("the unique identifier for the
-    // resource instance within its deployment context", per the
-    // CycloneDX 1.7 schema) -- different concerns in general, but we
-    // never run the same workflow twice, so document and execution are
-    // always in 1:1 correspondence here.
-    let run_id = Uuid::new_v4();
-    let serial_number = run_id.urn().to_string();
-    let workflow_uid = run_id.to_string();
+    let serial_number = Uuid::new_v4().urn().to_string();
 
     Ok(json!({
         "bomFormat": "CycloneDX",
@@ -64,7 +63,7 @@ pub fn build(workdir: &Path) -> Result<Value> {
             atp_component(&atp_metadata),
             osm_component(&osm_metadata),
         ],
-        "formulation": [formulation(&workflow_uid)],
+        "formulation": [formulation(pipeline_run_id)],
     }))
 }
 
@@ -122,7 +121,7 @@ fn atp_component(atp: &AtpMetadata) -> Value {
 
 fn osm_component(osm: &OsmMetadata) -> Value {
     json!({
-        "bom-ref": "src-osm-planet",
+        "bom-ref": "src-openstreetmap-planet",
         "type": "data",
         "name": "openstreetmap-planet",
         "version": format_rfc3339(osm.replication_timestamp),
@@ -134,22 +133,19 @@ fn osm_component(osm: &OsmMetadata) -> Value {
 
 /// Ties `tool_component()`, the two input `*_component()`s, and
 /// `output_component()` together into one workflow: which tool consumed
-/// which inputs to produce which output. `uid` is required by the
-/// CycloneDX 1.7 schema even though it's absent from #644's example
-/// shape (confirmed via `cyclonedx-cli validate` against the real
-/// schema) -- see its doc comment in `build()` for what it identifies.
-fn formulation(workflow_uid: &str) -> Value {
+/// which inputs to produce which output.
+fn formulation(pipeline_run_id: &str) -> Value {
     json!({
         "bom-ref": "formula-osm-diffs-build",
         "workflows": [{
             "bom-ref": "workflow-osm-diffs-build",
-            "uid": workflow_uid,
+            "uid": pipeline_run_id,
             "name": "osm-diffs conflation",
             "taskTypes": ["build"],
             "resourceReferences": [{"ref": "tool-osm-diffs"}],
             "inputs": [
                 {"resource": {"ref": "src-alltheplaces"}},
-                {"resource": {"ref": "src-osm-planet"}},
+                {"resource": {"ref": "src-openstreetmap-planet"}},
             ],
             "outputs": [{"resource": {"ref": "output-conflated"}}],
         }],
@@ -192,7 +188,7 @@ mod tests {
             workdir.path().join(pipeline::PLANET_PBF_FILENAME),
         )?;
 
-        let bom = build(workdir.path())?;
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "k8s-job-42")?;
 
         assert_eq!(bom["bomFormat"], "CycloneDX");
         assert_eq!(bom["specVersion"], "1.7");
@@ -235,7 +231,7 @@ mod tests {
         );
 
         let osm = &components[1];
-        assert_eq!(osm["bom-ref"], "src-osm-planet");
+        assert_eq!(osm["bom-ref"], "src-openstreetmap-planet");
         assert_eq!(osm["type"], "data");
         assert_eq!(osm["name"], "openstreetmap-planet");
         assert_eq!(osm["version"], "2026-01-27T08:11:02Z");
@@ -265,9 +261,10 @@ mod tests {
             "tool-osm-diffs",
             "output-conflated",
             "src-alltheplaces",
-            "src-osm-planet",
+            "src-openstreetmap-planet",
         ];
         let formulation = &bom["formulation"][0]["workflows"][0];
+        assert_eq!(formulation["uid"], "k8s-job-42");
         assert_eq!(
             formulation["resourceReferences"][0]["ref"],
             "tool-osm-diffs"
@@ -285,9 +282,39 @@ mod tests {
     }
 
     #[test]
+    fn test_build_defaults_workflow_uid_to_empty_string() -> Result<()> {
+        // No --run_id given (e.g. a local/interactive run): uid is the
+        // empty string, not omitted or fabricated.
+        let workdir = TempDir::new()?;
+        fs::write(
+            workdir.path().join("alltheplaces.meta.json"),
+            r#"{
+                "run_id": "2026-03-04-15-16-17",
+                "output_url": "https://example.org/output.zip",
+                "history_url": "https://data.alltheplaces.xyz/runs/history.json",
+                "start_time": "2026-03-04T15:16:17Z",
+                "end_time": "2026-03-04T18:42:03Z",
+                "spiders": 3512,
+                "total_lines": 3812044,
+                "size_bytes": 812345678
+            }"#,
+        )?;
+        let mut pbf_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        pbf_path.push("tests/test_data/zugerland.osm.pbf");
+        std::os::unix::fs::symlink(
+            &pbf_path,
+            workdir.path().join(pipeline::PLANET_PBF_FILENAME),
+        )?;
+
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "")?;
+        assert_eq!(bom["formulation"][0]["workflows"][0]["uid"], "");
+        Ok(())
+    }
+
+    #[test]
     fn test_build_missing_atp_metadata() {
         let workdir = TempDir::new().expect("tempdir");
-        assert!(build(workdir.path()).is_err());
+        assert!(build_bom_for_conflated_parquet(workdir.path(), "").is_err());
     }
 
     #[test]
@@ -314,8 +341,8 @@ mod tests {
             workdir.path().join(pipeline::PLANET_PBF_FILENAME),
         )?;
 
-        let first = build(workdir.path())?;
-        let second = build(workdir.path())?;
+        let first = build_bom_for_conflated_parquet(workdir.path(), "")?;
+        let second = build_bom_for_conflated_parquet(workdir.path(), "")?;
         assert_ne!(first["serialNumber"], second["serialNumber"]);
         Ok(())
     }

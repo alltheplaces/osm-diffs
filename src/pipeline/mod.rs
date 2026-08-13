@@ -17,7 +17,11 @@ pub(crate) use osm::{OsmMetadata, PLANET_PBF_FILENAME, read_header};
 mod tiles;
 mod upload;
 
-pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()> {
+pub fn run_pipeline(
+    http_client: &reqwest::Client,
+    workdir: &Path,
+    pipeline_run_id: &str,
+) -> Result<()> {
     if !workdir.exists() {
         std::fs::create_dir(workdir)?;
     }
@@ -45,6 +49,7 @@ pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path) -> Result<()>
             &*osm_store,
             &progress,
             workdir,
+            pipeline_run_id,
         )
     })?;
     let edits = run_step("suggest_edits", || {
