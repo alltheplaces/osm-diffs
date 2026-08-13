@@ -169,8 +169,30 @@ no effort to any future release. Cheap insurance, not a real trade-off
 against other work.
 
 It’s also about where things are heading, not just where they stand
-today: supply-chain attacks aren’t hypothetical anymore (the
-[xz-utils backdoor](https://en.wikipedia.org/wiki/XZ_Utils_backdoor)
-being the starkest recent example), and what this document describes
-is becoming a baseline expectation, not something only
-security-sensitive projects bother with.
+today. Software supply chains have become a favored attack target
+precisely because they scale asymmetrically: compromise one
+widely-used dependency or build pipeline once, and every downstream
+consumer inherits the backdoor without having done anything wrong
+themselves. The
+[xz-utils backdoor](https://en.wikipedia.org/wiki/XZ_Utils_backdoor) —
+a maintainer identity patiently built up over two years, then used to
+slip a remote-code-execution backdoor into a library linked into most
+Linux SSH servers — is the starkest recent example, but it’s one of
+many; the
+[`event-stream` npm compromise](https://en.wikipedia.org/wiki/Event-stream)
+and the
+[SolarWinds breach](https://en.wikipedia.org/wiki/2020_United_States_federal_government_data_breach)
+show the pattern isn’t a fluke. Regulators have taken notice too:
+SBOMs and signed provenance are moving from best practice to legal
+requirement, for example under the US
+[Executive Order 14028](https://en.wikipedia.org/wiki/Executive_Order_14028)
+and the EU
+[Cyber Resilience Act](https://en.wikipedia.org/wiki/Cyber_Resilience_Act).
+
+None of that raises `osm-diffs`’s own threat model much — and
+honestly, everything in this document is overkill for what a project
+like this actually needs. We set it up anyway to make a different
+point: this level of rigor doesn’t require a large company’s
+resources. A small open-source repo, maintained by volunteers in their
+spare time, can get most of the way there too — and as this release
+process shows, once it’s wired up, it keeps running for free.
