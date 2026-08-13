@@ -82,7 +82,7 @@ use std::{
     mem::size_of,
     ops::RangeInclusive,
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
 
 /// Size of each file's header, in bytes: see the "File format" section above.
@@ -191,6 +191,7 @@ impl<'a> OsmFeatureIndex<'a> {
         workdir: &Path,
         out: &Path,
     ) -> Result<OsmFeatureIndex<'a>> {
+        let create_start = Instant::now();
         let inverted_index_path = Self::inverted_index_path(out);
         let pass2_spool_path = {
             let mut p = PathBuf::from(out);
@@ -218,10 +219,11 @@ impl<'a> OsmFeatureIndex<'a> {
             BufWriter::with_capacity(64 * 1024, File::create(&pass2_spool_path)?);
         for (i, item) in sorted1.enumerate() {
             // A LocalFeatureRef can only address up to u32::MAX features.
-            // Current planet-wide pruning keeps on the order of 500M
-            // features, well within range, but a future change to the
-            // pruning logic could conceivably push this past 2^32 --
-            // fail loudly rather than silently truncate/wrap.
+            // Current planet-wide pruning keeps on the order of 160
+            // million features (162,812,789, measured on the 2026-08-03
+            // planet snapshot), well within range, but a future change
+            // to the pruning logic could conceivably push this past
+            // 2^32 -- fail loudly rather than silently truncate/wrap.
             let local_index = u32::try_from(i).context(
                 "OsmFeatureIndex: more than u32::MAX features, \
                  LocalFeatureRef can no longer address them all",
@@ -237,13 +239,18 @@ impl<'a> OsmFeatureIndex<'a> {
                 pass2_writer.write_all(&local_index.to_le_bytes())?;
             }
         }
+        let feature_count = feature_storage_writer.entries_count();
         feature_storage_writer.close()?;
         pass2_writer.flush()?;
         drop(pass2_writer);
+        let pass1_elapsed = create_start.elapsed();
 
         // Pass 2.
+        let pass2_start = Instant::now();
         let pass2_spool_bytes = std::fs::metadata(&pass2_spool_path)?.len();
         log::info!(
+            elapsed_seconds = pass1_elapsed.as_secs_f64(),
+            feature_count = feature_count,
             bytes = pass2_spool_bytes,
             path = pass2_spool_path.display().to_string();
             "OsmFeatureIndex::create: pass 1 → pass 2 spool file"
@@ -267,8 +274,23 @@ impl<'a> OsmFeatureIndex<'a> {
             } = item?;
             inverted_index_writer.write(coverage_cell_id, match_mask, local_index)?;
         }
+        let inverted_index_entries = inverted_index_writer.entries_count();
         inverted_index_writer.close()?;
         remove_file(&pass2_spool_path)?;
+        let pass2_elapsed = pass2_start.elapsed();
+
+        let features_bytes = std::fs::metadata(out)?.len();
+        let inverted_index_bytes = std::fs::metadata(&inverted_index_path)?.len();
+        log::info!(
+            pass1_seconds = pass1_elapsed.as_secs_f64(),
+            pass2_seconds = pass2_elapsed.as_secs_f64(),
+            total_seconds = create_start.elapsed().as_secs_f64(),
+            feature_count = feature_count,
+            inverted_index_entries = inverted_index_entries,
+            features_bytes = features_bytes,
+            inverted_index_bytes = inverted_index_bytes;
+            "OsmFeatureIndex::create: done"
+        );
 
         Self::open(out)
     }
@@ -587,6 +609,13 @@ impl FeatureStorageWriter {
         Ok(())
     }
 
+    /// Number of entries written so far. For logging a summary once
+    /// writing is done -- read this before `close(self)` consumes the
+    /// writer.
+    fn entries_count(&self) -> u64 {
+        self.entries_count
+    }
+
     fn close(mut self) -> Result<()> {
         let blobs_size: u64 = self.blobs_writer.stream_position()?;
         self.starts_writer.write_all(&blobs_size.to_le_bytes())?;
@@ -684,6 +713,13 @@ impl InvertedIndexWriter {
 
         self.entries_count += 1;
         Ok(())
+    }
+
+    /// Number of entries written so far. For logging a summary once
+    /// writing is done -- read this before `close(self)` consumes the
+    /// writer.
+    fn entries_count(&self) -> u64 {
+        self.entries_count
     }
 
     fn close(mut self) -> Result<()> {
