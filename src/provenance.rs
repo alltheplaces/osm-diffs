@@ -126,7 +126,7 @@ pub fn build_bom_for_conflated_parquet(
             "component": output_component(&run_timestamp),
         },
         "components": [
-            atp_component(&atp_metadata),
+            atp_component(&atp_metadata)?,
             osm_component(&osm_metadata),
         ],
         // Declares conflated.parquet's two inputs as *its* dependencies,
@@ -188,9 +188,19 @@ fn output_component(run_timestamp: &str) -> Value {
     })
 }
 
-fn atp_component(atp: &AtpMetadata) -> Value {
+fn atp_component(atp: &AtpMetadata) -> Result<Value> {
     let start_time = format_rfc3339(atp.start_time);
-    json!({
+    // Always Some by the time this runs: import_atp (which computes it,
+    // see AtpMetadata::sha256's doc comment) is a prerequisite pipeline
+    // step that always runs before conflate. Erroring rather than
+    // falling back to a placeholder if it's ever missing -- e.g. a
+    // workdir left over from before this field existed -- matches how
+    // AtpMetadata's other fields are already treated: don't build a BOM
+    // from data we don't actually trust.
+    let sha256 = atp.sha256.as_deref().context(
+        "AllThePlaces metadata has no sha256 (workdir from an older osm-diffs version?)",
+    )?;
+    Ok(json!({
         "bom-ref": "alltheplaces.zip",
         "type": "data",
         "name": "alltheplaces.zip",
@@ -201,12 +211,9 @@ fn atp_component(atp: &AtpMetadata) -> Value {
         // OSM Foundation's Licensing Working Group:
         // https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources
         "licenses": license("CC0-1.0", CC0_URL),
-        // TODO(#646): checksum is a placeholder until we compute a real
-        // SHA-256 hash of the downloaded zip; the purl is invalid until
-        // then, expected to be fixed before this ever runs in
-        // production.
+        "hashes": [{"alg": "SHA-256", "content": sha256}],
         "purl": format!(
-            "pkg:generic/alltheplaces.zip@{start_time}?download_url={}&checksum=sha256:TODO",
+            "pkg:generic/alltheplaces.zip@{start_time}?download_url={}&checksum=sha256:{sha256}",
             atp.output_url
         ),
         "data": [{"type": "dataset", "contents": {"url": atp.output_url}}],
@@ -214,7 +221,7 @@ fn atp_component(atp: &AtpMetadata) -> Value {
             {"type": "distribution", "url": atp.output_url},
             license_external_reference(CC0_URL),
         ],
-    })
+    }))
 }
 
 fn osm_component(osm: &OsmMetadata) -> Value {
@@ -297,7 +304,8 @@ mod tests {
                 "end_time": "2026-03-04T18:42:03Z",
                 "spiders": 3512,
                 "total_lines": 3812044,
-                "size_bytes": 812345678
+                "size_bytes": 812345678,
+                "sha256": "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
             }"#,
         )?;
         let mut pbf_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -357,10 +365,16 @@ mod tests {
         assert_eq!(atp["licenses"][0]["license"]["id"], "CC0-1.0");
         assert_eq!(atp["licenses"][0]["license"]["url"], CC0_URL);
         assert!(atp["copyright"].is_null());
+        assert_eq!(atp["hashes"][0]["alg"], "SHA-256");
+        assert_eq!(
+            atp["hashes"][0]["content"],
+            "3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
+        );
         assert_eq!(
             atp["purl"],
             "pkg:generic/alltheplaces.zip@2026-03-04T15:16:17Z\
-             ?download_url=https://example.org/output.zip&checksum=sha256:TODO"
+             ?download_url=https://example.org/output.zip&checksum=sha256:\
+             3a6eb0790f39ac87c94f3856b2dd2c5d110e6811602261a9a923d3bb23adc8b7"
         );
         assert_eq!(
             atp["data"][0]["contents"]["url"],
