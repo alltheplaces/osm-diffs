@@ -121,9 +121,12 @@ fn atp_component(atp: &AtpMetadata) -> Value {
 
 fn osm_component(osm: &OsmMetadata) -> Value {
     json!({
-        "bom-ref": "planet.osm.pbf",
+        // Reference PLANET_PBF_FILENAME rather than a literal, so this
+        // can't drift from the file's actual local name (see #648 for a
+        // proposal to rename it to match upstream's own convention).
+        "bom-ref": pipeline::PLANET_PBF_FILENAME,
         "type": "data",
-        "name": "planet.osm.pbf",
+        "name": pipeline::PLANET_PBF_FILENAME,
         "version": format_rfc3339(osm.replication_timestamp),
         "data": [{"type": "dataset"}],
         // TODO(#646): add a "hashes" entry (SHA-256 of the downloaded
@@ -145,7 +148,7 @@ fn formulation(pipeline_run_id: &str) -> Value {
             "resourceReferences": [{"ref": "tool-osm-diffs"}],
             "inputs": [
                 {"resource": {"ref": "alltheplaces.zip"}},
-                {"resource": {"ref": "planet.osm.pbf"}},
+                {"resource": {"ref": pipeline::PLANET_PBF_FILENAME}},
             ],
             "outputs": [{"resource": {"ref": "conflated.parquet"}}],
         }],
@@ -231,9 +234,9 @@ mod tests {
         );
 
         let osm = &components[1];
-        assert_eq!(osm["bom-ref"], "planet.osm.pbf");
+        assert_eq!(osm["bom-ref"], pipeline::PLANET_PBF_FILENAME);
         assert_eq!(osm["type"], "data");
-        assert_eq!(osm["name"], "planet.osm.pbf");
+        assert_eq!(osm["name"], pipeline::PLANET_PBF_FILENAME);
         assert_eq!(osm["version"], "2026-01-27T08:11:02Z");
 
         // None of the deliberately-dropped ATP/OSM fields (run-health
@@ -261,7 +264,7 @@ mod tests {
             "tool-osm-diffs",
             "conflated.parquet",
             "alltheplaces.zip",
-            "planet.osm.pbf",
+            pipeline::PLANET_PBF_FILENAME,
         ];
         let formulation = &bom["formulation"][0]["workflows"][0];
         assert_eq!(formulation["uid"], "k8s-job-42");
