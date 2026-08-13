@@ -26,7 +26,18 @@ use uuid::Uuid;
 /// `metadata.tools.components[0]`'s external references and purl.
 const REPO_URL: &str = "https://github.com/alltheplaces/osm-diffs";
 
-/// Supplier declared for this BOM and both input components. Copied
+/// Standard OSM attribution notice, distinct from the license itself:
+/// ODbL requires reproducing this in any produced/derivative work, and
+/// that requirement propagates to `conflated.parquet` the same way the
+/// license itself does (see `output_component()`).
+const OSM_COPYRIGHT: &str = "© OpenStreetMap contributors";
+
+/// Canonical license text URLs, confirmed against the SPDX license
+/// list's own `seeAlso` references for `ODbL-1.0` / `CC0-1.0`.
+const ODBL_URL: &str = "https://opendatacommons.org/licenses/odbl/1-0/";
+const CC0_URL: &str = "https://creativecommons.org/publicdomain/zero/1.0/legalcode";
+
+/// Supplier declared for this BOM and the AllThePlaces component. Copied
 /// verbatim from `scripts/sbom/merge.jq`'s `metadata.supplier` (the
 /// container-image SBOM) rather than kept in sync programmatically --
 /// the project name won't change, and if it ever does, a grep finds
@@ -51,23 +62,46 @@ fn osm_supplier() -> Value {
 }
 
 /// A CycloneDX `licenses` array for a single SPDX-recognized license,
-/// e.g. `license("CC0-1.0")`.
-fn license(spdx_id: &str) -> Value {
-    json!([{"license": {"id": spdx_id}}])
+/// with a link to its actual text. Pair with
+/// `license_external_reference(url)` in the same component's
+/// `externalReferences`: the schema's own description of `license.url`
+/// asks for that, "for completeness".
+fn license(spdx_id: &str, url: &str) -> Value {
+    json!([{
+        "license": {
+            "id": spdx_id,
+            "url": url,
+            "acknowledgement": "declared",
+        }
+    }])
+}
+
+fn license_external_reference(url: &str) -> Value {
+    json!({"type": "license", "url": url})
 }
 
 /// Builds the CycloneDX provenance document for `conflated.parquet`,
 /// from whatever `import_atp`/`import_osm` already left behind in
-/// `workdir`. `pipeline_run_id` becomes
-/// `formulation[].workflows[].uid` -- the identifier this pipeline
-/// invocation was given from outside (e.g. a Kubernetes Job run ID), if
-/// any; the empty string when run locally/interactively without one.
-/// CycloneDX's `uid` is *not* necessarily a UUID -- unlike
-/// `serialNumber` (this BOM document's own identity, which we do mint
-/// here), it identifies the actual workflow execution "within its
-/// deployment context", something this code has no way to know on its
-/// own.
-pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) -> Result<Value> {
+/// `workdir`.
+///
+/// `pipeline_run_id` becomes `formulation[].workflows[].uid` (and its
+/// `trigger.uid`) -- the identifier this pipeline invocation was given
+/// from outside (e.g. a Kubernetes Job run ID), if any; the empty
+/// string when run locally/interactively without one. CycloneDX's `uid`
+/// is *not* necessarily a UUID -- unlike `serialNumber` (this BOM
+/// document's own identity, which we do mint here), it identifies the
+/// actual workflow execution "within its deployment context", something
+/// this code has no way to know on its own.
+///
+/// `pipeline_start_time` becomes `formulation[].workflows[].timeStart`;
+/// the moment this function runs (near the very end of the pipeline,
+/// once conflation is done) becomes `timeEnd`, and also
+/// `metadata.timestamp`/`metadata.component.version`.
+pub fn build_bom_for_conflated_parquet(
+    workdir: &Path,
+    pipeline_run_id: &str,
+    pipeline_start_time: UtcDateTime,
+) -> Result<Value> {
     let atp_metadata =
         atp::read_cached_metadata(workdir).context("could not read AllThePlaces provenance")?;
     let osm_planet = workdir.join(pipeline::PLANET_PBF_FILENAME);
@@ -75,6 +109,7 @@ pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) ->
         pipeline::read_header(&osm_planet).context("could not read OpenStreetMap provenance")?;
 
     let run_timestamp = format_rfc3339(UtcDateTime::now());
+    let start_timestamp = format_rfc3339(pipeline_start_time);
     let serial_number = Uuid::new_v4().urn().to_string();
 
     Ok(json!({
@@ -104,7 +139,7 @@ pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) ->
             "ref": "conflated.parquet",
             "dependsOn": ["alltheplaces.zip", pipeline::PLANET_PBF_FILENAME],
         }],
-        "formulation": [formulation(pipeline_run_id)],
+        "formulation": [formulation(pipeline_run_id, &start_timestamp, &run_timestamp)],
     }))
 }
 
@@ -139,12 +174,15 @@ fn output_component(run_timestamp: &str) -> Value {
         // ODbL, not CC0: ODbL's share-alike clause propagates to any
         // produced/derivative work incorporating OpenStreetMap data,
         // regardless of what else (here, CC0-licensed AllThePlaces
-        // data) was combined with it.
-        "licenses": license("ODbL-1.0"),
+        // data) was combined with it. Same reasoning applies to the
+        // attribution notice below.
+        "licenses": license("ODbL-1.0", ODBL_URL),
+        "copyright": OSM_COPYRIGHT,
         "externalReferences": [
             // TODO(#645): docs/CONFLATED_OUTPUT.md doesn't exist yet --
             // this link is intentionally broken until it's written.
             {"type": "documentation", "url": format!("{REPO_URL}/blob/main/docs/CONFLATED_OUTPUT.md")},
+            license_external_reference(ODBL_URL),
         ],
         "data": [{"type": "dataset"}],
     })
@@ -155,14 +193,14 @@ fn atp_component(atp: &AtpMetadata) -> Value {
     json!({
         "bom-ref": "alltheplaces.zip",
         "type": "data",
-        "name": "alltheplaces",
+        "name": "alltheplaces.zip",
         "version": &start_time,
         "supplier": supplier(),
         // Using AllThePlaces data in OpenStreetMap (this pipeline's
         // purpose) was discussed with -- and not objected to by -- the
         // OSM Foundation's Licensing Working Group:
         // https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources
-        "licenses": license("CC0-1.0"),
+        "licenses": license("CC0-1.0", CC0_URL),
         // TODO(#646): checksum is a placeholder until we compute a real
         // SHA-256 hash of the downloaded zip; the purl is invalid until
         // then, expected to be fixed before this ever runs in
@@ -174,6 +212,7 @@ fn atp_component(atp: &AtpMetadata) -> Value {
         "data": [{"type": "dataset", "contents": {"url": atp.output_url}}],
         "externalReferences": [
             {"type": "distribution", "url": atp.output_url},
+            license_external_reference(CC0_URL),
         ],
     })
 }
@@ -189,20 +228,24 @@ fn osm_component(osm: &OsmMetadata) -> Value {
         "name": pipeline::PLANET_PBF_FILENAME,
         "version": &replication_timestamp,
         "supplier": osm_supplier(),
-        "licenses": license("ODbL-1.0"),
+        "licenses": license("ODbL-1.0", ODBL_URL),
+        "copyright": OSM_COPYRIGHT,
         // TODO(#646): checksum is a placeholder until we compute a real
         // SHA-256 hash of the downloaded .osm.pbf; the purl is invalid
         // until then, expected to be fixed before this ever runs in
         // production.
         "purl": format!("pkg:generic/openstreetmap/planet@{replication_timestamp}?checksum=sha256:TODO"),
         "data": [{"type": "dataset"}],
+        "externalReferences": [
+            license_external_reference(ODBL_URL),
+        ],
     })
 }
 
 /// Ties `tool_component()`, the two input `*_component()`s, and
 /// `output_component()` together into one workflow: which tool consumed
 /// which inputs to produce which output.
-fn formulation(pipeline_run_id: &str) -> Value {
+fn formulation(pipeline_run_id: &str, time_start: &str, time_end: &str) -> Value {
     json!({
         "bom-ref": "formula-osm-diffs-build",
         "workflows": [{
@@ -210,6 +253,18 @@ fn formulation(pipeline_run_id: &str) -> Value {
             "uid": pipeline_run_id,
             "name": "osm-diffs conflation",
             "taskTypes": ["build"],
+            // This pipeline runs as a weekly batch job (see
+            // docs/SUPPLY_CHAIN_SECURITY.md), not on manual/ad-hoc
+            // invocation -- reuse pipeline_run_id as the trigger's own
+            // "uid" too: one trigger firing is one pipeline run here,
+            // so there's no separate identifier worth inventing.
+            "trigger": {
+                "bom-ref": "trigger-osm-diffs-schedule",
+                "uid": pipeline_run_id,
+                "type": "scheduled",
+            },
+            "timeStart": time_start,
+            "timeEnd": time_end,
             "resourceReferences": [{"ref": "tool-osm-diffs"}],
             "inputs": [
                 {"resource": {"ref": "alltheplaces.zip"}},
@@ -231,12 +286,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_build() -> Result<()> {
-        let workdir = TempDir::new()?;
-
+    fn write_fixtures(workdir: &Path) -> Result<()> {
         fs::write(
-            workdir.path().join("alltheplaces.meta.json"),
+            workdir.join("alltheplaces.meta.json"),
             r#"{
                 "run_id": "2026-03-04-15-16-17",
                 "output_url": "https://example.org/output.zip",
@@ -248,15 +300,19 @@ mod tests {
                 "size_bytes": 812345678
             }"#,
         )?;
-
         let mut pbf_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         pbf_path.push("tests/test_data/zugerland.osm.pbf");
-        std::os::unix::fs::symlink(
-            &pbf_path,
-            workdir.path().join(pipeline::PLANET_PBF_FILENAME),
-        )?;
+        std::os::unix::fs::symlink(&pbf_path, workdir.join(pipeline::PLANET_PBF_FILENAME))?;
+        Ok(())
+    }
 
-        let bom = build_bom_for_conflated_parquet(workdir.path(), "k8s-job-42")?;
+    #[test]
+    fn test_build() -> Result<()> {
+        let workdir = TempDir::new()?;
+        write_fixtures(workdir.path())?;
+
+        let start_time = UtcDateTime::from_unix_timestamp(1_770_000_000)?; // 2026-02-01T20:00:00Z
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "k8s-job-42", start_time)?;
 
         assert_eq!(bom["bomFormat"], "CycloneDX");
         assert_eq!(bom["specVersion"], "1.7");
@@ -286,6 +342,8 @@ mod tests {
         assert_eq!(output["mime-type"], "application/vnd.apache.parquet");
         assert!(output["version"].as_str().is_some());
         assert_eq!(output["licenses"][0]["license"]["id"], "ODbL-1.0");
+        assert_eq!(output["licenses"][0]["license"]["url"], ODBL_URL);
+        assert_eq!(output["copyright"], OSM_COPYRIGHT);
 
         let components = bom["components"].as_array().expect("components array");
         assert_eq!(components.len(), 2);
@@ -293,10 +351,12 @@ mod tests {
         let atp = &components[0];
         assert_eq!(atp["bom-ref"], "alltheplaces.zip");
         assert_eq!(atp["type"], "data");
-        assert_eq!(atp["name"], "alltheplaces");
+        assert_eq!(atp["name"], "alltheplaces.zip");
         assert_eq!(atp["version"], "2026-03-04T15:16:17Z");
         assert_eq!(atp["supplier"]["name"], "All The Places");
         assert_eq!(atp["licenses"][0]["license"]["id"], "CC0-1.0");
+        assert_eq!(atp["licenses"][0]["license"]["url"], CC0_URL);
+        assert!(atp["copyright"].is_null());
         assert_eq!(
             atp["purl"],
             "pkg:generic/alltheplaces.zip@2026-03-04T15:16:17Z\
@@ -314,6 +374,8 @@ mod tests {
         assert_eq!(osm["version"], "2026-01-27T08:11:02Z");
         assert_eq!(osm["supplier"]["name"], "OpenStreetMap Foundation");
         assert_eq!(osm["licenses"][0]["license"]["id"], "ODbL-1.0");
+        assert_eq!(osm["licenses"][0]["license"]["url"], ODBL_URL);
+        assert_eq!(osm["copyright"], OSM_COPYRIGHT);
         assert_eq!(
             osm["purl"],
             "pkg:generic/openstreetmap/planet@2026-01-27T08:11:02Z?checksum=sha256:TODO"
@@ -360,18 +422,19 @@ mod tests {
             "alltheplaces.zip",
             pipeline::PLANET_PBF_FILENAME,
         ];
-        let formulation = &bom["formulation"][0]["workflows"][0];
-        assert_eq!(formulation["uid"], "k8s-job-42");
-        assert_eq!(
-            formulation["resourceReferences"][0]["ref"],
-            "tool-osm-diffs"
-        );
-        for input in formulation["inputs"].as_array().expect("inputs") {
+        let workflow = &bom["formulation"][0]["workflows"][0];
+        assert_eq!(workflow["uid"], "k8s-job-42");
+        assert_eq!(workflow["trigger"]["type"], "scheduled");
+        assert_eq!(workflow["trigger"]["uid"], "k8s-job-42");
+        assert_eq!(workflow["timeStart"], format_rfc3339(start_time));
+        assert_eq!(workflow["timeEnd"], bom["metadata"]["timestamp"]);
+        assert_eq!(workflow["resourceReferences"][0]["ref"], "tool-osm-diffs");
+        for input in workflow["inputs"].as_array().expect("inputs") {
             let r = input["resource"]["ref"].as_str().expect("ref");
             assert!(known_refs.contains(&r), "unknown bom-ref {r}");
         }
         assert_eq!(
-            formulation["outputs"][0]["resource"]["ref"],
+            workflow["outputs"][0]["resource"]["ref"],
             "conflated.parquet"
         );
 
@@ -383,63 +446,28 @@ mod tests {
         // No --run_id given (e.g. a local/interactive run): uid is the
         // empty string, not omitted or fabricated.
         let workdir = TempDir::new()?;
-        fs::write(
-            workdir.path().join("alltheplaces.meta.json"),
-            r#"{
-                "run_id": "2026-03-04-15-16-17",
-                "output_url": "https://example.org/output.zip",
-                "history_url": "https://data.alltheplaces.xyz/runs/history.json",
-                "start_time": "2026-03-04T15:16:17Z",
-                "end_time": "2026-03-04T18:42:03Z",
-                "spiders": 3512,
-                "total_lines": 3812044,
-                "size_bytes": 812345678
-            }"#,
-        )?;
-        let mut pbf_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        pbf_path.push("tests/test_data/zugerland.osm.pbf");
-        std::os::unix::fs::symlink(
-            &pbf_path,
-            workdir.path().join(pipeline::PLANET_PBF_FILENAME),
-        )?;
+        write_fixtures(workdir.path())?;
 
-        let bom = build_bom_for_conflated_parquet(workdir.path(), "")?;
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now())?;
         assert_eq!(bom["formulation"][0]["workflows"][0]["uid"], "");
+        assert_eq!(bom["formulation"][0]["workflows"][0]["trigger"]["uid"], "");
         Ok(())
     }
 
     #[test]
     fn test_build_missing_atp_metadata() {
         let workdir = TempDir::new().expect("tempdir");
-        assert!(build_bom_for_conflated_parquet(workdir.path(), "").is_err());
+        assert!(build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now()).is_err());
     }
 
     #[test]
     fn test_build_is_fresh_per_run() -> Result<()> {
         // serialNumber must not be reused across BOMs.
         let workdir = TempDir::new()?;
-        fs::write(
-            workdir.path().join("alltheplaces.meta.json"),
-            r#"{
-                "run_id": "2026-03-04-15-16-17",
-                "output_url": "https://example.org/output.zip",
-                "history_url": "https://data.alltheplaces.xyz/runs/history.json",
-                "start_time": "2026-03-04T15:16:17Z",
-                "end_time": "2026-03-04T18:42:03Z",
-                "spiders": 3512,
-                "total_lines": 3812044,
-                "size_bytes": 812345678
-            }"#,
-        )?;
-        let mut pbf_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        pbf_path.push("tests/test_data/zugerland.osm.pbf");
-        std::os::unix::fs::symlink(
-            &pbf_path,
-            workdir.path().join(pipeline::PLANET_PBF_FILENAME),
-        )?;
+        write_fixtures(workdir.path())?;
 
-        let first = build_bom_for_conflated_parquet(workdir.path(), "")?;
-        let second = build_bom_for_conflated_parquet(workdir.path(), "")?;
+        let first = build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now())?;
+        let second = build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now())?;
         assert_ne!(first["serialNumber"], second["serialNumber"]);
         Ok(())
     }

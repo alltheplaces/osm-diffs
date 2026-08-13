@@ -3,6 +3,7 @@ use std::{
     path::Path,
     time::{Instant, SystemTime},
 };
+use time::UtcDateTime;
 
 mod conflate;
 mod edits;
@@ -22,6 +23,11 @@ pub fn run_pipeline(
     workdir: &Path,
     pipeline_run_id: &str,
 ) -> Result<()> {
+    // Captured before anything else runs, so it's a genuine start
+    // time for this invocation -- embedded into the provenance BOM
+    // (crate::provenance) as formulation[].workflows[].timeStart.
+    let pipeline_start_time = UtcDateTime::now();
+
     if !workdir.exists() {
         std::fs::create_dir(workdir)?;
     }
@@ -50,6 +56,7 @@ pub fn run_pipeline(
             &progress,
             workdir,
             pipeline_run_id,
+            pipeline_start_time,
         )
     })?;
     let edits = run_step("suggest_edits", || {
