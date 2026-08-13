@@ -1,10 +1,10 @@
 use super::last_modified;
 use crate::{
     make_progress_bar,
-    matchers::{create_matcher, match_distance},
-    pipeline::osm::FeatureStore,
+    matchers::{OsmCandidate, create_matcher, match_distance},
     places::{Place, PlaceIndex},
     s2_util::MergedCellRanges,
+    tables::{Feature, OsmFeatures},
 };
 use anyhow::{Context, Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
@@ -28,14 +28,13 @@ use writer::{ParquetRow, ParquetWriter};
 pub fn conflate(
     atp: &Path,
     coverage: &Path,
-    osm: &Path,
-    osm_store: &dyn FeatureStore,
+    osm: &OsmFeatures,
     progress: &MultiProgress,
     workdir: &Path,
     pipeline_run_id: &str,
     pipeline_start_time: UtcDateTime,
 ) -> Result<PathBuf> {
-    let input_modified = last_modified(&[atp, coverage, osm])?;
+    let input_modified = last_modified(&[atp, coverage])?.max(osm.modified()?);
     let out_path = workdir.join("conflated.parquet");
     if out_path.exists() && last_modified(&[&out_path])? >= input_modified {
         return Ok(out_path);
@@ -46,20 +45,13 @@ pub fn conflate(
     let producer_progress =
         make_progress_bar(progress, "conflate.match", num_atp_features, "ATP features");
     let writer_progress = make_progress_bar(progress, "conflate.write", 0, "parquet rows");
-    let osm_index = PlaceIndex::open(osm, 32)?;
 
     let mut producer_result = Ok(());
     let mut writer_result = Ok(());
     thread::scope(|s| {
         let (tx, rx) = sync_channel::<ParquetRow>(8192);
         s.spawn(|| {
-            producer_result = produce_rows(
-                atp_index.clone(),
-                osm_index.clone(),
-                osm_store,
-                producer_progress,
-                tx,
-            );
+            producer_result = produce_rows(atp_index.clone(), osm, producer_progress, tx);
         });
         s.spawn(|| {
             writer_result = write_conflated(
@@ -81,14 +73,13 @@ pub fn conflate(
 #[allow(unused)]
 struct ConflatedFeature {
     atp: Option<Place>,
-    osm: Option<Place>,
+    osm: Option<Feature>,
     // TODO: Signals for ranking.
 }
 
 fn produce_rows(
     atp_index: Arc<PlaceIndex>,
-    osm_index: Arc<PlaceIndex>,
-    osm_store: &dyn FeatureStore,
+    osm: &OsmFeatures,
     progress_bar: ProgressBar,
     out: SyncSender<ParquetRow>,
 ) -> Result<()> {
@@ -122,39 +113,21 @@ fn produce_rows(
                 coverer.covering(&cap)
             };
             for (lo, hi) in MergedCellRanges::new(covering) {
-                let mut iter = osm_index.query(lo..=hi, atp.mask)?;
-                let mut best_candidate: Option<&Place> = None;
-                for candidate in &mut iter {
-                    let candidate = candidate?;
-                    let score = matcher.score(candidate);
+                for r in osm.index.query(lo..=hi, atp.mask) {
+                    let feature = osm.index.get_feature(r)?;
+                    let candidate = OsmCandidate {
+                        feature: &feature,
+                        strings: &osm.strings,
+                    };
+                    let score = matcher.score_osm_candidate(&candidate);
                     if score > best_score {
-                        best_candidate = Some(candidate);
                         best_score = score;
+                        conflated.osm = Some(feature);
                     }
-                }
-                if let Some(osm) = best_candidate {
-                    conflated.osm = Some(osm.deep_clone());
                 }
             }
 
-            // TODO: Use a custom function instead of try_from, so we
-            // can pass a reference to FeatureStore to extract the
-            // geometry (and any other attributes not needed for
-            // matching).
-            let row = ParquetRow::try_from(conflated)?;
-            if let Some(row_osm_id) = row.osm_id {
-                let osm_id = row_osm_id.get() / 10;
-                let osm_type = row_osm_id.get() % 10;
-                match osm_type {
-                    // TODO: Currently, we only get some result for ways.
-                    // Change the osm.filter step of the pipeline to construct
-                    // feature_index also for nodes and relations.
-                    1 => if let Some(_node) = osm_store.get_node(osm_id) {},
-                    2 => if let Some(_way) = osm_store.get_way(osm_id) {},
-                    3 => if let Some(_relation) = osm_store.get_relation(osm_id) {},
-                    _ => {}
-                };
-            };
+            let row = ParquetRow::from_conflated(conflated, &osm.strings)?;
             out.send(row)?;
 
             Ok(())

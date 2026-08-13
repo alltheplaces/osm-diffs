@@ -81,13 +81,14 @@ use std::{
     io,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 /// Read-only, memory-mapped table of strings, retrievable both by
 /// original insertion index ([StringPool::get]) and by value
 /// ([StringPool::lookup]). See the "File format" section above.
 pub struct StringPool<'a> {
-    _file: File,
+    file: File,
     _mmap: Mmap,
     len: usize,
     buckets: &'a [u32],
@@ -254,7 +255,7 @@ impl<'a> StringPool<'a> {
         };
 
         Ok(StringPool {
-            _file: file,
+            file,
             _mmap: mmap,
             len,
             buckets,
@@ -281,6 +282,11 @@ impl<'a> StringPool<'a> {
     #[allow(unused)]
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// Returns the modification time of the backing file.
+    pub fn modified(&self) -> Result<SystemTime> {
+        Ok(self.file.metadata()?.modified()?)
     }
 
     /// Returns the index under which `key` was stored (as accepted by

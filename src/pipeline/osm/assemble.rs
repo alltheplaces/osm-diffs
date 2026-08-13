@@ -19,7 +19,7 @@ use rayon::prelude::*;
 use s2::{cellid::CellID, cellunion::CellUnion};
 use std::{
     fs::File,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         mpsc::sync_channel,
@@ -65,12 +65,20 @@ pub fn assemble<'a>(
     })
 }
 
+/// Where [assemble_strings] writes its `StringPool`. Exposed so callers
+/// that need to reopen it later (e.g. `import_osm`'s memoized-shortcut
+/// path, once it also needs to return a `StringPool`) don't have to
+/// duplicate the literal path.
+pub(super) fn strings_path(workdir: &Path) -> PathBuf {
+    workdir.join("osm-assemble.strings")
+}
+
 fn assemble_strings<'a>(
     strings: &StringCounts,
     progress: &MultiProgress,
     workdir: &Path,
 ) -> Result<StringPool<'a>> {
-    let string_pool_path = workdir.join("osm-assemble.strings");
+    let string_pool_path = strings_path(workdir);
     if string_pool_path.exists() {
         let input_modified = strings.modified()?;
         let output_modified = std::fs::metadata(&string_pool_path)?.modified()?;

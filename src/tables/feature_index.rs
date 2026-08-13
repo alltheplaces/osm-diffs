@@ -65,7 +65,7 @@
 
 use crate::matchers::MatchMask;
 use crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES;
-use crate::tables::{Feature, FeatureToIndex};
+use crate::tables::{Feature, FeatureToIndex, StringPool};
 use anyhow::{Context, Result};
 use deepsize::DeepSizeOf;
 use ext_sort::{
@@ -119,7 +119,13 @@ pub struct LocalFeatureRef(u32);
 pub struct OsmFeatureIndex<'a> {
     features_file: File,
     _features_mmap: Mmap,
+    // Backs len()/is_empty()/feature_id(), not yet called by any real
+    // caller (conflate always decodes the full Feature via get_feature()
+    // instead) -- may be picked up once suggest_edits also moves onto
+    // this index.
+    #[allow(unused)]
     entries_count: usize,
+    #[allow(unused)]
     id: &'a [u64],
     starts: &'a [u64],
     blobs: &'a [u8],
@@ -405,11 +411,13 @@ impl<'a> OsmFeatureIndex<'a> {
     }
 
     /// The number of features in this index.
+    #[allow(unused)]
     pub fn len(&self) -> usize {
         self.entries_count
     }
 
     /// Whether this index has no features.
+    #[allow(unused)]
     pub fn is_empty(&self) -> bool {
         self.entries_count == 0
     }
@@ -462,6 +470,7 @@ impl<'a> OsmFeatureIndex<'a> {
     /// for {node,way,relation}, same encoding as `Feature.id` elsewhere in
     /// this codebase (see `make_feature_id`/`feature_to_osm_id` in
     /// `pipeline::osm::assemble`). O(1), array read only -- no decode.
+    #[allow(unused)]
     pub fn feature_id(&self, r: LocalFeatureRef) -> u64 {
         u64::from_le(self.id[r.0 as usize])
     }
@@ -474,6 +483,53 @@ impl<'a> OsmFeatureIndex<'a> {
         let end = usize::try_from(u64::from_le(self.starts[i + 1]))?;
         Feature::decode(&self.blobs[start..end])
             .with_context(|| format!("failed to decode Feature at {r:?}"))
+    }
+}
+
+/// Bundles an [OsmFeatureIndex] with the [StringPool] needed to resolve
+/// its features' tag ids. The two are built independently -- the string
+/// pool is built earlier, by a different pipeline stage, and shared by
+/// every consumer of the index, not owned by `OsmFeatureIndex` itself --
+/// but almost always used together, so this exists purely so callers
+/// have one thing to pass around instead of two.
+///
+/// `OsmFeatureIndex` deliberately stays `StringPool`-agnostic: it
+/// doesn't need one for its own job (storing/querying `Feature` protos),
+/// only callers decoding tags do. Compare [crate::matchers::OsmCandidate],
+/// which pairs a single `&Feature` with `&StringPool` the same way, one
+/// level down (a single candidate rather than the whole index).
+pub struct OsmFeatures<'a> {
+    pub index: OsmFeatureIndex<'a>,
+    pub strings: StringPool<'a>,
+}
+
+impl<'a> OsmFeatures<'a> {
+    /// Whether both of `index_path`'s files and `strings_path` already
+    /// exist -- for callers that memoize an expensive build step behind
+    /// an existence check rather than reopening unconditionally.
+    pub fn exists(index_path: &Path, strings_path: &Path) -> bool {
+        OsmFeatureIndex::exists(index_path) && strings_path.exists()
+    }
+
+    /// Opens an already-built index and string pool. Doesn't build
+    /// either from scratch -- unlike `OsmFeatureIndex`, there's no
+    /// single `OsmFeatures::create()`, since the index and string pool
+    /// are built by different pipeline stages at different times; a
+    /// caller that already has both values in hand (e.g. because it just
+    /// built them) can just construct `OsmFeatures { index, strings }`
+    /// directly instead.
+    pub fn open(index_path: &Path, strings_path: &Path) -> Result<OsmFeatures<'a>> {
+        Ok(OsmFeatures {
+            index: OsmFeatureIndex::open(index_path)?,
+            strings: StringPool::open(strings_path)?,
+        })
+    }
+
+    /// The later of the index's and string pool's own modification
+    /// times, for a caller doing its own staleness check against this
+    /// bundle as a single unit.
+    pub fn modified(&self) -> Result<SystemTime> {
+        Ok(self.index.modified()?.max(self.strings.modified()?))
     }
 }
 

@@ -252,13 +252,11 @@ fn meters_to_chord_angle(radius_meters: f64) -> ChordAngle {
 /// decoded `geo::Geometry` for Hausdorff-distance scoring, or a
 /// pre-tokenized name for Token Sort Ratio matching -- can attach fields
 /// here without another trait-signature change.
-#[allow(unused)]
 pub struct OsmCandidate<'a> {
     pub feature: &'a Feature,
     pub strings: &'a StringPool<'a>,
 }
 
-#[allow(unused)]
 impl<'a> OsmCandidate<'a> {
     /// Decodes `feature.tags` -- flat `[key_id, value_id, ...]` pairs of
     /// `StringPool` indices -- into `(key, value)` string pairs. Cheap: a
@@ -296,7 +294,6 @@ pub trait Matcher {
     /// geometry-aware `OsmFeatureIndex` path instead of `Place`. Landing
     /// alongside `score`/`suggest_edit` rather than replacing them, as
     /// part of a staged migration of OSM-side matching off `Place`.
-    #[allow(unused)]
     fn score_osm_candidate(&self, candidate: &OsmCandidate) -> f64;
 }
 
@@ -336,7 +333,6 @@ fn distance_score(pt: &Point, place: &Place, max_meters: f64) -> f64 {
 /// `Place`) doesn't carry a precomputed position, so callers scoring an
 /// [OsmCandidate] compute one themselves (e.g. a decoded geometry's
 /// centroid) and pass it in here.
-#[allow(unused)]
 fn geo_point_distance(pt: &Point, geo_pt: &geo::Point<f64>) -> f64 {
     let ll = s2::latlng::LatLng::from_degrees(geo_pt.y(), geo_pt.x());
     let pt2 = Point::from(ll);
@@ -344,7 +340,6 @@ fn geo_point_distance(pt: &Point, geo_pt: &geo::Point<f64>) -> f64 {
 }
 
 /// Like `distance_score`, but for [geo_point_distance].
-#[allow(unused)]
 fn geo_point_distance_score(pt: &Point, geo_pt: &geo::Point<f64>, max_meters: f64) -> f64 {
     let dist = geo_point_distance(pt, geo_pt);
     if dist <= max_meters {

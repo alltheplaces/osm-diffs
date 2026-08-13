@@ -44,6 +44,12 @@ impl<'a> FilteredFeatureStore<'a> {
             && workdir.join("osm-filtered-relations").exists()
     }
 
+    // import_osm()'s memoized-shortcut path used to open a
+    // FilteredFeatureStore here (to hand back to conflate's old
+    // Place-based path); unused now that conflate looks up matched OSM
+    // features via OsmFeatureIndex instead. Left in place -- see the
+    // note on FeatureStore's get_node/get_way/get_relation.
+    #[allow(unused)]
     pub fn open(workdir: &Path) -> Result<FilteredFeatureStore<'a>> {
         let nodes = FilteredFile::open(&workdir.join("osm-filtered-nodes"))?;
         let ways = FilteredFile::open(&workdir.join("osm-filtered-ways"))?;
@@ -874,6 +880,10 @@ pub mod filtered_file {
             Some(&self.feature_data[start..limit])
         }
 
+        // Only ever called from FeatureStore::get_way/get_relation's
+        // implementations, unused for the same reason those are -- see
+        // the note on FeatureStore's get_node/get_way/get_relation.
+        #[allow(unused)]
         pub fn feature_index(&self, id: u64) -> Option<u64> {
             let index = if cfg!(target_endian = "little") {
                 self.feature_index_keys.binary_search(&id)
