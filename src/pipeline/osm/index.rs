@@ -30,9 +30,12 @@ use std::thread;
 /// bridging a single reader's iterator would just serialize on the
 /// decompressor anyway, adding rayon dispatch overhead for no gain. Four
 /// independent streams decoding concurrently is the actual parallelism
-/// win here. (If that's ever not enough, the ceiling isn't fixed at
-/// four -- `assemble_nodes`/`assemble_ways`/etc. could shard their own
-/// `RecordWriter` output into several files instead of one each.)
+/// win here. Not optimizing further than that for now -- worth checking
+/// whether this is an actual bottleneck first. If it is, sharding
+/// `assemble_nodes`/`assemble_ways`'s own `RecordWriter` output into more
+/// files would raise the ceiling above four; `leaf_relations`/
+/// `super_relations` likely wouldn't benefit the same way, since
+/// OpenStreetMap has comparatively few relations.
 pub fn build_index<'a>(
     assembly: &Assembly,
     progress: &MultiProgress,
@@ -54,7 +57,7 @@ pub fn build_index<'a>(
         progress,
         "osm.index                   ",
         total,
-        "records → index",
+        "features → index",
     );
 
     let mut create_result: Option<Result<OsmFeatureIndex<'a>>> = None;
