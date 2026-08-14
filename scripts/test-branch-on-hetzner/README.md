@@ -1,10 +1,12 @@
 # Testing a branch on cloud machines
 
-A small tool for running the full `osm-diffs` pipeline against a
-development branch on real Hetzner Cloud hardware, without repeating the
-manual VM setup by hand each time: create a VM, build the branch's
-`Containerfile` natively on it, run the pipeline detached, and pull back
-logs -- all from one command.
+Two small tools: `cloud_test.py` runs the full `osm-diffs` pipeline
+against a development branch on real Hetzner Cloud hardware, without
+repeating the manual VM setup by hand each time -- create a VM, build
+the branch's `Containerfile` natively on it, run the pipeline detached,
+and pull back logs, all from one command. `analyze.py` then makes sense
+of what got pulled back, without re-writing the same throwaway parsing
+script every time.
 
 This exists because staged rollouts of large pipeline changes (see e.g.
 [#655](https://github.com/alltheplaces/osm-diffs/issues/655)) call for
@@ -30,9 +32,9 @@ experiments on cloud hardware repeatable.
 - An SSH key already uploaded to that Hetzner project (`hcloud ssh-key
   list`) -- its *name*, not the key file itself, is what you pass to
   this tool.
-- Nothing else: `cloud_test.py` only uses the Python standard library
-  (no `pip install` needed), and shells out to `hcloud`/`ssh`/`scp` for
-  everything else.
+- Nothing else: both scripts only use the Python standard library (no
+  `pip install` needed); `cloud_test.py` shells out to `hcloud`/`ssh`/
+  `scp` for everything it does beyond that.
 
 ## Quick start
 
@@ -75,6 +77,29 @@ restart a run with a clean workdir without tearing down the VM
 
 Run `./cloud_test.py <command> --help` for the full flag list; defaults
 are `cpx32` / `hel1` / a 400GB volume, all overridable.
+
+## Making sense of the logs
+
+`analyze.py` is deliberately narrow -- it handles the mechanical,
+always-useful parts, not an open-ended analysis framework, since the
+actual question worth asking about a given run is usually specific to
+that run and not something worth pre-guessing:
+
+```console
+$ ./analyze.py timeline logs/pr665-m1/pipeline.log
+$ ./analyze.py vmstat-stats logs/pr665-m1/vmstat.log --step build_coverage
+$ ./analyze.py disk-stats logs/pr665-m1/disk.log --step build_coverage
+$ ./analyze.py compare logs/pr665-m1 logs/pr665-m2
+```
+
+`timeline` collapses repeated boilerplate lines (the same message
+recurring 5+ times, e.g. per-feature warnings) into one summary line
+each -- `--all` shows everything uncollapsed. `vmstat-stats`/
+`disk-stats` take either an explicit `--from`/`--to` window or
+`--step NAME`, which derives the window from that step's start/end in
+the sibling `pipeline.log` automatically. See
+[`test_data/`](test_data) for small example logs to try these against,
+and as a reference for what each log actually looks like.
 
 ## Why build on the VM, not locally
 

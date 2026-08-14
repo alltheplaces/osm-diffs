@@ -1,0 +1,44 @@
+=== date ===
+Fri Aug 14 02:10:00 PM UTC 2026
+=== uname -a ===
+Linux example-vm 6.12.88+deb13-cloud-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.12.88-1 (2026-05-15) x86_64 GNU/Linux
+=== /etc/os-release ===
+PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
+NAME="Debian GNU/Linux"
+VERSION_ID="13"
+VERSION="13 (trixie)"
+VERSION_CODENAME=trixie
+DEBIAN_VERSION_FULL=13.5
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+=== nproc ===
+2
+=== /proc/cpuinfo model name ===
+model name	: AMD EPYC-Genoa Processor
+=== free -h ===
+               total        used        free      shared  buff/cache   available
+Mem:           3.7Gi       329Mi       2.7Gi       592Ki       944Mi       3.4Gi
+Swap:             0B          0B          0B
+=== swapon --show ===
+=== lsblk ===
+NAME    MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sda       8:0    0 76.3G  0 disk
+├─sda1    8:1    0 76.1G  0 part /
+├─sda14   8:14   0    1M  0 part
+└─sda15   8:15   0  244M  0 part /boot/efi
+sdb       8:16   0  400G  0 disk /mnt/HC_Volume_106617245
+sr0      11:0    1 1024M  0 rom
+=== df -h ===
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        75G  1.7G   71G   3% /
+/dev/sdb        393G   36K  373G   1% /mnt/HC_Volume_106617245
+=== cgroup memory ===
+cat: /sys/fs/cgroup/memory.current: No such file or directory
+cat: /sys/fs/cgroup/memory.max: No such file or directory
+=== Hetzner instance metadata ===
+instance-id: 162220598
+hostname: example-vm
+region: eu-central
+availability-zone: hel1-dc2
