@@ -1,18 +1,19 @@
 # Scripts
 
-Not just release engineering, though that's still here too: source
-generators the Rust build depends on, release-engineering scripts, and
-ad hoc tooling for testing development branches on real hardware.
+Source generators the Rust build depends on, release-engineering
+scripts, and ad hoc tooling for testing development branches on real
+hardware.
 
 ## Source generation
 
 - [`generate_id_tagging_schema.py`](generate_id_tagging_schema.py):
   generates `src/pipeline/osm/generated.rs` from upstream
-  `id-tagging-schema` data. Run via `uv run
-  scripts/generate_id_tagging_schema.py`.
+  [`id-tagging-schema`](https://github.com/openstreetmap/id-tagging-schema)
+  data. Run via `uv run scripts/generate_id_tagging_schema.py`.
 - [`vendor-osm-testdata-grid.sh`](vendor-osm-testdata-grid.sh): vendors
   the OSM test fixtures used by `tests/test_data/osm-testdata-grid/`
-  from a pinned upstream commit.
+  from a pinned commit of
+  [`osm-testdata`](https://github.com/osmcode/osm-testdata).
 
 ## Release engineering
 
