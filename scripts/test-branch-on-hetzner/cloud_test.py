@@ -263,6 +263,14 @@ def cmd_start(args):
     ssh_cmd(
         ip,
         "systemd-run --unit=osm-diffs-run --collect "
+        # Debian's systemd defaults new units to the same 1024
+        # soft-limit open-file cap an interactive shell gets --
+        # switching to systemd-run does NOT fix the EMFILE crash a
+        # large external sort's spilled-chunk merge hit during the
+        # PR 665 experiment (build_coverage, specifically). Raise it
+        # explicitly rather than relying on ambient defaults that
+        # already bit us once.
+        "--property=LimitNOFILE=65536:65536 "
         f"--working-directory={REMOTE_DIR} -- "
         f"/usr/local/bin/osm-diffs run --workdir {shlex.quote(workdir)}",
     )
