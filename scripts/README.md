@@ -15,6 +15,11 @@ hardware.
   from a pinned commit of
   [`osm-testdata`](https://github.com/osmcode/osm-testdata).
 
+Both are run by hand when someone notices upstream has moved; nothing
+here notifies you of a new release. Automating that is a low-priority,
+deliberately deferred feature request, tracked in
+[alltheplaces/osm-diffs#555](https://github.com/alltheplaces/osm-diffs/issues/555).
+
 ## Release engineering
 
 See [`../docs/RELEASING.md`](../docs/RELEASING.md) for the full release
