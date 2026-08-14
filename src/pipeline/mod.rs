@@ -53,9 +53,7 @@ pub fn run_pipeline(
     let coverage = run_step("build_coverage", || {
         crate::coverage::build_coverage(&atp, &progress, workdir)
     })?;
-    let (osm_parquet, osm_features) = run_step("import_osm", || {
-        osm::import_osm(&coverage, &progress, workdir)
-    })?;
+    let osm_features = run_step("import_osm", || osm::import_osm(&progress, workdir))?;
     let _conflated = run_step("conflate", || {
         conflate::conflate(
             &atp,
@@ -67,13 +65,11 @@ pub fn run_pipeline(
             pipeline_start_time,
         )
     })?;
-    let edits = run_step("suggest_edits", || {
-        edits::suggest_edits(&coverage, &atp, &osm_parquet, &progress, workdir)
-    })?;
-    let tiles = run_step("render_tiles", || {
-        tiles::render_tiles(&edits, &progress, workdir)
-    })?;
-    run_step("upload_tiles", || upload::upload_tiles(&tiles, &progress))?;
+
+    // EXPERIMENT ONLY, not for merging (see alltheplaces/osm-diffs#655):
+    // suggest_edits/render_tiles/upload_tiles all still depend on the old
+    // path's osm.parquet, which import_osm() no longer builds on this
+    // branch -- see the matching comment on import_osm(). Stop here.
 
     Ok(())
 }

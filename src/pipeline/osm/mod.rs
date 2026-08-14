@@ -34,22 +34,23 @@ mod prune;
 use filter::FilteredFeatureStore;
 use prune::Prunings;
 
-pub fn import_osm<'a>(
-    coverage: &Path,
-    progress: &MultiProgress,
-    workdir: &Path,
-) -> Result<(PathBuf, OsmFeatures<'a>)> {
+// EXPERIMENT ONLY, not for merging (see alltheplaces/osm-diffs#655): the
+// old path (everything from `cover::cover_nodes` through
+// `old_assemble::assemble`, below) is skipped entirely here, so this
+// only builds OsmFeatureIndex/OsmFeatures and returns. This is purely to
+// let `conflate()` be exercised against real full-planet data without
+// paying for the old path's cost (both wall-clock and disk -- see the
+// experiment notes) while PR 5/PR 6 haven't landed yet. `run_pipeline`
+// has a matching temporary change to stop after `conflate()`, since
+// `suggest_edits`/`render_tiles`/`upload_tiles` still need the old
+// path's `osm.parquet`.
+pub fn import_osm<'a>(progress: &MultiProgress, workdir: &Path) -> Result<OsmFeatures<'a>> {
     assert!(workdir.exists());
 
-    let out_path = workdir.join("osm.parquet");
     let osm_index_path = workdir.join("osm-features.index");
     let strings_path = assemble::strings_path(workdir);
-    if out_path.exists()
-        && FilteredFeatureStore::exists(workdir)
-        && OsmFeatures::exists(&osm_index_path, &strings_path)
-    {
-        let osm_features = OsmFeatures::open(&osm_index_path, &strings_path)?;
-        return Ok((out_path, osm_features));
+    if OsmFeatures::exists(&osm_index_path, &strings_path) {
+        return OsmFeatures::open(&osm_index_path, &strings_path);
     }
 
     let (pbf, fetch_metadata) = fetch::fetch_planet(progress, workdir)?;
@@ -72,62 +73,10 @@ pub fn import_osm<'a>(
     let prunings = Prunings::create(&mut reader, progress, workdir)?;
     let assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
     let index = index::build_index(&assembly, progress, workdir, &osm_index_path)?;
-    let osm_features = OsmFeatures {
+    Ok(OsmFeatures {
         index,
         strings: assembly.strings,
-    };
-
-    // TODO: Remove the old version of the pipeline (everything below),
-    // once conflate/suggest_edits no longer need it (suggest_edits still
-    // does, as of this writing).
-    let coverage = Coverage::load(coverage)
-        .with_context(|| format!("could not open coverage file `{:?}`", coverage))?;
-
-    let relation_parents = build_relation_parents(&mut reader, progress)?;
-
-    // Find which nodes, ways and relations lie within the coverage.
-    let covered_nodes = cover::cover_nodes(&mut reader, &coverage, progress, workdir)?;
-    let covered_ways = cover::cover_ways(&mut reader, &covered_nodes, progress, workdir)?;
-    let covered_relations = cover::cover_relations(
-        &mut reader,
-        &covered_nodes,
-        &covered_ways,
-        &relation_parents,
-        progress,
-        workdir,
-    )?;
-
-    let relations = filter::filter_relations(
-        &mut reader,
-        &coverage,
-        &covered_relations,
-        progress,
-        workdir,
-    )?;
-
-    let ways = filter::filter_ways(
-        &mut reader,
-        &coverage,
-        &covered_ways,
-        &relations,
-        progress,
-        workdir,
-    )?;
-
-    let nodes = filter::filter_nodes(
-        &mut reader,
-        &coverage,
-        &covered_nodes,
-        &ways,
-        &relations,
-        progress,
-        workdir,
-    )?;
-
-    let feature_store = filter::FilteredFeatureStore::new(nodes, ways, relations);
-    old_assemble::assemble(&feature_store, progress, workdir, &out_path)?;
-
-    Ok((out_path, osm_features))
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
