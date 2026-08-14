@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 # Runs vmstat and a df-sampling loop side by side, both UTC-timestamped so
-# they line up with pipeline.log. Meant to be identical across all test
-# VMs -- deploy this one file, run it once per machine inside its own
-# screen session (so it survives disconnects independently of the
-# pipeline run itself):
-#
-#   screen -S monitor
-#   WORKDIR=/mnt/HC_Volume_.../workdir ./monitor.sh
-#   <Ctrl-A D>
+# they line up with pipeline.log. Started detached via `systemd-run` by
+# `cloud_test.py start`, not meant to be run by hand (though nothing stops
+# you from doing that too -- just export WORKDIR first).
 #
 # Writes vmstat.log and disk.log into the current directory (not
 # $WORKDIR itself, to avoid the monitoring logs' own tiny writes
