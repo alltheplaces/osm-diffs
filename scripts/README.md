@@ -40,7 +40,7 @@ process these fit into.
 ## Testing development branches
 
 Unrelated to how `osm-diffs` actually ships to production — this is for
-ad hoc validation of a branch against real hardware before it lands.
+ad hoc validation of a branch before it lands.
 
 - [`test-branch-on-hetzner/`](test-branch-on-hetzner/README.md): spins
   up a Hetzner Cloud VM, builds a given git branch on it, runs the
@@ -48,3 +48,8 @@ ad hoc validation of a branch against real hardware before it lands.
   repeating the manual setup by hand each time. See
   [alltheplaces/osm-diffs#667](https://github.com/alltheplaces/osm-diffs/issues/667)
   for why this exists.
+- [`test-branch-on-macos/`](test-branch-on-macos/README.md): the same
+  idea, much smaller — build and run the current checkout locally with
+  a `vm_stat`/RSS monitor alongside it, for fast local iteration rather
+  than matching production hardware/toolchain. See
+  [alltheplaces/osm-diffs#669](https://github.com/alltheplaces/osm-diffs/issues/669).
