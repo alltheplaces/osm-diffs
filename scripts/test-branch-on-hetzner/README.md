@@ -87,6 +87,16 @@ right there. `deploy` always builds natively on the remote machine
 instead, the same way the three-machine PR 665 experiment ended up
 doing it after discovering this the hard way.
 
+It's also the right build for a different reason, not just speed:
+building from the project's own `Containerfile` gets you the *exact*
+same toolchain production uses -- same Rust version, same musl libc,
+same compiler flags -- not just "close enough." That matters
+specifically for this tool's purpose: a benchmark run against a
+locally-built binary would leave you wondering whether a result is
+real or an artifact of a different allocator/libc, exactly the kind of
+noise you don't want when trying to draw conclusions from a branch's
+behavior on real hardware.
+
 ## No `screen`, no `nohup`
 
 `start` uses `systemd-run --unit=... --collect` to launch both the
@@ -108,11 +118,6 @@ cheap, and worth it.
 
 ## Known gaps / not attempted here
 
-- **Not tested against the real Hetzner API** from the environment this
-  was written in (no credentials there). Treat the first real `up` as a
-  shakedown of the exact `hcloud` flag names for your installed CLI
-  version, not a guarantee -- every command this tool runs is echoed to
-  stderr first specifically to make that debugging easy.
 - **Cost control is entirely manual.** `list` tells you what's running;
   nothing here auto-destroys an idle instance. If you forget a `destroy`,
   the meter keeps running.
@@ -122,7 +127,3 @@ cheap, and worth it.
   experiment) -- if `create` fails on `--volume-size`, that's the first
   thing to check, via a support ticket to raise the quota rather than
   anything this tool can work around.
-- **`macos_monitor.sh`-equivalent for a local dev-machine run** isn't
-  part of this tool -- it's specifically for cloud VMs. See
-  `../experiments/pr-665/monitor-macos.sh` for the macOS-side monitor
-  used during local full-planet testing.

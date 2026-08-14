@@ -5,12 +5,9 @@ on real cloud hardware doesn't mean re-deriving the VM setup dance by
 hand each time. See README.md in this directory for the full story,
 including prerequisites and a worked example.
 
-Not tested end to end against the real Hetzner API from the environment
-this was written in (no credentials there) -- treat the first real
-`up` as a shakedown of the exact `hcloud` flags, not a guarantee. Every
-`hcloud`/`ssh`/`scp` command this runs is echoed to stderr first, so a
-flag mismatch against your installed `hcloud` version should be easy to
-spot and fix.
+Every `hcloud`/`ssh`/`scp` command this runs is echoed to stderr first,
+so a flag mismatch against your installed `hcloud` version should be
+easy to spot and fix.
 """
 
 import argparse
