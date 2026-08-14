@@ -26,18 +26,18 @@ experiments on cloud hardware repeatable.
 
 ## What gets collected, and why
 
-Every signal here traces back to one specific design bet worth
+Every signal here traces back to one specific design assumption worth
 measuring, not just logging for its own sake: `OsmFeatureIndex`
 (#655/#667) is a large, uncompressed structure that's `mmap`'d and
 left to the OS page cache, deliberately *not* backed by an explicit
 LRU decode cache. Whether that holds up under real memory pressure, on
 real disk, isn't something you can determine by reading the code.
 
-- **`vmstat.log`** -- `rss_file_bytes` climbing (in `pipeline.log`'s own
-  memstats snapshots) is that bet paying off: mmap'd pages resident,
-  but cleanly reclaimable, not counted against anonymous memory. `wa`
-  (iowait) climbing here instead is the opposite signal -- page faults
-  against the index turning out to be expensive, not cheap.
+- **`vmstat.log`** -- `rss_file_bytes` climbing (in `pipeline.log`'s
+  own memstats snapshots) is that assumption holding up: mmap'd pages
+  resident, but cleanly reclaimable, not counted against anonymous
+  memory. `wa` (iowait) climbing here instead is the opposite signal --
+  page faults against the index turning out to be expensive, not cheap.
 - **`disk.log`** -- external sorts spill temporary files and delete
   them again within a single step; a `df` snapshot after the fact would
   miss that, so this samples usage over time instead, per step.
