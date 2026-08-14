@@ -50,14 +50,18 @@ pub fn run_pipeline(
     let atp = run_step("import_atp", || {
         runtime.block_on(crate::atp::import_atp(http_client, &progress, workdir))
     })?;
-    let coverage = run_step("build_coverage", || {
-        crate::coverage::build_coverage(&atp, &progress, workdir)
-    })?;
+    // EXPERIMENT ONLY, not for merging (see alltheplaces/osm-diffs#655):
+    // build_coverage is skipped too, not just the old OSM path -- on
+    // this branch, Coverage's content is dead everywhere in the
+    // codebase (only import_osm's now-removed old-path branch and
+    // conflate()'s staleness check ever read it, and conflate's own
+    // coverage parameter is dropped below too), so computing the real
+    // thing here would just be ~1-2 hours spent producing a file whose
+    // only remaining purpose was "exists with a timestamp."
     let osm_features = run_step("import_osm", || osm::import_osm(&progress, workdir))?;
     let _conflated = run_step("conflate", || {
         conflate::conflate(
             &atp,
-            &coverage,
             &osm_features,
             &progress,
             workdir,

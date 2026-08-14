@@ -16,7 +16,6 @@ use std::thread;
 use time::UtcDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::coverage::Coverage;
 use crate::tables::OsmFeatures;
 use crate::utils::to_hex;
 use crate::{make_download_bar, make_progress_bar};
