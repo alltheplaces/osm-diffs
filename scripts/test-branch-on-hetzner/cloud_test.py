@@ -243,7 +243,10 @@ def cmd_start(args):
     ip = server_ip(args.name)
     workdir = workdir_for(args.name)
 
-    if args.clean:
+    # getattr, not args.clean: cmd_up() calls this reusing "up"'s own
+    # argparse namespace, which has no --clean flag (only "start"'s
+    # does) -- args.clean would raise AttributeError there.
+    if getattr(args, "clean", False):
         print(f"Clearing {workdir}, keeping the planet download ...", file=sys.stderr)
         keep = " ".join(f"! -name {shlex.quote(f)}" for f in PLANET_FILES)
         ssh_cmd(ip, f"find {shlex.quote(workdir)} -mindepth 1 {keep} -delete")
