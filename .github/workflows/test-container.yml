@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
 # SPDX-License-Identifier: MIT
 
-name: Tests
+name: Container Tests
 
 on:
   push:
