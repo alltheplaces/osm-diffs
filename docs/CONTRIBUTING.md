@@ -17,7 +17,7 @@ cargo test
 ```
 
 After you've sent a Pull Request, our Continuous Integration (CI) runs a
-series of checks on it — the commands above match
+series of checks on it — the commands above are a subset of
 [what CI runs](https://github.com/alltheplaces/osm-diffs/blob/main/.github/workflows/test.yml).
 Running them locally first saves a round-trip through CI — see
 [`TESTING.md`](https://github.com/alltheplaces/osm-diffs/blob/main/docs/TESTING.md)
