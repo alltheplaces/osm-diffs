@@ -18,9 +18,8 @@ cargo test
 
 These match what CI runs on every PR (see
 [`.github/workflows/test.yml`](../.github/workflows/test.yml) for the
-exact invocations, including a minimum test-coverage threshold `cargo
-test` alone doesn't check). Running them locally first saves a
-round-trip through CI.
+exact invocations). Running them locally first saves a round-trip
+through CI — see [`TESTING.md`](TESTING.md) for what else CI checks.
 
 ## Where to go next
 
