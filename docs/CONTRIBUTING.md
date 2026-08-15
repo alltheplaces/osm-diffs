@@ -16,10 +16,11 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-These match what CI runs on every PR (see
-[`.github/workflows/test.yml`](../.github/workflows/test.yml) for the
-exact invocations). Running them locally first saves a round-trip
-through CI — see [`TESTING.md`](TESTING.md) for what else CI checks.
+After you've sent a Pull Request, our Continuous Integration (CI) runs a
+series of checks on it — the commands above match
+[what CI runs](../.github/workflows/test.yml). Running them locally
+first saves a round-trip through CI — see [`TESTING.md`](TESTING.md)
+for what else CI checks.
 
 ## Where to go next
 
