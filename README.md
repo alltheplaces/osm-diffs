@@ -17,5 +17,6 @@ feed edit proposals to [MapRoulette](https://maproulette.org/) where
 human users can manually check each edit before applying it to
 OpenStreetMap.
 
-See [`docs/`](docs/) for how to cut a release and the supply-chain
-security practices behind it.
+New here? See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) to get
+started, and [`docs/`](docs/) generally for testing, cutting a
+release, and our security practices.
