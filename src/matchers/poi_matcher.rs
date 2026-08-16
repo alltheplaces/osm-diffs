@@ -4,7 +4,6 @@ use super::{
 use crate::places::Place;
 use geo::Centroid;
 use s2::{cell::Cell, cellid::CellID, point::Point};
-use std::collections::HashMap;
 
 /// Finds the first `brand:wikidata` tag in `tags` and parses its value.
 /// Shared by `for_place`, `score`, and `score_osm_candidate` -- same
@@ -16,18 +15,17 @@ fn find_brand_wikidata<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Op
         .and_then(|(_, v)| parse_wikidata_id(v))
 }
 
-pub struct PoiMatcher<'a> {
-    atp_place: &'a Place,
+pub struct PoiMatcher {
     center: Point,
     brand_wikidata: u64,
 }
 
-impl<'a> PoiMatcher<'a> {
+impl PoiMatcher {
     // TODO: For now, we only match based on brand:wikidata.
     // We should also look at names, by computing the token sort ratio,
     // but we should do this in a way that works for CJK. So we need
     // a decent segmenter that works for CJK languages. Maybe Lindera?
-    pub fn for_place(place: &'a Place) -> Option<PoiMatcher<'a>> {
+    pub fn for_place(place: &Place) -> Option<PoiMatcher> {
         if !place.mask.intersects(&MatchMask::SHOP) {
             return None;
         }
@@ -35,27 +33,13 @@ impl<'a> PoiMatcher<'a> {
         let brand_wikidata = find_brand_wikidata(tags)?;
         let center = Cell::from(CellID(place.s2_cell_id)).center();
         Some(PoiMatcher {
-            atp_place: place,
             center,
             brand_wikidata,
         })
     }
-
-    /// Tells whether we trust an AllThePlaces tag enough to suggest an OpenStreetMap edit.
-    /// AllThePlaces mostly propagates whatever comes from spidered websites,
-    /// so we use an allowlist to prevent spamming human OpenStreetMap editors.
-    fn is_atp_tag_trustworthy(key: &str) -> bool {
-        // Before you add entries to this list, please make sure that the quality
-        // is good. To evaluate, look at the diff of workdir/shops.jsonl
-        // from before and after your change to this code.
-        matches!(
-            key,
-            "email" | "end_date" | "fax" | "opening_hours" | "phone" | "start_date" | "website"
-        )
-    }
 }
 
-impl<'a> Matcher for PoiMatcher<'a> {
+impl Matcher for PoiMatcher {
     fn score(&self, candidate: &Place) -> f64 {
         let tags = candidate.tags.iter().map(|(k, v)| (k.as_str(), v.as_str()));
         if find_brand_wikidata(tags) != Some(self.brand_wikidata) {
@@ -77,43 +61,6 @@ impl<'a> Matcher for PoiMatcher<'a> {
             return 0.0;
         };
         geo_point_distance_score(&self.center, &centroid, 400.0)
-    }
-
-    // TODO: This is not really a Matcher task. Move this elsewhere,
-    // once we figure out what the final output format should be
-    // for the pipeline.
-    fn suggest_edit(&self, osm_feature: &Place) -> Option<Place> {
-        let osm_tags: HashMap<&str, &str> = osm_feature
-            .tags
-            .iter()
-            .map(|(k, v)| (k.as_str(), v.as_str()))
-            .collect();
-        let tag_edits: Vec<(String, String)> = self
-            .atp_place
-            .tags
-            .iter()
-            .filter(|(key, _atp_value)| Self::is_atp_tag_trustworthy(key))
-            .filter(|(key, atp_value)| {
-                if let Some(osm_value) = osm_tags.get::<str>(key.as_ref()) {
-                    atp_value != osm_value
-                } else {
-                    true // OSM feature has no value yet for this key
-                }
-            })
-            .cloned()
-            .collect();
-        if tag_edits.is_empty() {
-            return None;
-        }
-        Some(Place {
-            s2_cell_id: osm_feature.s2_cell_id,
-            osm_id: osm_feature.osm_id,
-            osm_changeset: osm_feature.osm_changeset,
-            osm_version: osm_feature.osm_version,
-            source: self.atp_place.source.clone(),
-            mask: osm_feature.mask,
-            tags: tag_edits,
-        })
     }
 }
 

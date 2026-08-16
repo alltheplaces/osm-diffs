@@ -53,10 +53,15 @@ pub fn run_pipeline(
     let coverage = run_step("build_coverage", || {
         crate::coverage::build_coverage(&atp, &progress, workdir)
     })?;
-    let (osm_parquet, osm_features) = run_step("import_osm", || {
+    // `_osm_parquet` (the old Place-based OSM output) is no longer
+    // consumed by anything now that suggest_edits reads conflated.parquet
+    // instead -- see alltheplaces/osm-diffs#655. Still built by
+    // import_osm() today; whether that's still worth doing is a separate
+    // decision, deliberately not made here.
+    let (_osm_parquet, osm_features) = run_step("import_osm", || {
         osm::import_osm(&coverage, &progress, workdir)
     })?;
-    let _conflated = run_step("conflate", || {
+    let conflated = run_step("conflate", || {
         conflate::conflate(
             &atp,
             &coverage,
@@ -68,7 +73,7 @@ pub fn run_pipeline(
         )
     })?;
     let edits = run_step("suggest_edits", || {
-        edits::suggest_edits(&coverage, &atp, &osm_parquet, &progress, workdir)
+        edits::suggest_edits(&conflated, &progress, workdir)
     })?;
     let tiles = run_step("render_tiles", || {
         tiles::render_tiles(&edits, &progress, workdir)

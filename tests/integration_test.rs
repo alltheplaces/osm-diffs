@@ -1,6 +1,6 @@
-use anyhow::{Ok, Result};
+use anyhow::{Context, Ok, Result};
 use assert_cmd::{Command, cargo_bin};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 #[test]
@@ -42,6 +42,73 @@ fn test_pipeline() -> Result<()> {
         .arg(workdir.path())
         .assert()
         .success();
+
+    assert_shops_jsonl(&workdir.path().join("shops.jsonl"))?;
+
+    Ok(())
+}
+
+/// Checks `suggest_edits`'s output against the fixture data's known
+/// shops (see `tests/test_data/zugerland.osm.pbf` /
+/// `alltheplaces.zip`) -- pins concrete expected values, not just "the
+/// file has some content", so a regression in tag-diffing or GeoJSON
+/// output actually gets caught, not just a crash.
+fn assert_shops_jsonl(path: &Path) -> Result<()> {
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("could not read {path:?}"))?;
+    let lines: Vec<&str> = content.lines().collect();
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected 3 suggested shop edits, got:\n{content}"
+    );
+
+    let features: Vec<serde_json::Value> = lines
+        .iter()
+        .map(|line| Ok(serde_json::from_str(line)?))
+        .collect::<Result<_>>()?;
+
+    // Every row is a well-formed GeoJSON Point feature, carrying the
+    // OSM base changeset/version it was suggested against -- needed to
+    // detect edit conflicts later, even though nothing uploads edits
+    // yet.
+    for feature in &features {
+        assert_eq!(feature["type"], "Feature");
+        assert_eq!(feature["geometry"]["type"], "Point");
+        assert!(feature["id"].is_number(), "feature has no id: {feature}");
+        assert!(
+            feature["properties"]["@osm_changeset"].is_number(),
+            "feature has no @osm_changeset: {feature}"
+        );
+        assert!(
+            feature["properties"]["@osm_version"].is_number(),
+            "feature has no @osm_version: {feature}"
+        );
+    }
+
+    // One specific, known edit: this OSM feature's opening_hours and
+    // phone differ from AllThePlaces' in the fixture data.
+    let edit = features
+        .iter()
+        .find(|f| f["id"] == 737021556)
+        .expect("expected a suggested edit for OSM feature 737021556");
+    assert_eq!(
+        edit["properties"]["opening_hours"],
+        "Mo-Th 09:00-19:00; Fr 09:00-21:00; Sa 08:00-17:00"
+    );
+    assert_eq!(edit["properties"]["phone"], "+41 848 544 455");
+    // Only the tags that actually differ (and are on the trustworthy
+    // allowlist -- see PoiEditSuggester) should be suggested, nothing else.
+    assert_eq!(
+        edit["properties"]
+            .as_object()
+            .expect("properties should be an object")
+            .keys()
+            .filter(|k| !k.starts_with('@'))
+            .count(),
+        2,
+        "unexpected extra tags in suggested edit: {edit}"
+    );
 
     Ok(())
 }

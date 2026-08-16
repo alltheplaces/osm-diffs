@@ -1,3 +1,17 @@
+// `PlaceIndex`'s query/LRU-cache machinery (query, cache_stats,
+// build_segments, prune_row_groups, CacheStats, and RowGroupInfo's
+// s2_min/s2_max) served spatial OSM-candidate lookups -- a need that
+// went away twice over: once when conflate() moved to OsmFeatureIndex
+// (alltheplaces/osm-diffs#665), again when suggest_edits stopped
+// searching OSM at all (#655). Only `open`/`scan_row_groups` (used by
+// conflate() to read ATP sequentially) are still live. Left in place
+// rather than deleted here: a proper cleanup also means moving that
+// ATP read off `PlaceIndex` entirely (it never needed a cache -- every
+// row is visited once, in file order), which is a separate, focused
+// follow-up rather than part of the suggest_edits change that made
+// this dead.
+#![allow(dead_code)]
+
 use arrow::array::{
     Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
 };
