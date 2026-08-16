@@ -7,12 +7,9 @@
 //! hit for.
 
 use anyhow::{Context, Result};
-use arrow::array::{
-    Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
-};
+use arrow::array::{Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt64Array};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
-use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 
 use crate::{matchers::MatchMask, places::Place};
@@ -67,26 +64,10 @@ impl PlaceReader {
 fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
     Ok(Place {
         s2_cell_id: get_u64_required(batch, "s2_cell_id", row)?,
-        osm_id: get_u64_optional(batch, "osm_id", row)?.and_then(NonZeroU64::new),
-        osm_changeset: get_u64_optional(batch, "osm_changeset", row)?.and_then(NonZeroU64::new),
-        osm_version: get_u32_optional(batch, "osm_version", row)?.and_then(NonZeroU32::new),
-        source: get_string_required(batch, "source", row)?,
+        spider: get_string_required(batch, "spider", row)?,
         mask: MatchMask(get_u16_required(batch, "mask", row)?),
         tags: get_tags(batch, row)?,
     })
-}
-
-fn get_u32_optional(batch: &RecordBatch, name: &str, row: usize) -> Result<Option<u32>> {
-    let col = match batch.column_by_name(name) {
-        None => return Ok(None),
-        Some(c) => c,
-    };
-    Ok(Some(
-        col.as_any()
-            .downcast_ref::<UInt32Array>()
-            .with_context(|| format!("column '{name}' exists but is not UInt32"))?
-            .value(row),
-    ))
 }
 
 fn get_u64_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u64> {
@@ -97,19 +78,6 @@ fn get_u64_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u64> 
         .downcast_ref::<UInt64Array>()
         .with_context(|| format!("column '{name}' is not UInt64"))?
         .value(row))
-}
-
-fn get_u64_optional(batch: &RecordBatch, name: &str, row: usize) -> Result<Option<u64>> {
-    let col = match batch.column_by_name(name) {
-        None => return Ok(None),
-        Some(c) => c,
-    };
-    Ok(Some(
-        col.as_any()
-            .downcast_ref::<UInt64Array>()
-            .with_context(|| format!("column '{name}' exists but is not UInt64"))?
-            .value(row),
-    ))
 }
 
 fn get_u16_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u16> {
@@ -189,7 +157,7 @@ mod tests {
         for batch in reader.read_all().expect("read_all") {
             for place in batch.expect("batch decode") {
                 assert_ne!(place.s2_cell_id, 0, "s2_cell_id should not be zero");
-                assert!(!place.source.is_empty(), "source should not be empty");
+                assert!(!place.spider.is_empty(), "spider should not be empty");
                 for (k, v) in &place.tags {
                     assert!(!k.is_empty(), "tag key should not be empty");
                     assert!(!v.is_empty(), "tag value should not be empty");

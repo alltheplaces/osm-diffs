@@ -22,12 +22,15 @@ use crate::places::{ParquetWriter, Place};
 use crate::{PROGRESS_BAR_STYLE, matchers::MatchMask};
 
 mod fetch;
+mod wikidata_ids;
 
 // Only these two re-exported crate-wide (rather than making all of
 // `fetch` pub(crate)): crate::provenance needs them to assemble this
 // pipeline's provenance BOM, nothing outside `atp` needs the rest of
 // fetch's API (fetch_atp, ATP_RUN_HISTORY_URL, ...).
 pub(crate) use fetch::{AtpMetadata, read_cached_metadata};
+
+pub use wikidata_ids::collect_wikidata_ids;
 
 pub async fn import_atp(
     client: &Client,
@@ -84,11 +87,7 @@ fn process_places(
 ) -> Result<()> {
     let mut tmp = PathBuf::from(out);
     tmp.add_extension("tmp");
-    let mut writer = ParquetWriter::try_new(
-        /* batch size, in records */ 4 * 1024,
-        /* osm */ false,
-        &tmp,
-    )?;
+    let mut writer = ParquetWriter::try_new(/* batch size, in records */ 4 * 1024, &tmp)?;
     let sorter: ExternalSorter<Place, std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)
@@ -293,7 +292,7 @@ fn make_place(geojson: &str, _timestamp: time::UtcDateTime) -> Option<Place> {
     };
     let properties = feature.properties?;
 
-    let mut source: Option<String> = None;
+    let mut spider: Option<String> = None;
 
     // We strip three properties ("nsi_id", "@spider", "@source_uri") from tags,
     // so we do not need to reserve space for them.
@@ -322,7 +321,7 @@ fn make_place(geojson: &str, _timestamp: time::UtcDateTime) -> Option<Place> {
         };
 
         if key == "@spider" {
-            source = Some(value);
+            spider = Some(value);
             continue;
         }
 
@@ -333,7 +332,7 @@ fn make_place(geojson: &str, _timestamp: time::UtcDateTime) -> Option<Place> {
         mask.add_tag(&key, &value);
         tags.push((key, value));
     }
-    Place::new(&coord, source?, mask, tags)
+    Place::new(&coord, spider?, mask, tags)
 }
 
 /// Finds a representative point for a GeoJson feature.
@@ -462,7 +461,7 @@ mod tests {
         let timestamp =
             UtcDateTime::parse("2026-07-01T13:14:14Z", &Iso8601::PARSING).expect("timestamp");
         let place = super::make_place(PLAYGROUND, timestamp).expect("place");
-        assert_eq!(place.source, "winterthur_ch");
+        assert_eq!(place.spider, "winterthur_ch");
         assert_eq!(
             tags(&place),
             [
@@ -489,7 +488,7 @@ mod tests {
         process_zip(&path, &progress, tx)?;
         let mut counts: HashMap<String, usize> = HashMap::new();
         for place in rx {
-            *counts.entry(place.source).or_insert(0) += 1;
+            *counts.entry(place.spider).or_insert(0) += 1;
         }
         assert_eq!(counts["misenso_ch"], 3);
         assert_eq!(counts["tchibo"], 1);

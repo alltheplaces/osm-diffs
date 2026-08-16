@@ -5,7 +5,7 @@ use crate::tables::{Feature, StringPool};
 use anyhow::{Context, Result};
 use deepsize::DeepSizeOf;
 use geo_traits::to_geo::ToGeoGeometry;
-use s2::{cellid::CellID, point::Point, s1::ChordAngle};
+use s2::{point::Point, s1::ChordAngle};
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
 use wkb::reader::read_wkb;
@@ -282,28 +282,10 @@ impl<'a> OsmCandidate<'a> {
     }
 }
 
-/// Trait for objects that can score a match candidate.
+/// Trait for objects that can score a match candidate. Turning a
+/// matched pair into a proposed edit is a separate concern, handled by
+/// `crate::edit_suggesters` instead.
 pub trait Matcher {
-    /// Returns a score between 0.0 and 1.0 indicating how well the place matches.
-    /// A high score means a good match; 0.0 means the place is clearly not a match.
-    ///
-    /// Unused since `suggest_edits` moved off the old Place-based OSM
-    /// path (alltheplaces/osm-diffs#655) -- `score_osm_candidate` is
-    /// the only thing anything still calls. Kept, rather than deleted
-    /// here, because deleting it cleanly also means moving
-    /// `conflate()`'s ATP-side reading off `PlaceIndex` (see that
-    /// type's own now-unused query/cache machinery); that's a separate,
-    /// focused follow-up rather than part of this change.
-    #[allow(dead_code)]
-    fn score(&self, place: &Place) -> f64;
-
-    /// Like `score`, but against an [OsmCandidate] backed by the new,
-    /// geometry-aware `OsmFeatureIndex` path instead of `Place`. Landing
-    /// alongside `score` rather than replacing it, as part of a staged
-    /// migration of OSM-side matching off `Place`. (Note there's no
-    /// `Matcher::suggest_edit` any more -- turning a matched pair into a
-    /// proposed edit is a different concern from matching itself, and
-    /// lives in `crate::edit_suggesters` instead.)
     fn score_osm_candidate(&self, candidate: &OsmCandidate) -> f64;
 }
 
@@ -324,36 +306,19 @@ pub fn create_matcher(place: &Place) -> Option<Box<dyn Matcher + '_>> {
     }
 }
 
-// Only used by Matcher::score (see its doc comment for why that's
-// currently unused but not yet deleted).
-#[allow(dead_code)]
-fn distance(pt: &Point, place: &Place) -> f64 {
-    let pt2 = Point(CellID(place.s2_cell_id).raw_point().normalize());
-    pt.distance(&pt2).rad() * EARTH_RADIUS_METERS
-}
-
-#[allow(dead_code)]
-fn distance_score(pt: &Point, place: &Place, max_meters: f64) -> f64 {
-    let dist = distance(pt, place);
-    if dist <= max_meters {
-        (max_meters - dist) / max_meters
-    } else {
-        0.0
-    }
-}
-
-/// Like `distance`, but against a plain geographic point (longitude,
-/// latitude) instead of a `Place`'s stored S2 cell -- `Feature` (unlike
-/// `Place`) doesn't carry a precomputed position, so callers scoring an
-/// [OsmCandidate] compute one themselves (e.g. a decoded geometry's
-/// centroid) and pass it in here.
+/// Distance, in meters, between `pt` (an ATP feature's S2 cell center)
+/// and a plain geographic point (longitude, latitude) -- `Feature`
+/// doesn't carry a precomputed S2 position the way `Place` does, so
+/// callers scoring an [OsmCandidate] compute one themselves (e.g. a
+/// decoded geometry's centroid) and pass it in here.
 fn geo_point_distance(pt: &Point, geo_pt: &geo::Point<f64>) -> f64 {
     let ll = s2::latlng::LatLng::from_degrees(geo_pt.y(), geo_pt.x());
     let pt2 = Point::from(ll);
     pt.distance(&pt2).rad() * EARTH_RADIUS_METERS
 }
 
-/// Like `distance_score`, but for [geo_point_distance].
+/// Scores [geo_point_distance] against `max_meters`: 1.0 at zero
+/// distance, linearly down to 0.0 at `max_meters` and beyond.
 fn geo_point_distance_score(pt: &Point, geo_pt: &geo::Point<f64>, max_meters: f64) -> f64 {
     let dist = geo_point_distance(pt, geo_pt);
     if dist <= max_meters {
@@ -374,7 +339,7 @@ fn parse_wikidata_id(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use s2::{cell::Cell, latlng::LatLng};
+    use s2::{cell::Cell, cellid::CellID, latlng::LatLng};
     use tempfile::TempDir;
     use wkb::writer::{WriteOptions, write_point};
 

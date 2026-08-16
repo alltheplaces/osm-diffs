@@ -1,14 +1,12 @@
-use super::{
-    MatchMask, Matcher, OsmCandidate, distance_score, geo_point_distance_score, parse_wikidata_id,
-};
+use super::{MatchMask, Matcher, OsmCandidate, geo_point_distance_score, parse_wikidata_id};
 use crate::places::Place;
 use geo::Centroid;
 use s2::{cell::Cell, cellid::CellID, point::Point};
 
 /// Finds the first `brand:wikidata` tag in `tags` and parses its value.
-/// Shared by `for_place`, `score`, and `score_osm_candidate` -- same
-/// lookup, three different tag representations (`Place.tags`,
-/// `Place.tags` again, and `OsmCandidate::tags()`).
+/// Shared by `for_place` and `score_osm_candidate` -- same lookup, two
+/// different tag representations (`Place.tags` and
+/// `OsmCandidate::tags()`).
 fn find_brand_wikidata<'a>(tags: impl Iterator<Item = (&'a str, &'a str)>) -> Option<u64> {
     tags.into_iter()
         .find(|&(k, _)| k == "brand:wikidata")
@@ -40,14 +38,6 @@ impl PoiMatcher {
 }
 
 impl Matcher for PoiMatcher {
-    fn score(&self, candidate: &Place) -> f64 {
-        let tags = candidate.tags.iter().map(|(k, v)| (k.as_str(), v.as_str()));
-        if find_brand_wikidata(tags) != Some(self.brand_wikidata) {
-            return 0.0;
-        }
-        distance_score(&self.center, candidate, 400.0)
-    }
-
     fn score_osm_candidate(&self, candidate: &OsmCandidate) -> f64 {
         // Cheap check first: only decode the (potentially large) geometry
         // for candidates that actually match on brand.
@@ -67,17 +57,11 @@ impl Matcher for PoiMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        num::{NonZeroU32, NonZeroU64},
-        sync::LazyLock,
-    };
+    use std::sync::LazyLock;
 
     static CH_CLOTHES_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664633565895,
-        osm_id: None,
-        osm_changeset: None,
-        osm_version: None,
-        source: String::from("newyorker"),
+        spider: String::from("newyorker"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("addr:city", "Rapperswil"),
@@ -96,10 +80,7 @@ mod tests {
 
     static CH_CLOTHES_OSM: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664662121729,
-        osm_id: NonZeroU64::new(10761965859),
-        osm_changeset: NonZeroU64::new(149971213),
-        osm_version: NonZeroU32::new(4),
-        source: String::from("osm"),
+        spider: String::from("osm"),
         mask: MatchMask(1),
         tags: tags(&[
             ("branch", "Rapperswil Sonnenhof"),
@@ -115,10 +96,7 @@ mod tests {
 
     static CH_KIOSK_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637400739491865,
-        osm_id: None,
-        osm_changeset: None,
-        osm_version: None,
-        source: String::from("valora"),
+        spider: String::from("valora"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("addr:city", "Rapperswil"),
@@ -136,10 +114,7 @@ mod tests {
 
     static CH_KIOSK_OSM: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637400743919515,
-        osm_id: NonZeroU64::new(6028968648),
-        osm_changeset: NonZeroU64::new(157167503),
-        osm_version: NonZeroU32::new(6),
-        source: String::from("osm"),
+        spider: String::from("osm"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("brand", "k kiosk"),
@@ -167,23 +142,12 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn test_poi_matcher() {
-        let ch_clothes_matcher =
-            PoiMatcher::for_place(&CH_CLOTHES_ATP).expect("should create matcher");
-        let ch_kiosk_matcher = PoiMatcher::for_place(&CH_KIOSK_ATP).expect("should create matcher");
-        assert!(ch_clothes_matcher.score(&CH_CLOTHES_OSM) > 0.5);
-        assert!(ch_clothes_matcher.score(&CH_KIOSK_OSM) == 0.0);
-        assert!(ch_kiosk_matcher.score(&CH_CLOTHES_OSM) == 0.0);
-        assert!(ch_kiosk_matcher.score(&CH_KIOSK_OSM) > 0.5);
-    }
-
-    /// Same scenario as `test_poi_matcher`, ported to the new
-    /// `OsmCandidate` path: same brands, same real-world positions
-    /// (reused from `CH_CLOTHES_OSM`/`CH_KIOSK_OSM`'s `s2_cell_id`s, so
-    /// this exercises `score_osm_candidate`'s WKB-decode-then-centroid
-    /// distance computation against genuine coordinates, not synthetic
-    /// ones), but as a `Feature` + `StringPool` instead of a `Place`.
+    /// Exercises `score_osm_candidate` for two ATP shops (New Yorker,
+    /// k kiosk) against real-world OSM positions (reused from
+    /// `CH_CLOTHES_OSM`/`CH_KIOSK_OSM`'s `s2_cell_id`s, so this exercises
+    /// the WKB-decode-then-centroid distance computation against genuine
+    /// coordinates, not synthetic ones), with the OSM side as a
+    /// `Feature` + `StringPool` instead of a `Place`.
     #[test]
     fn test_poi_matcher_osm_candidate() {
         use crate::tables::{Feature, StringPool};
