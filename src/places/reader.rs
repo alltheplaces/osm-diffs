@@ -1,13 +1,10 @@
 //! Sequentially reads a `Place`-typed Parquet file (`alltheplaces.parquet`
-//! today -- the only remaining caller is `conflate()`, reading ATP).
+//! today -- the only caller is `conflate()`, reading ATP).
 //!
-//! No caching, no spatial index: unlike the `PlaceIndex` this replaces,
-//! nothing here ever revisits a row. `conflate()` scans every ATP
-//! feature exactly once, in file order, so there's nothing worth
-//! caching -- see `alltheplaces/osm-diffs#655`'s cleanup discussion for
-//! why `PlaceIndex`'s query/LRU-cache machinery existed in the first
-//! place (spatial OSM-candidate lookups) and why it's gone now (nothing
-//! searches OSM via `Place` any more).
+//! No caching, no spatial index: `conflate()` scans every ATP feature
+//! exactly once, in file order, so there's nothing worth caching --
+//! there's no repeated access to a row that a cache would ever serve a
+//! hit for.
 
 use anyhow::{Context, Result};
 use arrow::array::{
@@ -46,8 +43,15 @@ impl PlaceReader {
 
     /// Reads every row, batch by batch (Arrow's natural row-group-ish
     /// chunking). The caller processes each batch in parallel with
-    /// Rayon; batches preserve spatial locality (the file is S2-sorted)
-    /// even though nothing here relies on that ordering itself.
+    /// Rayon -- exact order within a batch doesn't matter for that. But
+    /// the *rough* spatial ordering across batches (the file is
+    /// S2-sorted) matters a lot: for each ATP feature, the caller
+    /// queries the mmap'd `OsmFeatureIndex` for nearby OSM candidates,
+    /// so processing ATP features in roughly spatial order keeps those
+    /// queries clustered in nearby regions of the mmap, which is what
+    /// keeps the OS page cache effective. Without it, a full-planet run
+    /// on a memory-constrained machine would thrash instead of relying
+    /// on the page cache the way this pipeline's design depends on.
     pub fn read_all(&self) -> Result<impl Iterator<Item = Result<Vec<Place>>>> {
         let file = File::open(&self.file_path)?;
         let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
