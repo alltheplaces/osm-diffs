@@ -286,14 +286,24 @@ impl<'a> OsmCandidate<'a> {
 pub trait Matcher {
     /// Returns a score between 0.0 and 1.0 indicating how well the place matches.
     /// A high score means a good match; 0.0 means the place is clearly not a match.
+    ///
+    /// Unused since `suggest_edits` moved off the old Place-based OSM
+    /// path (alltheplaces/osm-diffs#655) -- `score_osm_candidate` is
+    /// the only thing anything still calls. Kept, rather than deleted
+    /// here, because deleting it cleanly also means moving
+    /// `conflate()`'s ATP-side reading off `PlaceIndex` (see that
+    /// type's own now-unused query/cache machinery); that's a separate,
+    /// focused follow-up rather than part of this change.
+    #[allow(dead_code)]
     fn score(&self, place: &Place) -> f64;
-
-    fn suggest_edit(&self, osm_feature: &Place) -> Option<Place>;
 
     /// Like `score`, but against an [OsmCandidate] backed by the new,
     /// geometry-aware `OsmFeatureIndex` path instead of `Place`. Landing
-    /// alongside `score`/`suggest_edit` rather than replacing them, as
-    /// part of a staged migration of OSM-side matching off `Place`.
+    /// alongside `score` rather than replacing it, as part of a staged
+    /// migration of OSM-side matching off `Place`. (Note there's no
+    /// `Matcher::suggest_edit` any more -- turning a matched pair into a
+    /// proposed edit is a different concern from matching itself, and
+    /// lives in `crate::edit_suggesters` instead.)
     fn score_osm_candidate(&self, candidate: &OsmCandidate) -> f64;
 }
 
@@ -314,11 +324,15 @@ pub fn create_matcher(place: &Place) -> Option<Box<dyn Matcher + '_>> {
     }
 }
 
+// Only used by Matcher::score (see its doc comment for why that's
+// currently unused but not yet deleted).
+#[allow(dead_code)]
 fn distance(pt: &Point, place: &Place) -> f64 {
     let pt2 = Point(CellID(place.s2_cell_id).raw_point().normalize());
     pt.distance(&pt2).rad() * EARTH_RADIUS_METERS
 }
 
+#[allow(dead_code)]
 fn distance_score(pt: &Point, place: &Place, max_meters: f64) -> f64 {
     let dist = distance(pt, place);
     if dist <= max_meters {
