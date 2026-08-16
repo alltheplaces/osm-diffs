@@ -62,10 +62,7 @@ struct ConflatedOsmSide {
 }
 
 /// Checks `conflate()`'s output against the fixture data's known shops
-/// (see `tests/test_data/zugerland.osm.pbf` / `alltheplaces.zip`) --
-/// in particular that OSM features conflate with real polygon geometry,
-/// not the synthetic points the old Place-based pipeline emitted (the
-/// whole point of alltheplaces/osm-diffs#665).
+/// (see `tests/test_data/zugerland.osm.pbf` / `alltheplaces.zip`).
 fn assert_conflated_parquet(path: &Path) -> Result<()> {
     use arrow::array::{
         Array, BinaryArray, MapArray, RecordBatch, StringArray, StructArray, UInt64Array,
