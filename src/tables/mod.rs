@@ -8,7 +8,6 @@
 #[allow(unused)]
 mod blob_table;
 mod coord_table;
-#[allow(unused)]
 mod feature_index;
 #[allow(unused)]
 mod geometry_store;
@@ -29,7 +28,8 @@ mod features {
 pub use blob_table::BlobTable;
 pub use coord_table::CoordTable;
 #[allow(unused)]
-pub use feature_index::{LocalFeatureRef, OsmFeatureIndex};
+pub use feature_index::LocalFeatureRef;
+pub use feature_index::{OsmFeatureIndex, OsmFeatures};
 pub use features::{Feature, FeatureToIndex, RelationMember};
 #[allow(unused)]
 pub use geometry_store::GeometryStore;

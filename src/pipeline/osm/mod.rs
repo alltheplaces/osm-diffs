@@ -17,6 +17,7 @@ use time::UtcDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::coverage::Coverage;
+use crate::tables::OsmFeatures;
 use crate::utils::to_hex;
 use crate::{make_download_bar, make_progress_bar};
 
@@ -33,17 +34,22 @@ mod prune;
 use filter::FilteredFeatureStore;
 use prune::Prunings;
 
-pub fn import_osm(
+pub fn import_osm<'a>(
     coverage: &Path,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<(PathBuf, Box<dyn FeatureStore>)> {
+) -> Result<(PathBuf, OsmFeatures<'a>)> {
     assert!(workdir.exists());
 
     let out_path = workdir.join("osm.parquet");
-    if out_path.exists() && FilteredFeatureStore::exists(workdir) {
-        let store = FilteredFeatureStore::open(workdir)?;
-        return Ok((out_path, Box::new(store)));
+    let osm_index_path = workdir.join("osm-features.index");
+    let strings_path = assemble::strings_path(workdir);
+    if out_path.exists()
+        && FilteredFeatureStore::exists(workdir)
+        && OsmFeatures::exists(&osm_index_path, &strings_path)
+    {
+        let osm_features = OsmFeatures::open(&osm_index_path, &strings_path)?;
+        return Ok((out_path, osm_features));
     }
 
     let (pbf, fetch_metadata) = fetch::fetch_planet(progress, workdir)?;
@@ -65,18 +71,15 @@ pub fn import_osm(
 
     let prunings = Prunings::create(&mut reader, progress, workdir)?;
     let assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
-    let _osm_index = index::build_index(
-        &assembly,
-        progress,
-        workdir,
-        &workdir.join("osm-features.index"),
-    )?;
-    if false {
-        todo!();
-    }
+    let index = index::build_index(&assembly, progress, workdir, &osm_index_path)?;
+    let osm_features = OsmFeatures {
+        index,
+        strings: assembly.strings,
+    };
 
     // TODO: Remove the old version of the pipeline (everything below),
-    // once the new code actually works.
+    // once conflate/suggest_edits no longer need it (suggest_edits still
+    // does, as of this writing).
     let coverage = Coverage::load(coverage)
         .with_context(|| format!("could not open coverage file `{:?}`", coverage))?;
 
@@ -124,7 +127,7 @@ pub fn import_osm(
     let feature_store = filter::FilteredFeatureStore::new(nodes, ways, relations);
     old_assemble::assemble(&feature_store, progress, workdir, &out_path)?;
 
-    Ok((out_path, Box::new(feature_store)))
+    Ok((out_path, osm_features))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -183,8 +186,17 @@ enum RelationMember {
 /// Abstracts OSM feature retrieval, so the geometry logic is independent of the storage.
 /// Implemented by MockFeatureStore for testing, and FilteredFeatureStore in production.
 pub trait FeatureStore: Send + Sync {
+    // get_node/get_way/get_relation were, until now, used by conflate's
+    // old Place-based path -- unused now that conflate looks up matched
+    // OSM features via OsmFeatureIndex instead. Left in place, not
+    // deleted, since FeatureStore/FilteredFeatureStore are still needed
+    // by the rest of the old pipeline (removal tracked as part of
+    // deleting the old path entirely, see #655).
+    #[allow(unused)]
     fn get_node(&self, id: u64) -> Option<Node>;
+    #[allow(unused)]
     fn get_way(&self, id: u64) -> Option<Way>;
+    #[allow(unused)]
     fn get_relation(&self, id: u64) -> Option<Relation>;
 
     fn node_count(&self) -> u64;

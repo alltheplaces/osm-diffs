@@ -1,4 +1,4 @@
-use anyhow::{Ok, Result};
+use anyhow::{Context, Ok, Result};
 use arrow::array::{
     ArrayRef, RecordBatch, StructArray,
     builder::{
@@ -8,6 +8,7 @@ use arrow::array::{
 use arrow_buffer::builder::NullBufferBuilder;
 use arrow_schema::{DataType, SchemaRef};
 use deepsize::DeepSizeOf;
+use geo::Centroid;
 use parquet::{
     arrow::{ArrowWriter, arrow_writer::ArrowWriterOptions},
     basic::{Compression, ZstdLevel},
@@ -23,6 +24,7 @@ use std::{
 };
 
 use super::ConflatedFeature;
+use crate::{matchers::OsmCandidate, tables::StringPool};
 
 pub struct ParquetWriter {
     path: PathBuf,
@@ -297,16 +299,41 @@ impl ParquetWriter {
     }
 }
 
-impl TryFrom<ConflatedFeature> for ParquetRow {
-    type Error = anyhow::Error;
-
-    fn try_from(cf: ConflatedFeature) -> Result<Self, Self::Error> {
+impl ParquetRow {
+    /// Builds a `ParquetRow` from a matched (or unmatched) ATP/OSM pair.
+    /// An inherent function rather than a `TryFrom` impl so it can take
+    /// `osm_strings`, needed to resolve an OSM `Feature`'s tag ids into
+    /// actual strings.
+    pub(super) fn from_conflated(
+        cf: ConflatedFeature,
+        osm_strings: &StringPool,
+    ) -> Result<ParquetRow> {
         let atp = cf.atp;
         let osm = cf.osm;
-        let s2_cell_id = if let Some(ref osm) = osm {
-            osm.s2_cell_id
-        } else if let Some(ref atp) = atp {
+
+        // Internal sort key. Almost always available for free from `atp`
+        // -- `produce_rows` only ever calls this with `atp: Some(..)`,
+        // since it iterates ATP places outward, so the `osm`-only branch
+        // below is unreached today, kept only so this function stays
+        // correct if a caller ever does construct an OSM-only row (e.g.
+        // a future "suggest creating this as a new OSM feature" flow).
+        // Feature carries no precomputed position the way Place does
+        // (see https://github.com/alltheplaces/osm-diffs/issues/662), so
+        // that branch has to decode geometry and compute a centroid --
+        // fine for a today-unreached path, not fine to do unconditionally.
+        let s2_cell_id = if let Some(ref atp) = atp {
             atp.s2_cell_id
+        } else if let Some(ref feature) = osm {
+            let candidate = OsmCandidate {
+                feature,
+                strings: osm_strings,
+            };
+            let centroid = candidate
+                .geometry()?
+                .centroid()
+                .with_context(|| format!("OSM feature {} geometry has no centroid", feature.id))?;
+            let ll = s2::latlng::LatLng::from_degrees(centroid.y(), centroid.x());
+            s2::cellid::CellID::from(ll).0
         } else {
             anyhow::bail!("ConflatedRow must not have atp and osm both None")
         };
@@ -332,12 +359,23 @@ impl TryFrom<ConflatedFeature> for ParquetRow {
         let osm_version;
         let osm_shape_wkb;
         let osm_tags;
-        if let Some(osm) = osm {
-            osm_id = osm.osm_id;
-            osm_changeset = osm.osm_changeset;
-            osm_version = osm.osm_version;
-            osm_shape_wkb = wkb(&osm.shape());
-            osm_tags = osm.tags;
+        if let Some(feature) = osm {
+            osm_id = NonZeroU64::new(feature.id);
+            osm_changeset = NonZeroU64::new(feature.changeset);
+            osm_version = NonZeroU32::new(feature.version);
+            osm_tags = feature
+                .tags
+                .chunks_exact(2)
+                .map(|kv| {
+                    (
+                        osm_strings.get(kv[0] as usize).to_owned(),
+                        osm_strings.get(kv[1] as usize).to_owned(),
+                    )
+                })
+                .collect();
+            // Already valid OGC Simple Features WKB -- no reconstruction
+            // from a synthetic point needed, unlike the old Place path.
+            osm_shape_wkb = feature.geometry_wkb;
         } else {
             osm_id = None;
             osm_changeset = None;

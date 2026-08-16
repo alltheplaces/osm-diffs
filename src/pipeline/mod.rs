@@ -53,15 +53,14 @@ pub fn run_pipeline(
     let coverage = run_step("build_coverage", || {
         crate::coverage::build_coverage(&atp, &progress, workdir)
     })?;
-    let (osm_parquet, osm_store) = run_step("import_osm", || {
+    let (osm_parquet, osm_features) = run_step("import_osm", || {
         osm::import_osm(&coverage, &progress, workdir)
     })?;
     let _conflated = run_step("conflate", || {
         conflate::conflate(
             &atp,
             &coverage,
-            &osm_parquet,
-            &*osm_store,
+            &osm_features,
             &progress,
             workdir,
             pipeline_run_id,
