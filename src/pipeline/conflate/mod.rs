@@ -2,7 +2,7 @@ use super::last_modified;
 use crate::{
     make_progress_bar,
     matchers::{OsmCandidate, create_matcher, match_distance},
-    places::{Place, PlaceIndex},
+    places::{Place, PlaceReader},
     s2_util::MergedCellRanges,
     tables::{Feature, OsmFeatures},
 };
@@ -13,7 +13,6 @@ use rayon::prelude::*;
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc,
         atomic::{AtomicU64, Ordering},
         mpsc::{Receiver, SyncSender, sync_channel},
     },
@@ -48,8 +47,8 @@ pub fn conflate(
         return Ok(out_path);
     }
 
-    let atp_index = PlaceIndex::open(atp, 1)?;
-    let num_atp_features = atp_index.total_rows() as u64;
+    let atp_reader = PlaceReader::open(atp)?;
+    let num_atp_features = atp_reader.total_rows() as u64;
     let producer_progress =
         make_progress_bar(progress, "conflate.match", num_atp_features, "ATP features");
     let writer_progress = make_progress_bar(progress, "conflate.write", 0, "parquet rows");
@@ -59,7 +58,7 @@ pub fn conflate(
     thread::scope(|s| {
         let (tx, rx) = sync_channel::<ParquetRow>(8192);
         s.spawn(|| {
-            producer_result = produce_rows(atp_index.clone(), osm, producer_progress, tx);
+            producer_result = produce_rows(&atp_reader, osm, producer_progress, tx);
         });
         s.spawn(|| {
             writer_result = write_conflated(
@@ -86,7 +85,7 @@ struct ConflatedFeature {
 }
 
 fn produce_rows(
-    atp_index: Arc<PlaceIndex>,
+    atp_reader: &PlaceReader,
     osm: &OsmFeatures,
     progress_bar: ProgressBar,
     out: SyncSender<ParquetRow>,
@@ -107,11 +106,11 @@ fn produce_rows(
     // snapshot at the boundary is fine for a diagnostic like this.
     let last_progress_log_ms = AtomicU64::new(0);
 
-    for group in atp_index.scan_row_groups() {
-        // Each group is processed by the Rayon thread pool in parallel,
+    for batch in atp_reader.read_all()? {
+        // Each batch is processed by the Rayon thread pool in parallel,
         // but the outer loop is sequential — so nearby places (within a
-        // group) always go to nearby workers, preserving spatial locality.
-        group?.par_iter().try_for_each(|atp| {
+        // batch) always go to nearby workers, preserving spatial locality.
+        batch?.par_iter().try_for_each(|atp| {
             progress_bar.inc(1);
             atp_features_processed.fetch_add(1, Ordering::Relaxed);
             maybe_log_progress(start, &last_progress_log_ms, || {
