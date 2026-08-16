@@ -43,7 +43,129 @@ fn test_pipeline() -> Result<()> {
         .assert()
         .success();
 
+    assert_conflated_parquet(&workdir.path().join("conflated.parquet"))?;
     assert_shops_jsonl(&workdir.path().join("shops.jsonl"))?;
+
+    Ok(())
+}
+
+/// One decoded `osm` side of a `conflated.parquet` row -- just the
+/// fields this test needs, not a general-purpose reader (this is a
+/// black-box integration test; it can't reach `pipeline::edits`'s own
+/// private column-extraction code, so this is a small, deliberately
+/// narrow one of its own).
+struct ConflatedOsmSide {
+    id: u64,
+    r#type: String,
+    shop: Option<String>,
+    is_polygon: bool,
+}
+
+/// Checks `conflate()`'s output against the fixture data's known shops
+/// (see `tests/test_data/zugerland.osm.pbf` / `alltheplaces.zip`).
+fn assert_conflated_parquet(path: &Path) -> Result<()> {
+    use arrow::array::{
+        Array, BinaryArray, MapArray, RecordBatch, StringArray, StructArray, UInt64Array,
+    };
+    use geo_traits::to_geo::ToGeoGeometry;
+    use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+
+    let file = std::fs::File::open(path).with_context(|| format!("could not open {path:?}"))?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
+
+    let mut total_rows = 0;
+    let mut matched = Vec::new();
+    for batch in reader {
+        let batch: RecordBatch = batch?;
+        total_rows += batch.num_rows();
+
+        let osm = batch
+            .column_by_name("osm")
+            .context("missing 'osm' column")?
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .context("'osm' is not a struct")?;
+        for row in 0..batch.num_rows() {
+            if osm.is_null(row) {
+                continue;
+            }
+            let get = |name: &str| osm.column_by_name(name).context("missing field");
+            let id = get("id")?
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .context("'id' is not UInt64")?
+                .value(row);
+            let r#type = get("type")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("'type' is not a string")?
+                .value(row)
+                .to_string();
+            let wkb = get("geometry")?
+                .as_any()
+                .downcast_ref::<BinaryArray>()
+                .context("'geometry' is not binary")?
+                .value(row);
+            let is_polygon = matches!(
+                wkb::reader::read_wkb(wkb)?.to_geometry(),
+                geo::Geometry::Polygon(_)
+            );
+            let tags = get("tags")?
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .context("'tags' is not a map")?
+                .value(row);
+            let keys = tags
+                .column_by_name("key")
+                .context("map has no 'key' field")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("map keys are not strings")?;
+            let values = tags
+                .column_by_name("value")
+                .context("map has no 'value' field")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("map values are not strings")?;
+            let shop = (0..keys.len())
+                .find(|&i| keys.value(i) == "shop")
+                .map(|i| values.value(i).to_string());
+
+            matched.push(ConflatedOsmSide {
+                id,
+                r#type,
+                shop,
+                is_polygon,
+            });
+        }
+    }
+
+    assert_eq!(
+        total_rows, 6,
+        "expected 6 conflated rows (matched + unmatched)"
+    );
+    assert_eq!(
+        matched.len(),
+        3,
+        "expected 3 ATP features matched to an OSM feature"
+    );
+
+    for (osm_id, expected_shop) in [
+        (608979139, "coffee"),      // Tchibo
+        (737021556, "electronics"), // MediaMarkt
+        (737021557, "supermarket"), // Denner
+    ] {
+        let row = matched
+            .iter()
+            .find(|r| r.id == osm_id)
+            .unwrap_or_else(|| panic!("expected a conflated row for OSM way/{osm_id}"));
+        assert_eq!(row.r#type, "way");
+        assert_eq!(row.shop.as_deref(), Some(expected_shop));
+        assert!(
+            row.is_polygon,
+            "expected way/{osm_id} to carry real polygon geometry, not a synthetic point"
+        );
+    }
 
     Ok(())
 }
