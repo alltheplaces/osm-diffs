@@ -11,7 +11,7 @@
 //! world, so most unmatched OSM features are unmatched for a mundane
 //! reason, not because they're stale. Restricting to brands ATP
 //! actually tracks keeps that signal meaningful. See
-//! alltheplaces/osm-diffs#655.
+//! alltheplaces/osm-diffs#682.
 
 use crate::places::PlaceReader;
 use crate::tables::U64Set;
