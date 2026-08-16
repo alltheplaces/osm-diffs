@@ -251,7 +251,8 @@ fn write_conflated(
     progress.finish();
     log::info!(
         elapsed_seconds = start.elapsed().as_secs_f64(),
-        rows_written = row_count.load(Ordering::SeqCst);
+        rows_written = row_count.load(Ordering::SeqCst),
+        bytes = std::fs::metadata(out)?.len();
         "conflate.write: done"
     );
     Ok(())

@@ -116,9 +116,10 @@ fn process_places(
     bar.finish_with_message(format!("{} features", num_features));
 
     log::info!(
-        "import_atp finished, built {:?} with {:?} features",
-        out,
-        num_features
+        path = out.display().to_string(),
+        num_features = num_features,
+        bytes = std::fs::metadata(out)?.len();
+        "import_atp: finished writing alltheplaces.parquet"
     );
     Ok(())
 }
