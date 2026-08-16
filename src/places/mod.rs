@@ -2,7 +2,6 @@ use crate::matchers::MatchMask;
 use deepsize::DeepSizeOf;
 use geo::Coord;
 use serde::{Deserialize, Serialize};
-use std::num::{NonZeroU32, NonZeroU64};
 
 mod reader;
 mod writer;
@@ -10,12 +9,14 @@ mod writer;
 pub use reader::PlaceReader;
 pub use writer::ParquetWriter;
 
+/// An AllThePlaces feature. (Used to also represent OpenStreetMap
+/// features -- hence carrying an `osm_id`/`osm_changeset`/`osm_version`
+/// at one point -- back when OSM went through this same type; OSM now
+/// has its own `tables::Feature`/`OsmFeatureIndex`, so `Place` is
+/// ATP-only. See alltheplaces/osm-diffs#655.)
 #[derive(Debug, DeepSizeOf, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Place {
     pub s2_cell_id: u64,
-    pub osm_id: Option<NonZeroU64>,
-    pub osm_changeset: Option<NonZeroU64>,
-    pub osm_version: Option<NonZeroU32>,
     pub source: String,
     pub mask: MatchMask,
     pub tags: Vec<(String, String)>,
@@ -36,9 +37,6 @@ impl Place {
         let s2_cell_id = s2::cellid::CellID::from(s2_lat_lng).0;
         Some(Place {
             s2_cell_id,
-            osm_id: None,
-            osm_changeset: None,
-            osm_version: None,
             source,
             mask,
             tags,
@@ -48,9 +46,6 @@ impl Place {
     pub fn deep_clone(&self) -> Self {
         Place {
             s2_cell_id: self.s2_cell_id,
-            osm_id: self.osm_id,
-            osm_changeset: self.osm_changeset,
-            osm_version: self.osm_version,
             source: self.source.clone(),
             mask: self.mask,
             tags: self.tags.clone(),

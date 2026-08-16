@@ -171,9 +171,8 @@ impl<'a> OsmFeatureIndex<'a> {
     }
 
     /// Whether both files an `OsmFeatureIndex` at `path` needs already
-    /// exist -- same role as e.g. `FilteredFeatureStore::exists`, for
-    /// callers that memoize an expensive build step behind an existence
-    /// check rather than reopening unconditionally.
+    /// exist -- for callers that memoize an expensive build step behind
+    /// an existence check rather than reopening unconditionally.
     pub fn exists(path: &Path) -> bool {
         path.exists() && Self::inverted_index_path(path).exists()
     }

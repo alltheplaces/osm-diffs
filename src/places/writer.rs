@@ -1,7 +1,7 @@
 use super::Place;
 use anyhow::{Ok, Result};
 use arrow::{
-    array::{ArrayRef, MapArray, StringArray, StructArray, UInt16Array, UInt32Array, UInt64Array},
+    array::{ArrayRef, MapArray, StringArray, StructArray, UInt16Array, UInt64Array},
     buffer::OffsetBuffer,
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -16,7 +16,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 pub struct ParquetWriter {
-    osm: bool,
     schema: Arc<Schema>,
     writer: ArrowWriter<File>,
     places: Vec<Place>,
@@ -26,12 +25,11 @@ pub struct ParquetWriter {
 impl ParquetWriter {
     pub fn try_new(
         batch_size: usize, // number of records per row group
-        osm: bool,
         out: &Path,
     ) -> Result<ParquetWriter> {
         assert!(batch_size > 0);
         let file = File::create(out)?;
-        let schema = Arc::new(make_schema(osm));
+        let schema = Arc::new(make_schema());
         let props = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::try_new(15)?))
             .set_statistics_enabled(EnabledStatistics::Page)
@@ -39,7 +37,6 @@ impl ParquetWriter {
             .build();
         let writer = ArrowWriter::try_new(file, schema.clone(), Some(props))?;
         Ok(ParquetWriter {
-            osm,
             schema,
             writer,
             places: Vec::with_capacity(batch_size),
@@ -63,50 +60,16 @@ impl ParquetWriter {
     }
 
     fn flush(&mut self) -> Result<()> {
-        let mut values = Vec::<Arc<dyn arrow::array::Array>>::with_capacity(6);
-        values.push(Arc::new(UInt64Array::from_iter(
-            self.places.iter().map(|p| p.s2_cell_id),
-        )));
-        values.push(Arc::new(UInt16Array::from_iter(
-            self.places.iter().map(|p| p.mask.0),
-        )));
-        if self.osm {
-            values.push(Arc::new(StringArray::from_iter_values(
-                self.places.iter().map(|_| "osm"),
-            )));
-            values.push(Arc::new(UInt64Array::from_iter(self.places.iter().map(
-                |p| {
-                    if let Some(osm_id) = p.osm_id {
-                        osm_id.get()
-                    } else {
-                        0
-                    }
-                },
-            ))));
-            values.push(Arc::new(UInt64Array::from_iter(self.places.iter().map(
-                |p| {
-                    if let Some(osm_changeset) = p.osm_changeset {
-                        osm_changeset.get()
-                    } else {
-                        0
-                    }
-                },
-            ))));
-            values.push(Arc::new(UInt32Array::from_iter(self.places.iter().map(
-                |p| {
-                    if let Some(osm_version) = p.osm_version {
-                        osm_version.get()
-                    } else {
-                        0
-                    }
-                },
-            ))));
-        } else {
-            values.push(Arc::new(StringArray::from_iter_values(
+        let values: Vec<Arc<dyn arrow::array::Array>> = vec![
+            Arc::new(UInt64Array::from_iter(
+                self.places.iter().map(|p| p.s2_cell_id),
+            )),
+            Arc::new(UInt16Array::from_iter(self.places.iter().map(|p| p.mask.0))),
+            Arc::new(StringArray::from_iter_values(
                 self.places.iter().map(|p| p.source.as_str()),
-            )));
-        }
-        values.push(make_tags(&self.places, self.num_tags));
+            )),
+            make_tags(&self.places, self.num_tags),
+        ];
 
         let batch = RecordBatch::try_new(self.schema.clone(), values)?;
         self.writer.write(&batch)?;
@@ -164,29 +127,12 @@ fn make_tags(places: &[Place], num_tags: usize) -> Arc<MapArray> {
     Arc::new(map_array)
 }
 
-fn make_schema(osm: bool) -> Schema {
+fn make_schema() -> Schema {
     let mut fields = vec![
         Field::new("s2_cell_id", DataType::UInt64, /* nullable */ false),
         Field::new("mask", DataType::UInt16, /* nullable */ false),
         Field::new("source", DataType::Utf8, /* nullable */ false),
     ];
-    if osm {
-        fields.push(Field::new(
-            "osm_id",
-            DataType::UInt64,
-            /* nullable */ false,
-        ));
-        fields.push(Field::new(
-            "osm_changeset",
-            DataType::UInt64,
-            /* nullable */ false,
-        ));
-        fields.push(Field::new(
-            "osm_version",
-            DataType::UInt32,
-            /* nullable */ false,
-        ));
-    }
     fields.push(Field::new(
         "tags",
         DataType::Map(

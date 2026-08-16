@@ -50,21 +50,15 @@ pub fn run_pipeline(
     let atp = run_step("import_atp", || {
         runtime.block_on(crate::atp::import_atp(http_client, &progress, workdir))
     })?;
-    let coverage = run_step("build_coverage", || {
-        crate::coverage::build_coverage(&atp, &progress, workdir)
+    // Not consumed by anything yet -- see crate::atp::collect_wikidata_ids
+    // for what this is for.
+    let _wikidata_ids = run_step("collect_wikidata_ids", || {
+        crate::atp::collect_wikidata_ids(&atp, workdir)
     })?;
-    // `_osm_parquet` (the old Place-based OSM output) is no longer
-    // consumed by anything now that suggest_edits reads conflated.parquet
-    // instead -- see alltheplaces/osm-diffs#655. Still built by
-    // import_osm() today; whether that's still worth doing is a separate
-    // decision, deliberately not made here.
-    let (_osm_parquet, osm_features) = run_step("import_osm", || {
-        osm::import_osm(&coverage, &progress, workdir)
-    })?;
+    let osm_features = run_step("import_osm", || osm::import_osm(&progress, workdir))?;
     let conflated = run_step("conflate", || {
         conflate::conflate(
             &atp,
-            &coverage,
             &osm_features,
             &progress,
             workdir,

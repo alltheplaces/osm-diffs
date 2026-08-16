@@ -31,17 +31,15 @@ const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(30);
 mod writer;
 use writer::{ParquetRow, ParquetWriter};
 
-#[allow(clippy::too_many_arguments)]
 pub fn conflate(
     atp: &Path,
-    coverage: &Path,
     osm: &OsmFeatures,
     progress: &MultiProgress,
     workdir: &Path,
     pipeline_run_id: &str,
     pipeline_start_time: UtcDateTime,
 ) -> Result<PathBuf> {
-    let input_modified = last_modified(&[atp, coverage])?.max(osm.modified()?);
+    let input_modified = last_modified(&[atp])?.max(osm.modified()?);
     let out_path = workdir.join("conflated.parquet");
     if out_path.exists() && last_modified(&[&out_path])? >= input_modified {
         return Ok(out_path);

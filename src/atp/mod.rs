@@ -22,12 +22,15 @@ use crate::places::{ParquetWriter, Place};
 use crate::{PROGRESS_BAR_STYLE, matchers::MatchMask};
 
 mod fetch;
+mod wikidata_ids;
 
 // Only these two re-exported crate-wide (rather than making all of
 // `fetch` pub(crate)): crate::provenance needs them to assemble this
 // pipeline's provenance BOM, nothing outside `atp` needs the rest of
 // fetch's API (fetch_atp, ATP_RUN_HISTORY_URL, ...).
 pub(crate) use fetch::{AtpMetadata, read_cached_metadata};
+
+pub use wikidata_ids::collect_wikidata_ids;
 
 pub async fn import_atp(
     client: &Client,
@@ -84,11 +87,7 @@ fn process_places(
 ) -> Result<()> {
     let mut tmp = PathBuf::from(out);
     tmp.add_extension("tmp");
-    let mut writer = ParquetWriter::try_new(
-        /* batch size, in records */ 4 * 1024,
-        /* osm */ false,
-        &tmp,
-    )?;
+    let mut writer = ParquetWriter::try_new(/* batch size, in records */ 4 * 1024, &tmp)?;
     let sorter: ExternalSorter<Place, std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)

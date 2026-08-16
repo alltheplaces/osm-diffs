@@ -1,55 +1,36 @@
 use anyhow::{Context, Ok, Result, anyhow};
 use aws_lc_rs::digest::{Context as DigestContext, SHA256};
 use indicatif::MultiProgress;
-use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
+use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock};
 use protobuf_iter::MessageIter;
-use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::num::{NonZeroU32, NonZeroU64};
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{SyncSender, sync_channel};
-use std::thread;
+use std::sync::mpsc::SyncSender;
 use time::UtcDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::coverage::Coverage;
+use crate::make_download_bar;
 use crate::tables::OsmFeatures;
 use crate::utils::to_hex;
-use crate::{make_download_bar, make_progress_bar};
 
 mod assemble;
-mod coords;
-mod cover;
 mod fetch;
-mod filter;
 mod id_tagging_schema;
 mod index;
-mod old_assemble;
 mod prune;
 
-use filter::FilteredFeatureStore;
 use prune::Prunings;
 
-pub fn import_osm<'a>(
-    coverage: &Path,
-    progress: &MultiProgress,
-    workdir: &Path,
-) -> Result<(PathBuf, OsmFeatures<'a>)> {
+pub fn import_osm<'a>(progress: &MultiProgress, workdir: &Path) -> Result<OsmFeatures<'a>> {
     assert!(workdir.exists());
 
-    let out_path = workdir.join("osm.parquet");
     let osm_index_path = workdir.join("osm-features.index");
     let strings_path = assemble::strings_path(workdir);
-    if out_path.exists()
-        && FilteredFeatureStore::exists(workdir)
-        && OsmFeatures::exists(&osm_index_path, &strings_path)
-    {
-        let osm_features = OsmFeatures::open(&osm_index_path, &strings_path)?;
-        return Ok((out_path, osm_features));
+    if OsmFeatures::exists(&osm_index_path, &strings_path) {
+        return OsmFeatures::open(&osm_index_path, &strings_path);
     }
 
     let (pbf, fetch_metadata) = fetch::fetch_planet(progress, workdir)?;
@@ -72,201 +53,10 @@ pub fn import_osm<'a>(
     let prunings = Prunings::create(&mut reader, progress, workdir)?;
     let assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
     let index = index::build_index(&assembly, progress, workdir, &osm_index_path)?;
-    let osm_features = OsmFeatures {
+    Ok(OsmFeatures {
         index,
         strings: assembly.strings,
-    };
-
-    // TODO: Remove the old version of the pipeline (everything below),
-    // once conflate/suggest_edits no longer need it (suggest_edits still
-    // does, as of this writing).
-    let coverage = Coverage::load(coverage)
-        .with_context(|| format!("could not open coverage file `{:?}`", coverage))?;
-
-    let relation_parents = build_relation_parents(&mut reader, progress)?;
-
-    // Find which nodes, ways and relations lie within the coverage.
-    let covered_nodes = cover::cover_nodes(&mut reader, &coverage, progress, workdir)?;
-    let covered_ways = cover::cover_ways(&mut reader, &covered_nodes, progress, workdir)?;
-    let covered_relations = cover::cover_relations(
-        &mut reader,
-        &covered_nodes,
-        &covered_ways,
-        &relation_parents,
-        progress,
-        workdir,
-    )?;
-
-    let relations = filter::filter_relations(
-        &mut reader,
-        &coverage,
-        &covered_relations,
-        progress,
-        workdir,
-    )?;
-
-    let ways = filter::filter_ways(
-        &mut reader,
-        &coverage,
-        &covered_ways,
-        &relations,
-        progress,
-        workdir,
-    )?;
-
-    let nodes = filter::filter_nodes(
-        &mut reader,
-        &coverage,
-        &covered_nodes,
-        &ways,
-        &relations,
-        progress,
-        workdir,
-    )?;
-
-    let feature_store = filter::FilteredFeatureStore::new(nodes, ways, relations);
-    old_assemble::assemble(&feature_store, progress, workdir, &out_path)?;
-
-    Ok((out_path, osm_features))
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Node {
-    id: u64,
-    changeset: Option<NonZeroU64>,
-    version: Option<NonZeroU32>,
-    tags: Vec<String>,
-    lon_e7: i32,
-    lat_e7: i32,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Way {
-    id: u64,
-    changeset: Option<NonZeroU64>,
-    version: Option<NonZeroU32>,
-    nodes: Vec<u64>,
-    tags: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Relation {
-    id: u64,
-    changeset: Option<NonZeroU64>,
-    version: Option<NonZeroU32>,
-    tags: Vec<String>,
-    members: Vec<RelationMember>,
-}
-
-/// Role of a member inside a relation.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-enum MemberRole {
-    Outer,
-    Inner,
-    Other(String),
-}
-
-impl MemberRole {
-    fn from_str(s: &str) -> Self {
-        match s {
-            "outer" => MemberRole::Outer,
-            "inner" => MemberRole::Inner,
-            other => MemberRole::Other(other.to_owned()),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-enum RelationMember {
-    Node { id: u64, role: MemberRole },
-    Way { id: u64, role: MemberRole },
-    Relation { id: u64, role: MemberRole },
-}
-
-/// Abstracts OSM feature retrieval, so the geometry logic is independent of the storage.
-/// Implemented by MockFeatureStore for testing, and FilteredFeatureStore in production.
-pub trait FeatureStore: Send + Sync {
-    // get_node/get_way/get_relation were, until now, used by conflate's
-    // old Place-based path -- unused now that conflate looks up matched
-    // OSM features via OsmFeatureIndex instead. Left in place, not
-    // deleted, since FeatureStore/FilteredFeatureStore are still needed
-    // by the rest of the old pipeline (removal tracked as part of
-    // deleting the old path entirely, see #655).
-    #[allow(unused)]
-    fn get_node(&self, id: u64) -> Option<Node>;
-    #[allow(unused)]
-    fn get_way(&self, id: u64) -> Option<Way>;
-    #[allow(unused)]
-    fn get_relation(&self, id: u64) -> Option<Relation>;
-
-    fn node_count(&self) -> u64;
-    fn way_count(&self) -> u64;
-    fn relation_count(&self) -> u64;
-
-    fn get_coord(&self, node_id: u64) -> Option<geo::Coord>;
-    fn get_nth_node(&self, n: u64) -> Option<Node>;
-    fn get_nth_way(&self, n: u64) -> Option<Way>;
-
-    // TODO: Handle relations.
-    // https://github.com/alltheplaces/osm-diffs/issues/187
-    #[allow(unused)]
-    fn get_nth_relation(&self, n: u64) -> Option<Relation>;
-}
-
-fn build_relation_parents<R: Read + Seek + Send>(
-    reader: &mut BlobReader<R>,
-    progress: &MultiProgress,
-) -> Result<HashMap<u64, u64>> {
-    let progress_bar = make_progress_bar(
-        progress,
-        "osm.prt.r",
-        reader.count_relation_blobs() as u64,
-        "blobs",
-    );
-    let mut result = HashMap::<u64, u64>::new();
-    thread::scope(|s| {
-        let progress_bar = &progress_bar;
-        let num_workers = usize::from(thread::available_parallelism()?);
-        let (blob_tx, blob_rx) = sync_channel::<Blob>(num_workers);
-        let producer = s.spawn(|| reader.send_relation_blobs(blob_tx));
-        let consumer = s.spawn(|| {
-            result = blob_rx
-                .into_iter()
-                .par_bridge()
-                .try_fold(
-                    || HashMap::with_capacity(1024),
-                    |mut map, blob| {
-                        let data = blob.into_data(); // decompress
-                        let block = PrimitiveBlock::parse(&data);
-                        for primitive in block.primitives() {
-                            if let Primitive::Relation(rel) = primitive {
-                                for (_, member_id, member_type) in rel.members() {
-                                    if member_type == RelationMemberType::Relation {
-                                        map.insert(member_id, rel.id);
-                                    }
-                                }
-                            }
-                        }
-                        progress_bar.inc(1);
-                        Ok(map)
-                    },
-                )
-                .try_reduce(
-                    || HashMap::with_capacity(16384),
-                    |mut a, b| {
-                        a.extend(b);
-                        Ok(a)
-                    },
-                )?;
-            Ok(())
-        });
-        consumer.join().expect("panic in consumer")?;
-        producer.join().expect("panic in producer")?;
-        Ok(())
-    })?;
-
-    progress_bar.finish_with_message(format!("blobs → {} relation parents", result.len()));
-    Ok(result)
+    })
 }
 
 /// Filename, within `workdir`, that `fetch::fetch_planet` downloads the
@@ -666,153 +456,12 @@ impl<'a, R: Read + Seek + Send> BlobReader<'a, R> {
     }
 }
 
-struct ParentChainIter<'a> {
-    parents: &'a HashMap<u64, u64>,
-    current: Option<u64>,
-    visited: HashSet<u64>,
-}
-
-impl<'a> ParentChainIter<'a> {
-    fn new(parents: &'a HashMap<u64, u64>, start: u64) -> Self {
-        ParentChainIter {
-            parents,
-            current: Some(start),
-            visited: HashSet::new(),
-        }
-    }
-}
-
-impl<'a> Iterator for ParentChainIter<'a> {
-    type Item = u64;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let current = self.current?;
-
-        // Check for cycles.
-        if !self.visited.insert(current) {
-            // Cycle detected; stop iteration.
-            self.current = None;
-            return None;
-        }
-
-        // Look up the parent for next iteration.
-        self.current = self.parents.get(&current).copied();
-
-        Some(current)
-    }
-}
-
-trait ParentChainExt {
-    fn parent_chain<'a>(&'a self, start: u64) -> ParentChainIter<'a>;
-}
-
-impl ParentChainExt for HashMap<u64, u64> {
-    fn parent_chain<'a>(&'a self, start: u64) -> ParentChainIter<'a> {
-        ParentChainIter::new(self, start)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::io::Cursor;
     use std::path::PathBuf;
-
-    pub struct MockFeatureStore {
-        nodes: HashMap<u64, Node>,
-        ways: HashMap<u64, Way>,
-        relations: HashMap<u64, Relation>,
-
-        node_ids: Vec<u64>,
-        way_ids: Vec<u64>,
-
-        #[allow(unused)] // TODO: Remove attribute once we use relations in FeatureStore.
-        relation_ids: Vec<u64>,
-    }
-
-    impl MockFeatureStore {
-        pub fn new(nodes: Vec<Node>, ways: Vec<Way>, relations: Vec<Relation>) -> MockFeatureStore {
-            let node_ids = nodes.iter().map(|node| node.id).collect();
-            let way_ids = ways.iter().map(|way| way.id).collect();
-            let relation_ids = relations.iter().map(|rel| rel.id).collect();
-
-            let nodes: HashMap<u64, Node> = nodes.into_iter().map(|n| (n.id, n)).collect();
-            let ways: HashMap<u64, Way> = ways.into_iter().map(|w| (w.id, w)).collect();
-            let relations: HashMap<u64, Relation> =
-                relations.into_iter().map(|r| (r.id, r)).collect();
-
-            MockFeatureStore {
-                nodes,
-                ways,
-                relations,
-                node_ids,
-                way_ids,
-                relation_ids,
-            }
-        }
-    }
-
-    impl FeatureStore for MockFeatureStore {
-        fn get_node(&self, id: u64) -> Option<Node> {
-            self.nodes.get(&id).cloned()
-        }
-
-        fn get_way(&self, id: u64) -> Option<Way> {
-            self.ways.get(&id).cloned()
-        }
-
-        fn get_relation(&self, id: u64) -> Option<Relation> {
-            self.relations.get(&id).cloned()
-        }
-
-        fn node_count(&self) -> u64 {
-            self.nodes.len() as u64
-        }
-
-        fn way_count(&self) -> u64 {
-            self.ways.len() as u64
-        }
-
-        fn relation_count(&self) -> u64 {
-            self.relations.len() as u64
-        }
-
-        fn get_coord(&self, node_id: u64) -> Option<geo::Coord> {
-            let node = self.nodes.get(&node_id)?;
-            Some(geo::Coord {
-                x: node.lon_e7 as f64 * 1e-7,
-                y: node.lat_e7 as f64 * 1e-7,
-            })
-        }
-
-        fn get_nth_node(&self, n: u64) -> Option<Node> {
-            let n = usize::try_from(n).ok()?;
-            if n < self.node_ids.len() {
-                Some(self.nodes.get(&self.node_ids[n])?.clone())
-            } else {
-                None
-            }
-        }
-
-        fn get_nth_way(&self, n: u64) -> Option<Way> {
-            let n = usize::try_from(n).ok()?;
-            if n < self.way_ids.len() {
-                Some(self.ways.get(&self.way_ids[n])?.clone())
-            } else {
-                None
-            }
-        }
-
-        fn get_nth_relation(&self, n: u64) -> Option<Relation> {
-            let n = usize::try_from(n).ok()?;
-            if n < self.relation_ids.len() {
-                Some(self.relations.get(&self.relation_ids[n])?.clone())
-            } else {
-                None
-            }
-        }
-    }
+    use std::sync::mpsc::sync_channel;
 
     #[test]
     fn test_blob_reader() -> Result<()> {
@@ -921,37 +570,5 @@ mod tests {
         path.push("test_data");
         path.push(filename);
         path
-    }
-
-    #[test]
-    fn test_parent_chain() {
-        let mut g = HashMap::new();
-        g.insert(5, 23);
-        g.insert(23, 42);
-        g.insert(27, 42);
-        g.insert(42, 100);
-
-        let parent_chain = |i| g.parent_chain(i).collect::<Vec<u64>>();
-        assert_eq!(parent_chain(5), &[5, 23, 42, 100]);
-        assert_eq!(parent_chain(23), &[23, 42, 100]);
-        assert_eq!(parent_chain(27), &[27, 42, 100]);
-        assert_eq!(parent_chain(42), &[42, 100]);
-        assert_eq!(parent_chain(100), &[100]);
-        assert_eq!(parent_chain(9999), &[9999]);
-    }
-
-    #[test]
-    fn test_parent_chain_cycle() {
-        let mut g = HashMap::new();
-        g.insert(5, 23);
-        g.insert(23, 42);
-        g.insert(42, 100);
-        g.insert(100, 23);
-
-        let parent_chain = |i| g.parent_chain(i).collect::<Vec<u64>>();
-        assert_eq!(parent_chain(5), &[5, 23, 42, 100]);
-        assert_eq!(parent_chain(23), &[23, 42, 100]);
-        assert_eq!(parent_chain(42), &[42, 100, 23]);
-        assert_eq!(parent_chain(100), &[100, 23, 42]);
     }
 }
