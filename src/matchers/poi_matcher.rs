@@ -61,7 +61,7 @@ mod tests {
 
     static CH_CLOTHES_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664633565895,
-        source: String::from("newyorker"),
+        spider: String::from("newyorker"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("addr:city", "Rapperswil"),
@@ -80,7 +80,7 @@ mod tests {
 
     static CH_CLOTHES_OSM: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664662121729,
-        source: String::from("osm"),
+        spider: String::from("osm"),
         mask: MatchMask(1),
         tags: tags(&[
             ("branch", "Rapperswil Sonnenhof"),
@@ -96,7 +96,7 @@ mod tests {
 
     static CH_KIOSK_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637400739491865,
-        source: String::from("valora"),
+        spider: String::from("valora"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("addr:city", "Rapperswil"),
@@ -114,7 +114,7 @@ mod tests {
 
     static CH_KIOSK_OSM: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637400743919515,
-        source: String::from("osm"),
+        spider: String::from("osm"),
         mask: MatchMask::SHOP,
         tags: tags(&[
             ("brand", "k kiosk"),

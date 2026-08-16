@@ -282,13 +282,8 @@ impl<'a> OsmCandidate<'a> {
     }
 }
 
-/// Trait for objects that can score a match candidate.
-///
-/// Only scores against [OsmCandidate] (the geometry-aware
-/// `OsmFeatureIndex` path) -- there's no `Place`-based `score` any more,
-/// now that OSM data doesn't go through `Place` at all. Nor is there a
-/// `suggest_edit`: turning a matched pair into a proposed edit is a
-/// different concern from matching itself, and lives in
+/// Trait for objects that can score a match candidate. Turning a
+/// matched pair into a proposed edit is a separate concern, handled by
 /// `crate::edit_suggesters` instead.
 pub trait Matcher {
     fn score_osm_candidate(&self, candidate: &OsmCandidate) -> f64;

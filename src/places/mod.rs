@@ -9,15 +9,11 @@ mod writer;
 pub use reader::PlaceReader;
 pub use writer::ParquetWriter;
 
-/// An AllThePlaces feature. (Used to also represent OpenStreetMap
-/// features -- hence carrying an `osm_id`/`osm_changeset`/`osm_version`
-/// at one point -- back when OSM went through this same type; OSM now
-/// has its own `tables::Feature`/`OsmFeatureIndex`, so `Place` is
-/// ATP-only. See alltheplaces/osm-diffs#655.)
+/// An AllThePlaces feature.
 #[derive(Debug, DeepSizeOf, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Place {
     pub s2_cell_id: u64,
-    pub source: String,
+    pub spider: String,
     pub mask: MatchMask,
     pub tags: Vec<(String, String)>,
 }
@@ -25,7 +21,7 @@ pub struct Place {
 impl Place {
     pub fn new(
         coord: &Coord,
-        source: String,
+        spider: String,
         mask: MatchMask,
         tags: Vec<(String, String)>,
     ) -> Option<Place> {
@@ -37,7 +33,7 @@ impl Place {
         let s2_cell_id = s2::cellid::CellID::from(s2_lat_lng).0;
         Some(Place {
             s2_cell_id,
-            source,
+            spider,
             mask,
             tags,
         })
@@ -46,7 +42,7 @@ impl Place {
     pub fn deep_clone(&self) -> Self {
         Place {
             s2_cell_id: self.s2_cell_id,
-            source: self.source.clone(),
+            spider: self.spider.clone(),
             mask: self.mask,
             tags: self.tags.clone(),
         }
@@ -72,14 +68,14 @@ mod tests {
             x: 7.447_812_3,
             y: 46.947_980_1,
         };
-        let source = "test/source".to_string();
+        let spider = "test/spider".to_string();
         let tags = vec![
             ("building".to_string(), "tower".to_string()),
             ("name:gsw".to_string(), "Zytglogge".to_string()),
         ];
-        let place = Place::new(&p, source, MatchMask::SHOP, tags.clone()).unwrap();
+        let place = Place::new(&p, spider, MatchMask::SHOP, tags.clone()).unwrap();
         assert_eq!(place.s2_cell_id, 5156122125915201443);
-        assert_eq!(place.source, "test/source");
+        assert_eq!(place.spider, "test/spider");
         assert_eq!(place.tags, tags);
     }
 
@@ -90,7 +86,7 @@ mod tests {
                 x: 7.4478123,
                 y: 46.9479801,
             },
-            "test/source".to_string(),
+            "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
         )
@@ -100,7 +96,7 @@ mod tests {
                 x: -122.4630042,
                 y: 37.8045878,
             },
-            "test/source".to_string(),
+            "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
         )
@@ -118,7 +114,7 @@ mod tests {
                 x: 7.4478123,
                 y: 46.9479801,
             },
-            "test/source".to_string(),
+            "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
         )

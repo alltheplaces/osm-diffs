@@ -346,7 +346,7 @@ impl ParquetRow {
         let atp_tags;
         if let Some(atp) = atp {
             atp_shape_wkb = wkb(&atp.shape());
-            atp_spider = Some(atp.source);
+            atp_spider = Some(atp.spider);
             atp_tags = atp.tags;
         } else {
             atp_shape_wkb = Vec::with_capacity(0);

@@ -64,7 +64,7 @@ impl PlaceReader {
 fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
     Ok(Place {
         s2_cell_id: get_u64_required(batch, "s2_cell_id", row)?,
-        source: get_string_required(batch, "source", row)?,
+        spider: get_string_required(batch, "spider", row)?,
         mask: MatchMask(get_u16_required(batch, "mask", row)?),
         tags: get_tags(batch, row)?,
     })
@@ -157,7 +157,7 @@ mod tests {
         for batch in reader.read_all().expect("read_all") {
             for place in batch.expect("batch decode") {
                 assert_ne!(place.s2_cell_id, 0, "s2_cell_id should not be zero");
-                assert!(!place.source.is_empty(), "source should not be empty");
+                assert!(!place.spider.is_empty(), "spider should not be empty");
                 for (k, v) in &place.tags {
                     assert!(!k.is_empty(), "tag key should not be empty");
                     assert!(!v.is_empty(), "tag value should not be empty");

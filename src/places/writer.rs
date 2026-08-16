@@ -66,7 +66,7 @@ impl ParquetWriter {
             )),
             Arc::new(UInt16Array::from_iter(self.places.iter().map(|p| p.mask.0))),
             Arc::new(StringArray::from_iter_values(
-                self.places.iter().map(|p| p.source.as_str()),
+                self.places.iter().map(|p| p.spider.as_str()),
             )),
             make_tags(&self.places, self.num_tags),
         ];
@@ -131,7 +131,7 @@ fn make_schema() -> Schema {
     let mut fields = vec![
         Field::new("s2_cell_id", DataType::UInt64, /* nullable */ false),
         Field::new("mask", DataType::UInt16, /* nullable */ false),
-        Field::new("source", DataType::Utf8, /* nullable */ false),
+        Field::new("spider", DataType::Utf8, /* nullable */ false),
     ];
     fields.push(Field::new(
         "tags",
