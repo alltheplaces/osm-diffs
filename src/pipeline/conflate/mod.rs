@@ -252,7 +252,7 @@ fn write_conflated(
     log::info!(
         elapsed_seconds = start.elapsed().as_secs_f64(),
         rows_written = row_count.load(Ordering::SeqCst),
-        bytes = std::fs::metadata(out)?.len();
+        bytes_written = std::fs::metadata(out)?.len();
         "conflate.write: done"
     );
     Ok(())

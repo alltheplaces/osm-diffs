@@ -118,7 +118,7 @@ fn process_places(
     log::info!(
         path = out.display().to_string(),
         num_features = num_features,
-        bytes = std::fs::metadata(out)?.len();
+        bytes_written = std::fs::metadata(out)?.len();
         "import_atp: finished writing alltheplaces.parquet"
     );
     Ok(())
