@@ -1,0 +1,198 @@
+//! Sequentially reads a `Place`-typed Parquet file (`alltheplaces.parquet`
+//! today -- the only remaining caller is `conflate()`, reading ATP).
+//!
+//! No caching, no spatial index: unlike the `PlaceIndex` this replaces,
+//! nothing here ever revisits a row. `conflate()` scans every ATP
+//! feature exactly once, in file order, so there's nothing worth
+//! caching -- see `alltheplaces/osm-diffs#655`'s cleanup discussion for
+//! why `PlaceIndex`'s query/LRU-cache machinery existed in the first
+//! place (spatial OSM-candidate lookups) and why it's gone now (nothing
+//! searches OSM via `Place` any more).
+
+use anyhow::{Context, Result};
+use arrow::array::{
+    Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
+};
+use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use std::fs::File;
+use std::num::{NonZeroU32, NonZeroU64};
+use std::path::{Path, PathBuf};
+
+use crate::{matchers::MatchMask, places::Place};
+
+pub struct PlaceReader {
+    file_path: PathBuf,
+    total_rows: usize,
+}
+
+impl PlaceReader {
+    /// Opens the file and reads its total row count from Parquet
+    /// metadata -- cheap, no row I/O.
+    pub fn open(path: &Path) -> Result<Self> {
+        let file = File::open(path)?;
+        let total_rows = ParquetRecordBatchReaderBuilder::try_new(file)?
+            .metadata()
+            .file_metadata()
+            .num_rows() as usize;
+        Ok(Self {
+            file_path: path.to_path_buf(),
+            total_rows,
+        })
+    }
+
+    pub fn total_rows(&self) -> usize {
+        self.total_rows
+    }
+
+    /// Reads every row, batch by batch (Arrow's natural row-group-ish
+    /// chunking). The caller processes each batch in parallel with
+    /// Rayon; batches preserve spatial locality (the file is S2-sorted)
+    /// even though nothing here relies on that ordering itself.
+    pub fn read_all(&self) -> Result<impl Iterator<Item = Result<Vec<Place>>>> {
+        let file = File::open(&self.file_path)?;
+        let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
+        Ok(reader.map(|batch| {
+            let batch = batch?;
+            (0..batch.num_rows())
+                .map(|row| extract_place(&batch, row))
+                .collect()
+        }))
+    }
+}
+
+fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
+    Ok(Place {
+        s2_cell_id: get_u64_required(batch, "s2_cell_id", row)?,
+        osm_id: get_u64_optional(batch, "osm_id", row)?.and_then(NonZeroU64::new),
+        osm_changeset: get_u64_optional(batch, "osm_changeset", row)?.and_then(NonZeroU64::new),
+        osm_version: get_u32_optional(batch, "osm_version", row)?.and_then(NonZeroU32::new),
+        source: get_string_required(batch, "source", row)?,
+        mask: MatchMask(get_u16_required(batch, "mask", row)?),
+        tags: get_tags(batch, row)?,
+    })
+}
+
+fn get_u32_optional(batch: &RecordBatch, name: &str, row: usize) -> Result<Option<u32>> {
+    let col = match batch.column_by_name(name) {
+        None => return Ok(None),
+        Some(c) => c,
+    };
+    Ok(Some(
+        col.as_any()
+            .downcast_ref::<UInt32Array>()
+            .with_context(|| format!("column '{name}' exists but is not UInt32"))?
+            .value(row),
+    ))
+}
+
+fn get_u64_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u64> {
+    Ok(batch
+        .column_by_name(name)
+        .with_context(|| format!("missing required column '{name}'"))?
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .with_context(|| format!("column '{name}' is not UInt64"))?
+        .value(row))
+}
+
+fn get_u64_optional(batch: &RecordBatch, name: &str, row: usize) -> Result<Option<u64>> {
+    let col = match batch.column_by_name(name) {
+        None => return Ok(None),
+        Some(c) => c,
+    };
+    Ok(Some(
+        col.as_any()
+            .downcast_ref::<UInt64Array>()
+            .with_context(|| format!("column '{name}' exists but is not UInt64"))?
+            .value(row),
+    ))
+}
+
+fn get_u16_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u16> {
+    Ok(batch
+        .column_by_name(name)
+        .with_context(|| format!("missing required column '{name}'"))?
+        .as_any()
+        .downcast_ref::<UInt16Array>()
+        .with_context(|| format!("column '{name}' is not UInt16"))?
+        .value(row))
+}
+
+fn get_string_required(batch: &RecordBatch, name: &str, row: usize) -> Result<String> {
+    Ok(batch
+        .column_by_name(name)
+        .with_context(|| format!("missing required column '{name}'"))?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .with_context(|| format!("column '{name}' is not Utf8/String"))?
+        .value(row)
+        .to_owned())
+}
+
+fn get_tags(batch: &RecordBatch, row: usize) -> Result<Vec<(String, String)>> {
+    let col = batch
+        .column_by_name("tags")
+        .context("missing required column 'tags'")?
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .context("column 'tags' is not a MapArray")?;
+
+    let map_entry = col.value(row);
+    let keys = map_entry
+        .column_by_name("key")
+        .context("map 'tags' has no 'key' field")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("map 'tags' keys are not strings")?;
+    let values = map_entry
+        .column_by_name("value")
+        .context("map 'tags' has no 'value' field")?
+        .as_any()
+        .downcast_ref::<StringArray>()
+        .context("map 'tags' values are not strings")?;
+
+    let mut tags = Vec::with_capacity(keys.len());
+    for i in 0..keys.len() {
+        tags.push((keys.value(i).to_owned(), values.value(i).to_owned()));
+    }
+    Ok(tags)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Test file with 7 places -- see the old `PlaceIndex` tests (git
+    /// history) for the full per-place s2_cell_id/mask breakdown; this
+    /// only needs the total count and that every place decodes cleanly.
+    fn test_file() -> PathBuf {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.push("tests/test_data/alltheplaces.parquet");
+        path
+    }
+
+    #[test]
+    fn total_rows_matches_metadata() {
+        let reader = PlaceReader::open(&test_file()).expect("open");
+        assert_eq!(reader.total_rows(), 7);
+    }
+
+    #[test]
+    fn read_all_yields_every_row_exactly_once() {
+        let reader = PlaceReader::open(&test_file()).expect("open");
+        let mut count = 0;
+        for batch in reader.read_all().expect("read_all") {
+            for place in batch.expect("batch decode") {
+                assert_ne!(place.s2_cell_id, 0, "s2_cell_id should not be zero");
+                assert!(!place.source.is_empty(), "source should not be empty");
+                for (k, v) in &place.tags {
+                    assert!(!k.is_empty(), "tag key should not be empty");
+                    assert!(!v.is_empty(), "tag value should not be empty");
+                }
+                count += 1;
+            }
+        }
+        assert_eq!(count, reader.total_rows());
+    }
+}
