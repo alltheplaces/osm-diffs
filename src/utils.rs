@@ -50,16 +50,39 @@ pub(crate) mod rfc3339 {
 /// real `UtcDateTime` ergonomics in Rust code, rather than a bare,
 /// easy-to-misinterpret `i64`/`u64`.
 ///
-/// (De)serializes as a plain `i64` Unix-seconds integer, *not* as an
-/// RFC 3339 string via `crate::utils::rfc3339` -- unlike that helper's
-/// intended use (one-off JSON output in `provenance.rs`), this type's
-/// `Serialize`/`Deserialize` impl is on the hot path: `Place` (which
-/// embeds this) gets serialized to MessagePack on every spilled chunk
-/// of every external sort of the ATP dataset. A formatted string there
-/// would cost real formatting/parsing time and extra spilled bytes,
-/// for no benefit nothing downstream ever reads as text.
+/// (De)serializes as a plain `i64` Unix-milliseconds integer, *not* as
+/// an RFC 3339 string via `crate::utils::rfc3339` -- unlike that
+/// helper's intended use (one-off JSON output in `provenance.rs`), this
+/// type's `Serialize`/`Deserialize` impl is on the hot path: `Place`
+/// (which embeds this) gets serialized to MessagePack on every spilled
+/// chunk of every external sort of the ATP dataset. A formatted string
+/// there would cost real formatting/parsing time and extra spilled
+/// bytes, for no benefit nothing downstream ever reads as text.
+/// Milliseconds, not whole seconds: AllThePlaces' `spider:collection_time`
+/// carries sub-second precision (microseconds, as of August 2026), and
+/// this is the finest granularity `conflated.parquet`'s own
+/// `Timestamp(Millisecond, UTC)` output columns can represent anyway
+/// (see `pipeline::conflate::writer`) -- truncating to whole seconds
+/// here, before that value is ever written out, would silently throw
+/// away real precision the final output could otherwise keep.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct UtcTimestamp(pub time::UtcDateTime);
+
+impl UtcTimestamp {
+    /// Milliseconds since the Unix epoch -- the conversion every writer
+    /// of a `Timestamp(Millisecond, UTC)` column needs. Not just
+    /// `unix_timestamp() * 1000`: that goes through `unix_timestamp()`,
+    /// which is defined to discard everything below whole seconds,
+    /// silently truncating any sub-second precision `self.0` actually
+    /// carries. Computed from `unix_timestamp_nanos()` instead so this
+    /// is a true millisecond truncation (still lossy relative to
+    /// nanoseconds, but not more than the `Millisecond` column type
+    /// itself already implies).
+    pub fn unix_timestamp_millis(&self) -> i64 {
+        i64::try_from(self.0.unix_timestamp_nanos() / 1_000_000)
+            .expect("timestamp out of i64 millisecond range")
+    }
+}
 
 impl deepsize::DeepSizeOf for UtcTimestamp {
     fn deep_size_of_children(&self, _context: &mut deepsize::Context) -> usize {
@@ -69,14 +92,14 @@ impl deepsize::DeepSizeOf for UtcTimestamp {
 
 impl serde::Serialize for UtcTimestamp {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_i64(self.0.unix_timestamp())
+        s.serialize_i64(self.unix_timestamp_millis())
     }
 }
 
 impl<'de> serde::Deserialize<'de> for UtcTimestamp {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let secs = <i64 as serde::Deserialize>::deserialize(d)?;
-        time::UtcDateTime::from_unix_timestamp(secs)
+        let millis = <i64 as serde::Deserialize>::deserialize(d)?;
+        time::UtcDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
             .map(UtcTimestamp)
             .map_err(serde::de::Error::custom)
     }
@@ -119,6 +142,25 @@ mod tests {
         );
         let round_tripped: UtcTimestamp = rmp_serde::from_slice(&bytes).expect("deserialize");
         assert_eq!(round_tripped, t);
+    }
+
+    /// Regression test: an earlier version of this type serialized via
+    /// `unix_timestamp()`, which discards everything below whole
+    /// seconds -- silently truncating AllThePlaces' `spider:collection_time`
+    /// (which does carry sub-second precision, e.g. microseconds as of
+    /// August 2026) down to the second on every `Place`'s round trip
+    /// through the ATP external sort, well before it ever reached
+    /// `conflated.parquet`'s millisecond-precision output columns.
+    #[test]
+    fn test_utc_timestamp_preserves_millisecond_precision_through_messagepack() {
+        let t = UtcTimestamp(
+            time::UtcDateTime::from_unix_timestamp_nanos(1_780_209_952_804_399_000).unwrap(),
+        );
+        assert_eq!(t.unix_timestamp_millis(), 1_780_209_952_804);
+
+        let bytes = rmp_serde::to_vec(&t).expect("serialize");
+        let round_tripped: UtcTimestamp = rmp_serde::from_slice(&bytes).expect("deserialize");
+        assert_eq!(round_tripped.unix_timestamp_millis(), 1_780_209_952_804);
     }
 
     #[test]

@@ -74,15 +74,15 @@ fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
 }
 
 fn get_fetched(batch: &RecordBatch, row: usize) -> Result<UtcTimestamp> {
-    let secs = batch
+    let millis = batch
         .column_by_name("fetched")
         .context("missing required column 'fetched'")?
         .as_any()
         .downcast_ref::<Int64Array>()
         .context("column 'fetched' is not Int64")?
         .value(row);
-    let t = time::UtcDateTime::from_unix_timestamp(secs)
-        .with_context(|| format!("invalid 'fetched' timestamp: {secs}"))?;
+    let t = time::UtcDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
+        .with_context(|| format!("invalid 'fetched' timestamp: {millis} ms"))?;
     Ok(UtcTimestamp(t))
 }
 
@@ -174,7 +174,7 @@ mod tests {
             for place in batch.expect("batch decode") {
                 assert_ne!(place.s2_cell_id, 0, "s2_cell_id should not be zero");
                 assert!(!place.spider.is_empty(), "spider should not be empty");
-                assert_eq!(place.fetched.unix_timestamp(), 1_767_225_600);
+                assert_eq!(place.fetched.unix_timestamp_millis(), 1_767_225_600_000);
                 for (k, v) in &place.tags {
                     assert!(!k.is_empty(), "tag key should not be empty");
                     assert!(!v.is_empty(), "tag value should not be empty");

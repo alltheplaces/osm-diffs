@@ -69,7 +69,9 @@ impl ParquetWriter {
                 self.places.iter().map(|p| p.spider.as_str()),
             )),
             Arc::new(Int64Array::from_iter(
-                self.places.iter().map(|p| p.fetched.unix_timestamp()),
+                self.places
+                    .iter()
+                    .map(|p| p.fetched.unix_timestamp_millis()),
             )),
             make_tags(&self.places, self.num_tags),
         ];
@@ -135,10 +137,14 @@ fn make_schema() -> Schema {
         Field::new("s2_cell_id", DataType::UInt64, /* nullable */ false),
         Field::new("mask", DataType::UInt16, /* nullable */ false),
         Field::new("spider", DataType::Utf8, /* nullable */ false),
-        // Unix seconds -- this file is an internal, ephemeral scratch
-        // format (never read by anything outside this pipeline), so a
-        // plain integer is enough; conflated.parquet's public `atp.fetched`
-        // column is what gets a proper Arrow Timestamp logical type.
+        // Unix milliseconds -- this file is an internal, ephemeral
+        // scratch format (never read by anything outside this
+        // pipeline), so a plain integer is enough; conflated.parquet's
+        // public `atp.fetched.timestamp` column is what gets a proper
+        // Arrow Timestamp logical type. Milliseconds, not whole
+        // seconds, to preserve the sub-second precision AllThePlaces'
+        // `spider:collection_time` actually carries -- see
+        // `crate::utils::UtcTimestamp::unix_timestamp_millis`.
         Field::new("fetched", DataType::Int64, /* nullable */ false),
     ];
     fields.push(Field::new(

@@ -29,10 +29,10 @@ Every pipeline run uploads its `pipeline.log` to S3 storage at
 `logs/<run-id>.log`, where `<run-id>` is the run’s start timestamp.
 That timestamp is effectively each production run’s own ID — for
 traceability, it’s also stamped into `conflated.parquet`’s own metadata
-(see [`CONFLATED_OUTPUT.md`](CONFLATED_OUTPUT.md)), so a run’s log and
-its data output can always be tied back together. This happens
-regardless of whether the run succeeded — a failed run’s log is
-exactly the one you want archived for debugging, not just a
+(see [`outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)),
+so a run’s log and its data output can always be tied back together.
+This happens regardless of whether the run succeeded — a failed run’s
+log is exactly the one you want archived for debugging, not just a
 successful one’s.
 
 ## Why bother

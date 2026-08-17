@@ -257,8 +257,11 @@ impl ParquetWriter {
                 self.atp_tags.values().append_value(value);
             }
             self.atp_tags.append(true)?;
-            self.atp_fetched_timestamps
-                .append_value(to_millis(row.atp_fetched.expect("atp_fetched")));
+            self.atp_fetched_timestamps.append_value(
+                row.atp_fetched
+                    .expect("atp_fetched")
+                    .unix_timestamp_millis(),
+            );
             self.atp_fetched_spiders.append_value(atp_spider);
             self.atp_geometries.append_value(&row.atp_shape_wkb);
         } else {
@@ -285,9 +288,11 @@ impl ParquetWriter {
             }
             self.osm_tags.append(true)?;
 
-            self.osm_modified_timestamps.append_value(to_millis(
-                row.osm_modified_timestamp.expect("osm_modified_timestamp"),
-            ));
+            self.osm_modified_timestamps.append_value(
+                row.osm_modified_timestamp
+                    .expect("osm_modified_timestamp")
+                    .unix_timestamp_millis(),
+            );
             self.osm_modified_changesets.append_value(
                 row.osm_modified_changeset
                     .expect("osm_modified_changeset")
@@ -321,10 +326,18 @@ impl ParquetWriter {
                             .field_builder::<UInt64Builder>(1)
                             .expect("id field builder")
                             .append_value(member_id);
-                        member_builder
+                        let role_builder = member_builder
                             .field_builder::<StringBuilder>(2)
-                            .expect("role field builder")
-                            .append_value(role);
+                            .expect("role field builder");
+                        // OSM itself only has an empty string for "no
+                        // role", not a separate null concept -- but the
+                        // public schema draws that distinction, so an
+                        // empty role becomes an actual null here.
+                        if role.is_empty() {
+                            role_builder.append_null();
+                        } else {
+                            role_builder.append_value(role);
+                        }
                         member_builder.append(true);
                     }
                     self.osm_relation_members.append(true);
@@ -621,18 +634,6 @@ impl PartialEq for ParquetRow {
 
 impl Eq for ParquetRow {}
 
-/// Converts to milliseconds since the Unix epoch -- Parquet's TIMESTAMP
-/// logical type has no representation for a "seconds" unit (see
-/// `arrow_to_parquet_type` in the `parquet` crate: `DataType::Timestamp
-/// (TimeUnit::Second, _)` silently produces a bare, unannotated `INT64`
-/// column, not a real logical-typed timestamp), so every timestamp
-/// column here uses `TimeUnit::Millisecond` and this conversion, even
-/// though the underlying data (OSM/ATP timestamps) never has
-/// sub-second precision.
-fn to_millis(t: UtcTimestamp) -> i64 {
-    t.unix_timestamp() * 1000
-}
-
 fn wkb(shape: &geo::Geometry<f64>) -> Vec<u8> {
     // Most of our features have point geometry, which uses 21 bytes in WKB encoding.
     let mut buf = Vec::<u8>::with_capacity(21);
@@ -713,13 +714,15 @@ mod schema {
     /// Fields of one `osm.relation_members` list entry: the member's own
     /// `type`/`id` (same encoding as the top-level `osm.type`/`osm.id`,
     /// but describing the *member*, not the relation itself) and its
-    /// `role` within the relation (e.g. "outer", "inner", or "" if the
-    /// member has no role).
+    /// `role` within the relation (e.g. "outer", "inner", or `null` if
+    /// OSM gave the member no role -- OSM itself only has an empty
+    /// string for that, not a null of its own, but the public schema
+    /// draws the distinction).
     pub fn relation_member_fields() -> Fields {
         vec![
             Field::new("type", DataType::Utf8, NOT_NULLABLE),
             Field::new("id", DataType::UInt64, NOT_NULLABLE),
-            Field::new("role", DataType::Utf8, NOT_NULLABLE),
+            Field::new("role", DataType::Utf8, NULLABLE),
         ]
         .into()
     }
@@ -741,6 +744,16 @@ mod schema {
             .with_extension_type(WkbType::new(Some(metadata)))
     }
 
+    /// Millisecond, not `Second`: Parquet's TIMESTAMP logical type has
+    /// no representation for a "seconds" unit at all (see
+    /// `arrow_to_parquet_type` in the `parquet` crate --
+    /// `DataType::Timestamp(TimeUnit::Second, _)` silently produces a
+    /// bare, unannotated `INT64` column instead, not a real logical-typed
+    /// timestamp). Millisecond is also the finest granularity actually
+    /// worth writing: OSM's own edit timestamps never carry sub-second
+    /// precision, and while AllThePlaces' `spider:collection_time` does
+    /// (see `crate::utils::UtcTimestamp::unix_timestamp_millis`), nothing
+    /// upstream of this pipeline promises sub-millisecond precision either.
     fn new_timestamp_field(name: &str, nullable: bool) -> Field {
         Field::new(
             name,

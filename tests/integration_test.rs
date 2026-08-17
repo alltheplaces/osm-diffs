@@ -228,13 +228,25 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
     );
 
     // (osm_id, shop, changeset, version, modified timestamp (Unix
-    // seconds), way_members count, atp spider, atp fetched (Unix
-    // seconds)) -- pinned via a real run's output, cross-checked with
-    // DuckDB against the fixture data directly, not just re-derived
-    // from this same code.
-    for (osm_id, expected_shop, changeset, version, ts_secs, way_members, spider, fetched_secs) in [
+    // seconds -- OSM's own edit timestamps never carry sub-second
+    // precision), way_members count, atp spider, atp fetched (Unix
+    // *milliseconds* -- unlike modified, AllThePlaces' own
+    // spider:collection_time does carry sub-second precision, e.g.
+    // Denner's below is really ...952.804399 in the source GeoJSON, so
+    // this pins genuine sub-second digits, not just a round number))
+    // -- pinned via a real run's output, cross-checked with DuckDB
+    // against the fixture data directly, not just re-derived from this
+    // same code.
+    for (osm_id, expected_shop, changeset, version, ts_secs, way_members, spider, fetched_millis) in [
         (
-            608979139, "coffee", 131777778, 3, 1674832913, 5, "tchibo", 1780317635,
+            608979139,
+            "coffee",
+            131777778,
+            3,
+            1674832913,
+            5,
+            "tchibo",
+            1780317635860,
         ), // Tchibo
         (
             737021556,
@@ -244,7 +256,7 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
             1740858960,
             7,
             "mediamarkt",
-            1779653420,
+            1779653420273,
         ), // MediaMarkt
         (
             737021557,
@@ -254,7 +266,7 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
             1740858960,
             5,
             "denner_ch",
-            1780209952,
+            1780209952804,
         ), // Denner
     ] {
         let row = matched
@@ -283,8 +295,7 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
         );
         assert_eq!(row.atp_spider, spider, "way/{osm_id} atp.fetched.spider");
         assert_eq!(
-            row.atp_fetched_millis,
-            fetched_secs * 1000,
+            row.atp_fetched_millis, fetched_millis,
             "way/{osm_id} atp.fetched.timestamp"
         );
     }

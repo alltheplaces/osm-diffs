@@ -37,6 +37,14 @@ const OSM_COPYRIGHT: &str = "© OpenStreetMap contributors";
 const ODBL_URL: &str = "https://opendatacommons.org/licenses/odbl/1-0/";
 const CC0_URL: &str = "https://creativecommons.org/publicdomain/zero/1.0/legalcode";
 
+/// Minutes of the OpenStreetMap Foundation's Licensing Working Group
+/// meeting where using AllThePlaces data in OpenStreetMap (this
+/// pipeline's purpose) was discussed and not objected to -- see
+/// `atp_component()`, which cites this as `evidence` substantiating
+/// that the ATP input component's CC0 license is actually compatible
+/// with this pipeline's ODbL-licensed output.
+const ATP_IN_OSM_LICENSING_DISCUSSION_URL: &str = "https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources";
+
 /// Supplier declared for this BOM and the AllThePlaces component. Copied
 /// verbatim from `scripts/sbom/merge.jq`'s `metadata.supplier` (the
 /// container-image SBOM) rather than kept in sync programmatically --
@@ -178,7 +186,7 @@ fn output_component(run_timestamp: &str) -> Value {
         "licenses": license("ODbL-1.0", ODBL_URL),
         "copyright": OSM_COPYRIGHT,
         "externalReferences": [
-            {"type": "documentation", "url": format!("{REPO_URL}/blob/main/docs/CONFLATED_OUTPUT.md")},
+            {"type": "documentation", "url": format!("{REPO_URL}/blob/main/docs/outputs/CONFLATED_PARQUET.md")},
             license_external_reference(ODBL_URL),
         ],
         "data": [{"type": "dataset"}],
@@ -203,10 +211,6 @@ fn atp_component(atp: &AtpMetadata) -> Result<Value> {
         "name": "alltheplaces.zip",
         "version": &start_time,
         "supplier": supplier(),
-        // Using AllThePlaces data in OpenStreetMap (this pipeline's
-        // purpose) was discussed with -- and not objected to by -- the
-        // OSM Foundation's Licensing Working Group:
-        // https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources
         "licenses": license("CC0-1.0", CC0_URL),
         "hashes": [{"alg": "SHA-256", "content": sha256}],
         "purl": format!(
@@ -217,6 +221,10 @@ fn atp_component(atp: &AtpMetadata) -> Result<Value> {
         "externalReferences": [
             {"type": "distribution", "url": atp.output_url},
             license_external_reference(CC0_URL),
+            // Substantiates that this CC0-licensed input is actually
+            // clear to use here, despite the pipeline's own output
+            // being ODbL-licensed -- see the constant's own doc comment.
+            {"type": "evidence", "url": ATP_IN_OSM_LICENSING_DISCUSSION_URL},
         ],
     }))
 }
