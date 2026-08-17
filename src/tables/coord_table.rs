@@ -85,11 +85,16 @@ impl<'a> CoordTable<'a> {
     ) -> Result<CoordTable<'a>> {
         let mut writer = Writer::create(out)?;
         let coords_count = AtomicU64::new(0);
-        let sorter: ExternalSorter<(u64, u64), std::io::Error, LimitedBufferBuilder> =
+        // Named as a local type alias, not repeated as a literal tuple, so
+        // the item type used to build the sorter and the one used to size
+        // its buffer can't silently drift apart under a future
+        // refactoring.
+        type Item = (u64, u64); // (key, packed_coord)
+        let sorter: ExternalSorter<Item, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    chunk_bytes / size_of::<(u64, u64)>(),
+                    chunk_bytes / size_of::<Item>(),
                     /* preallocate */ true,
                 ))
                 .build()?;

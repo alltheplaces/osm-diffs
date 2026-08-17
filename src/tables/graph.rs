@@ -85,11 +85,15 @@ impl<'a> GraphTable<'a> {
     ) -> Result<GraphTable<'a>> {
         let mut writer = Writer::create(out)?;
         let num_edges = AtomicU64::new(0);
-        let sorter: ExternalSorter<Edge, std::io::Error, LimitedBufferBuilder> =
+        // Named as a local type alias, not spelled out twice, so the item
+        // type used to build the sorter and the one used to size its
+        // buffer can't silently drift apart under a future refactoring.
+        type Item = Edge;
+        let sorter: ExternalSorter<Item, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    chunk_bytes / size_of::<Edge>(),
+                    chunk_bytes / size_of::<Item>(),
                     /* preallocate */ true,
                 ))
                 .build()?;

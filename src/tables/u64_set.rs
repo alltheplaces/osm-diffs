@@ -277,11 +277,15 @@ mod writer {
     ) -> Result<u64> {
         let mut tmp_out = PathBuf::from(out);
         tmp_out.add_extension("tmp");
-        let sorter: ExternalSorter<u64, std::io::Error, LimitedBufferBuilder> =
+        // Named as a local type alias, not spelled out twice, so the item
+        // type used to build the sorter and the one used to size its
+        // buffer can't silently drift apart under a future refactoring.
+        type Item = u64;
+        let sorter: ExternalSorter<Item, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    /* buffer_size */ chunk_bytes / size_of::<u64>(),
+                    /* buffer_size */ chunk_bytes / size_of::<Item>(),
                     /* preallocate */ true,
                 ))
                 .build()?;

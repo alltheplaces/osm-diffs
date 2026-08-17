@@ -548,12 +548,16 @@ impl Writer {
         // concurrently, so this gets the full chunk-size budget; see
         // crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES. Entries are
         // fixed-size, so the budget is converted to an item count rather
-        // than measured via MemoryLimitedBufferBuilder.
-        let sorter: ExternalSorter<(u32, usize), std::io::Error, LimitedBufferBuilder> =
+        // than measured via MemoryLimitedBufferBuilder. Named as a local
+        // type alias, not repeated as a literal tuple, so the item type
+        // used to build the sorter and the one used to size its buffer
+        // can't silently drift apart under a future refactoring.
+        type Item = (u32, usize);
+        let sorter: ExternalSorter<Item, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES / size_of::<(u32, usize)>(),
+                    crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES / size_of::<Item>(),
                     /* preallocate */ true,
                 ))
                 .build()?;
