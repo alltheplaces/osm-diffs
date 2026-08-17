@@ -5,8 +5,9 @@
 //! like serialized protobuf messages, WKB geeometry, or other opaque
 //! binary payloads.
 
+use crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES;
 use anyhow::{Ok, Result};
-use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
+use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use memmap2::Mmap;
 use std::{
     fs::{File, remove_file, rename},
@@ -33,20 +34,27 @@ impl<'a> BlobTable<'a> {
     ///
     /// Since [Writer::write] requires keys in ascending order, `blobs` is
     /// first sorted by key using external sorting (spilling to `workdir`
-    /// as needed), and only then written to `out`.
+    /// as needed), and only then written to `out`. `chunk_bytes` bounds
+    /// each external-sort chunk's in-memory size (and, in turn, how many
+    /// chunk files end up open at once during the final merge -- see
+    /// [crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES]); a blob's actual byte
+    /// size varies, so this is measured with [MemoryLimitedBufferBuilder]
+    /// rather than an item count. Callers that run several external sorts
+    /// concurrently (e.g. from sibling threads in the same
+    /// `thread::scope`) should divide their share of the budget
+    /// accordingly -- this function has no way to know how many others
+    /// are running alongside it.
     pub fn create(
         blobs: impl Iterator<Item = (u64, Vec<u8>)>,
         workdir: &Path,
         out: &Path,
+        chunk_bytes: u64,
     ) -> Result<BlobTable<'a>> {
         let mut writer = Writer::create(out)?;
-        let sorter: ExternalSorter<(u64, Vec<u8>), std::io::Error, LimitedBufferBuilder> =
+        let sorter: ExternalSorter<(u64, Vec<u8>), std::io::Error, MemoryLimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
-                .with_buffer(LimitedBufferBuilder::new(
-                    128 * 1024,
-                    /* preallocate */ true,
-                ))
+                .with_buffer(MemoryLimitedBufferBuilder::new(chunk_bytes))
                 .build()?;
         let sorted = sorter.sort(blobs.map(std::io::Result::Ok))?;
         for s in sorted {
@@ -277,7 +285,12 @@ mod tests {
             (41, b"".to_vec()),
         ];
 
-        let table = BlobTable::create(blobs.into_iter(), workdir.path(), file.path())?;
+        let table = BlobTable::create(
+            blobs.into_iter(),
+            workdir.path(),
+            file.path(),
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+        )?;
         assert_eq!(table.len(), 4);
         assert_eq!(table.lookup(0), None);
         assert_eq!(table.lookup(17), Some(b"bern".as_slice()));

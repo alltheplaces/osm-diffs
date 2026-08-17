@@ -67,11 +67,21 @@ impl<'a> CoordTable<'a> {
     ///
     /// Since [Writer::write] requires keys in ascending order, `coords` is
     /// first sorted by key using external sorting (spilling to `workdir`
-    /// as needed), and only then written to `out`.
+    /// as needed), and only then written to `out`. `chunk_bytes` bounds
+    /// each external-sort chunk's in-memory size (and, in turn, how many
+    /// chunk files end up open at once during the final merge -- see
+    /// [crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES]); entries here are
+    /// fixed-size, so this is converted to an item count rather than
+    /// measured via [MemoryLimitedBufferBuilder]. Callers that run several
+    /// external sorts concurrently (e.g. from sibling threads in the same
+    /// `thread::scope`) should divide their share of the budget
+    /// accordingly -- this function has no way to know how many others
+    /// are running alongside it.
     pub fn create(
         coords: impl Iterator<Item = (u64, Coord)>,
         workdir: &Path,
         out: &Path,
+        chunk_bytes: u64,
     ) -> Result<CoordTable<'a>> {
         let mut writer = Writer::create(out)?;
         let coords_count = AtomicU64::new(0);
@@ -79,7 +89,7 @@ impl<'a> CoordTable<'a> {
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    16 * 1024 * 1024,
+                    chunk_bytes as usize / size_of::<(u64, u64)>(),
                     /* preallocate */ true,
                 ))
                 .build()?;
@@ -306,7 +316,12 @@ mod tests {
             ),
         ];
 
-        let table = CoordTable::create(coords.into_iter(), workdir.path(), file.path())?;
+        let table = CoordTable::create(
+            coords.into_iter(),
+            workdir.path(),
+            file.path(),
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+        )?;
         assert_eq!(table.len(), 3);
         assert_eq!(table.get(0), None);
         assert!(almost_equal(

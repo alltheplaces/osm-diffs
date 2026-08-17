@@ -6,12 +6,25 @@ use std::{
 use time::UtcDateTime;
 
 /// Target chunk size, in bytes, for external sorts that spill to disk
-/// across this pipeline (see the `ext_sort` crate). Chunk sizes for
-/// external sorts have grown ad hoc over time and are currently uneven
-/// across call sites for no good reason; this constant exists so new
-/// code has a shared default to reach for instead of picking another
-/// arbitrary number. Not yet applied to existing call sites -- see
-/// https://github.com/alltheplaces/osm-diffs/issues/657 for that cleanup.
+/// across this pipeline (see the `ext_sort` crate) -- a single, named
+/// knob to bump if a chunk size ever turns out wrong, instead of hunting
+/// down ad hoc magic numbers scattered across call sites (see
+/// https://github.com/alltheplaces/osm-diffs/issues/657, resolved by
+/// consolidating every call site onto this constant). A chunk is also a
+/// unit of concurrently-open file descriptors: `ext_sort` keeps every
+/// spilled chunk's file open at once during its final merge, so a
+/// smaller chunk size means more, smaller chunks and more open files for
+/// the same input -- raise this if that ever runs into an OS file
+/// descriptor limit again, as happened during the pr665 Hetzner shakedown.
+///
+/// This is a *per-thread-scope* budget, not a per-sorter one: several
+/// call sites run more than one external sort concurrently (sibling
+/// threads in the same `thread::scope`, e.g. `prune.rs`'s per-stage
+/// producer/writer pipelines), and each of those divides this constant
+/// by however many sorts run alongside it, so their combined peak memory
+/// stays within one `EXTERNAL_SORT_CHUNK_BYTES` rather than multiplying
+/// it. A call site that's the only external sort in its scope uses the
+/// full value.
 pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
 
 mod conflate;

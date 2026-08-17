@@ -12,6 +12,7 @@
 //! already-matched pair.
 
 use crate::edit_suggesters::create_edit_suggester;
+use crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES;
 use crate::{TileLayer, make_progress_bar};
 use anyhow::{Context, Result};
 use arrow::array::{
@@ -367,6 +368,13 @@ fn get_tags(s: &StructArray, name: &str, row: usize) -> Result<Vec<(String, Stri
     Ok(tags)
 }
 
+/// Every call site (see `suggest_edits` above) spawns exactly three of
+/// these concurrently, one per output layer (shops, infrastructure,
+/// trees) -- so each gets a third of the chunk-size budget, keeping
+/// their combined peak memory within one EXTERNAL_SORT_CHUNK_BYTES
+/// rather than tripling it.
+const CONCURRENT_SORTS: u64 = 3;
+
 fn write_edits(edits: Receiver<SuggestedEdit>, path: &Path, workdir: &Path) -> Result<u64> {
     let mut tmp_path = PathBuf::from(&path);
     tmp_path.add_extension("tmp");
@@ -375,7 +383,9 @@ fn write_edits(edits: Receiver<SuggestedEdit>, path: &Path, workdir: &Path) -> R
     let sorter: ExternalSorter<SuggestedEdit, std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)
-            .with_buffer(MemoryLimitedBufferBuilder::new(150_000_000))
+            .with_buffer(MemoryLimitedBufferBuilder::new(
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+            ))
             .build()?;
 
     let num_edits = AtomicU64::new(0);

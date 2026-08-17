@@ -80,6 +80,7 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     io,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    mem::size_of,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -542,11 +543,17 @@ impl Writer {
         let mut hash_values_writer =
             BufWriter::with_capacity(32 * 1024, File::create(&hash_values_path)?);
 
+        // StringPool::create has exactly one caller in the pipeline
+        // (assemble_strings), which never runs another external sort
+        // concurrently, so this gets the full chunk-size budget; see
+        // crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES. Entries are
+        // fixed-size, so the budget is converted to an item count rather
+        // than measured via MemoryLimitedBufferBuilder.
         let sorter: ExternalSorter<(u32, usize), std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    1024 * 1024,
+                    crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES / size_of::<(u32, usize)>(),
                     /* preallocate */ true,
                 ))
                 .build()?;

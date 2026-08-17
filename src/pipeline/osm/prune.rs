@@ -2,6 +2,7 @@ use super::BlobReader;
 use crate::{
     make_progress_bar,
     matchers::MatchMask,
+    pipeline::EXTERNAL_SORT_CHUNK_BYTES,
     tables::{CoordTable, Edge, GraphTable, StringCounts, U64Set},
 };
 use anyhow::{Ok, Result};
@@ -263,13 +264,25 @@ fn prune_relations_pass_1<'a>(
                 Ok(())
             })
         });
-        let keep_writer =
-            s.spawn(|| U64Set::create(keep_rx.into_iter(), workdir, &keep_relations_path));
+        // keep_writer and graph_writer each run their own external sort
+        // concurrently in this scope -- split the chunk-size budget
+        // between the two so their combined peak memory stays within one
+        // EXTERNAL_SORT_CHUNK_BYTES, not double it.
+        const CONCURRENT_SORTS: u64 = 2;
+        let keep_writer = s.spawn(|| {
+            U64Set::create(
+                keep_rx.into_iter(),
+                workdir,
+                &keep_relations_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+            )
+        });
         let graph_writer = s.spawn(|| {
             relations_graph = Some(GraphTable::create(
                 edge_rx.into_iter(),
                 workdir,
                 &relation_graph_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -336,17 +349,29 @@ fn prune_relations_pass_2<'a>(
             })
         });
 
+        // keep_writer and strings_writer each run their own external sort
+        // concurrently in this scope -- split the chunk-size budget
+        // between the two so their combined peak memory stays within one
+        // EXTERNAL_SORT_CHUNK_BYTES, not double it.
+        const CONCURRENT_SORTS: u64 = 2;
         let keep_writer = s.spawn(|| {
             rel_members = Some(U64Set::create(
                 keep_rx.into_iter(),
                 workdir,
                 &rel_members_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
 
-        let strings_writer =
-            s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
+        let strings_writer = s.spawn(|| {
+            StringCounts::create(
+                strings_rx.into_iter(),
+                workdir,
+                &strings_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+            )
+        });
 
         strings_writer.join().expect("panic in strings_writer")?;
         keep_writer.join().expect("panic in keep_writer")?;
@@ -440,11 +465,17 @@ fn prune_ways<'a>(
             }
             Ok(())
         });
+        // keep_ways_writer, keep_coords_writer, and strings_writer (below)
+        // each run their own external sort concurrently in this scope --
+        // split the chunk-size budget three ways so their combined peak
+        // memory stays within one EXTERNAL_SORT_CHUNK_BYTES, not triple it.
+        const CONCURRENT_SORTS: u64 = 3;
         let keep_ways_writer = s.spawn(|| {
             keep_ways = Some(U64Set::create(
                 ways_rx.into_iter(),
                 workdir,
                 &keep_ways_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -453,6 +484,7 @@ fn prune_ways<'a>(
                 coords_rx.into_iter(),
                 workdir,
                 &keep_coords_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -465,8 +497,14 @@ fn prune_ways<'a>(
             Ok(())
         });
 
-        let strings_writer =
-            s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
+        let strings_writer = s.spawn(|| {
+            StringCounts::create(
+                strings_rx.into_iter(),
+                workdir,
+                &strings_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+            )
+        });
 
         strings_writer.join().expect("panic in strings_writer")?;
         keep_coords_writer
@@ -589,15 +627,33 @@ fn prune_nodes<'a>(
             Ok(())
         });
 
-        let strings_writer =
-            s.spawn(|| StringCounts::create(strings_rx.into_iter(), workdir, &strings_path));
-        let coords_writer =
-            s.spawn(|| CoordTable::create(coords_rx.into_iter(), workdir, &coords_path));
+        // strings_writer, coords_writer, and keep_nodes_writer each run
+        // their own external sort concurrently in this scope -- split the
+        // chunk-size budget three ways so their combined peak memory
+        // stays within one EXTERNAL_SORT_CHUNK_BYTES, not triple it.
+        const CONCURRENT_SORTS: u64 = 3;
+        let strings_writer = s.spawn(|| {
+            StringCounts::create(
+                strings_rx.into_iter(),
+                workdir,
+                &strings_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+            )
+        });
+        let coords_writer = s.spawn(|| {
+            CoordTable::create(
+                coords_rx.into_iter(),
+                workdir,
+                &coords_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+            )
+        });
         let keep_nodes_writer = s.spawn(|| {
             keep_nodes = Some(U64Set::create(
                 keep_rx.into_iter(),
                 workdir,
                 &keep_nodes_path,
+                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
             )?);
             Ok(())
         });

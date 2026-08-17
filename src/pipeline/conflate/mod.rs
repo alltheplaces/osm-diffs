@@ -2,6 +2,7 @@ use super::last_modified;
 use crate::{
     make_progress_bar,
     matchers::{OsmCandidate, create_matcher, match_distance},
+    pipeline::EXTERNAL_SORT_CHUNK_BYTES,
     places::{Place, PlaceReader},
     s2_util::MergedCellRanges,
     tables::{Feature, OsmFeatures},
@@ -221,10 +222,15 @@ fn write_conflated(
 ) -> Result<()> {
     let start = Instant::now();
     let row_count = AtomicU64::new(0);
+    // write_conflated's only caller (conflate()) doesn't run any other
+    // external sort concurrently with it, so this gets the full
+    // chunk-size budget; see EXTERNAL_SORT_CHUNK_BYTES.
     let sorter: ExternalSorter<ParquetRow, std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)
-            .with_buffer(MemoryLimitedBufferBuilder::new(150_000_000))
+            .with_buffer(MemoryLimitedBufferBuilder::new(
+                EXTERNAL_SORT_CHUNK_BYTES as u64,
+            ))
             .build()?;
     let sorted = sorter.sort(cf.iter().map(|row| {
         progress.set_length(row_count.fetch_add(1, Ordering::SeqCst));

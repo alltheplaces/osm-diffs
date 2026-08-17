@@ -44,7 +44,7 @@
 //! mmap'd bytes.
 
 use anyhow::{Ok, Result};
-use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
+use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use memmap2::Mmap;
 use std::{
     fs::{File, remove_file, rename},
@@ -81,21 +81,27 @@ impl<'a> StringCounts<'a> {
     ///
     /// Since [Writer::write] requires keys in ascending order, `counts` is
     /// first sorted by key using external sorting (spilling to `workdir`
-    /// as needed), and only then written to `out`.
+    /// as needed), and only then written to `out`. `chunk_bytes` bounds
+    /// each external-sort chunk's in-memory size (and, in turn, how many
+    /// chunk files end up open at once during the final merge -- see
+    /// [crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES]); keys vary in length,
+    /// so this is measured with [MemoryLimitedBufferBuilder] rather than
+    /// an item count. Callers that run several external sorts concurrently
+    /// (e.g. from sibling threads in the same `thread::scope`) should
+    /// divide their share of the budget accordingly -- this function has
+    /// no way to know how many others are running alongside it.
     pub fn create(
         counts: impl Iterator<Item = (String, u64)>,
         workdir: &Path,
         out: &Path,
+        chunk_bytes: u64,
     ) -> Result<StringCounts<'a>> {
         let mut writer = Writer::create(out)?;
         let entry_count = AtomicU64::new(0);
-        let sorter: ExternalSorter<(String, u64), std::io::Error, LimitedBufferBuilder> =
+        let sorter: ExternalSorter<(String, u64), std::io::Error, MemoryLimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
-                .with_buffer(LimitedBufferBuilder::new(
-                    8 * 1024 * 1024,
-                    /* preallocate */ true,
-                ))
+                .with_buffer(MemoryLimitedBufferBuilder::new(chunk_bytes))
                 .build()?;
         let sorted = sorter.sort(counts.map(|entry| {
             entry_count.fetch_add(1, Ordering::SeqCst);
@@ -349,6 +355,7 @@ mod tests {
             entries.map(|(s, n)| (String::from(s), n)).into_iter(),
             workdir.path(),
             &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
         )
         .expect("StringCounts::create() failed")
     });
@@ -375,6 +382,7 @@ mod tests {
             entries.map(|(s, n)| (String::from(s), n)).into_iter(),
             workdir.path(),
             &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
         )?;
 
         let table = StringCounts::open(&path)?;

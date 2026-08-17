@@ -88,10 +88,15 @@ fn process_places(
     let mut tmp = PathBuf::from(out);
     tmp.add_extension("tmp");
     let mut writer = ParquetWriter::try_new(/* batch size, in records */ 4 * 1024, &tmp)?;
+    // process_places's only sibling thread (process_zip) doesn't run any
+    // external sort of its own, so this gets the full chunk-size budget;
+    // see crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES.
     let sorter: ExternalSorter<Place, std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)
-            .with_buffer(MemoryLimitedBufferBuilder::new(150_000_000))
+            .with_buffer(MemoryLimitedBufferBuilder::new(
+                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            ))
             .build()?;
 
     let num_features = AtomicU64::new(0);
