@@ -39,6 +39,7 @@ use std::{
     collections::{BTreeMap, HashSet, VecDeque},
     fs::{File, remove_file, rename},
     io::{BufReader, BufWriter, Seek, SeekFrom, Write},
+    mem::size_of,
     ops::Range,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -66,19 +67,33 @@ impl<'a> GraphTable<'a> {
     ///
     /// Since [Writer::write] requires edges in ascending `(child, parent)`
     /// order, `edges` is first sorted using external sorting (spilling to
-    /// `workdir` as needed), and only then written to `out`.
+    /// `workdir` as needed), and only then written to `out`. `chunk_bytes`
+    /// bounds each external-sort chunk's in-memory size (and, in turn, how
+    /// many chunk files end up open at once during the final merge -- see
+    /// [crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES]); `Edge` is fixed-size,
+    /// so this is converted to an item count rather than measured via
+    /// `MemoryLimitedBufferBuilder`. Callers that run several external
+    /// sorts concurrently (e.g. from sibling threads in the same
+    /// `thread::scope`) should divide their share of the budget
+    /// accordingly -- this function has no way to know how many others
+    /// are running alongside it.
     pub fn create(
         edges: impl Iterator<Item = Edge>,
         workdir: &Path,
         out: &Path,
+        chunk_bytes: usize,
     ) -> Result<GraphTable<'a>> {
         let mut writer = Writer::create(out)?;
         let num_edges = AtomicU64::new(0);
-        let sorter: ExternalSorter<Edge, std::io::Error, LimitedBufferBuilder> =
+        // Named as a local type alias, not spelled out twice, so the item
+        // type used to build the sorter and the one used to size its
+        // buffer can't silently drift apart under a future refactoring.
+        type Item = Edge;
+        let sorter: ExternalSorter<Item, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    16 * 1024 * 1024,
+                    chunk_bytes / size_of::<Item>(),
                     /* preallocate */ true,
                 ))
                 .build()?;
@@ -452,7 +467,12 @@ mod tests {
             .map(|(child, parent)| Edge { child, parent });
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(graph.modified()?, std::fs::metadata(&path)?.modified()?);
         assert_eq!(
             graph.ancestors(1).collect::<Vec<u64>>(),
@@ -482,7 +502,12 @@ mod tests {
             .map(|(child, parent)| Edge { child, parent });
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(graph.nodes().collect::<Vec<u64>>(), &[1, 2, 3, 4]);
         Ok(())
     }
@@ -493,7 +518,12 @@ mod tests {
         let edges_iter = std::iter::empty::<Edge>();
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(graph.nodes().collect::<Vec<u64>>(), Vec::<u64>::new());
         Ok(())
     }
@@ -544,7 +574,12 @@ mod tests {
             .map(|(child, parent)| Edge { child, parent });
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(graph.edge_count(), 3);
         Ok(())
     }
@@ -554,7 +589,12 @@ mod tests {
         let edges_iter = std::iter::empty::<Edge>();
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(graph.edge_count(), 0);
         Ok(())
     }
@@ -577,7 +617,12 @@ mod tests {
             .map(|(child, parent)| Edge { child, parent });
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         // Nodes 1..6 and 21..23, nine in total.
         assert_eq!(graph.node_count(), 9);
         Ok(())
@@ -588,7 +633,12 @@ mod tests {
         let edges_iter = std::iter::empty::<Edge>();
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(graph.node_count(), 0);
         Ok(())
     }
@@ -603,7 +653,12 @@ mod tests {
             .map(|(child, parent)| Edge { child, parent });
         let workdir = TempDir::new()?;
         let path = workdir.path().join("testgraph");
-        let graph = GraphTable::create(edges_iter, workdir.path(), &path)?;
+        let graph = GraphTable::create(
+            edges_iter,
+            workdir.path(),
+            &path,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(graph.node_count(), 3);
         Ok(())
     }

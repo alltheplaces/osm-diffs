@@ -34,16 +34,19 @@ impl<'a> GeometryTable<'a> {
     ///
     /// Each geometry is encoded as a WKB blob and handed to the embedded
     /// [BlobTable], so the same ordering and external-sorting behavior as
-    /// [BlobTable::create] applies.
+    /// [BlobTable::create] applies -- including `chunk_bytes`, forwarded
+    /// straight through; see [BlobTable::create] for what it means.
     pub fn create(
         geometries: impl Iterator<Item = (u64, Geometry)>,
         workdir: &Path,
         out: &Path,
+        chunk_bytes: usize,
     ) -> Result<GeometryTable<'a>> {
         let blobs = BlobTable::create(
             geometries.map(|(key, geometry)| (key, encode_wkb(&geometry))),
             workdir,
             out,
+            chunk_bytes,
         )?;
         Ok(GeometryTable { blobs })
     }
@@ -108,7 +111,12 @@ mod tests {
             ),
         ];
 
-        let table = GeometryTable::create(geometries.into_iter(), workdir.path(), file.path())?;
+        let table = GeometryTable::create(
+            geometries.into_iter(),
+            workdir.path(),
+            file.path(),
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(table.len(), 3);
         assert_eq!(table.lookup(0), None);
         assert_eq!(
@@ -140,7 +148,12 @@ mod tests {
             vec![],
         );
         let geometries = vec![(1_u64, Geometry::Polygon(polygon.clone()))];
-        GeometryTable::create(geometries.into_iter(), workdir.path(), file.path())?;
+        GeometryTable::create(
+            geometries.into_iter(),
+            workdir.path(),
+            file.path(),
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
 
         let table = GeometryTable::open(file.path())?;
         assert_eq!(
@@ -161,7 +174,12 @@ mod tests {
             (42, Geometry::Point(Point::new(2.0, 2.0))),
             (17, Geometry::Point(Point::new(1.0, 1.0))),
         ];
-        GeometryTable::create(geometries.into_iter(), workdir.path(), file.path())?;
+        GeometryTable::create(
+            geometries.into_iter(),
+            workdir.path(),
+            file.path(),
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
 
         let table = GeometryTable::open(file.path())?;
         let entries: Vec<(u64, Geometry)> = table.iter().collect();

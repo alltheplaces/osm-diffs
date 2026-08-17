@@ -3,6 +3,7 @@ use crate::{
     geometry::{GeometryBuilder, PolygonFill, build_line, build_ring},
     make_progress_bar,
     matchers::MatchMask,
+    pipeline::EXTERNAL_SORT_CHUNK_BYTES,
     pipeline::osm::id_tagging_schema::is_area,
     tables::{
         BlobTable, CoordTable, Feature, FeatureToIndex, GeometryStore, GeometryTable, RecordReader,
@@ -10,7 +11,7 @@ use crate::{
     },
 };
 use anyhow::{Ok, Result};
-use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
+use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use geo::{Centroid, Geometry, InterpolateLine, algorithm::line_measures::Haversine};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
@@ -93,12 +94,16 @@ fn assemble_strings<'a>(
         strings.len() as u64,
         "strings",
     );
-    let sorter: ExternalSorter<(u64, String), std::io::Error, LimitedBufferBuilder> =
+    // Not concurrent with any other external sort (unlike several of the
+    // sorts in `prune.rs`), so it gets the full chunk-size budget; see
+    // `crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES`. Strings vary in
+    // length, so this is measured in actual bytes
+    // (`MemoryLimitedBufferBuilder`), not an item count.
+    let sorter: ExternalSorter<(u64, String), std::io::Error, MemoryLimitedBufferBuilder> =
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)
-            .with_buffer(LimitedBufferBuilder::new(
-                4 * 1024 * 1024,
-                /* preallocate */ true,
+            .with_buffer(MemoryLimitedBufferBuilder::new(
+                EXTERNAL_SORT_CHUNK_BYTES as u64,
             ))
             .build()?;
     let sorted = sorter.sort_by(
@@ -331,8 +336,15 @@ fn assemble_ways<'a>(
             Ok(())
         });
 
+        // Sole external sort in this scope (feature_writer above is a
+        // plain RecordWriter), so it gets the full chunk-size budget.
         let geometry_writer = s.spawn(|| {
-            GeometryTable::create(geometry_rx.into_iter(), workdir, &ways_in_relations_path)
+            GeometryTable::create(
+                geometry_rx.into_iter(),
+                workdir,
+                &ways_in_relations_path,
+                EXTERNAL_SORT_CHUNK_BYTES,
+            )
         });
 
         feature_writer.join().expect("panic in feature_writer")?;
@@ -497,11 +509,18 @@ fn assemble_leaf_relations<'a>(
             Ok(())
         });
 
+        // super_rel_writer and leaf_geometry_writer each run their own
+        // external sort concurrently in this scope (leaf_rel_writer above
+        // is a plain RecordWriter, not a sort) -- split the chunk-size
+        // budget between the two so their combined peak memory stays
+        // within one EXTERNAL_SORT_CHUNK_BYTES, not double it.
+        const CONCURRENT_SORTS: usize = 2;
         let super_rel_writer = s.spawn(|| {
             super_relations = Some(BlobTable::create(
                 super_rel_rx.into_iter(),
                 workdir,
                 &super_relations_path,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -511,6 +530,7 @@ fn assemble_leaf_relations<'a>(
                 geometry_rx.into_iter(),
                 workdir,
                 &leaf_relations_geometry_path,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });

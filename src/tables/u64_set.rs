@@ -47,12 +47,20 @@ impl U64Set {
     ///
     /// `elements` is sorted and deduplicated using external sorting
     /// (spilling to `workdir` as needed), and only then written to `out`.
+    /// `chunk_bytes` bounds each external-sort chunk's in-memory size
+    /// (and, in turn, how many chunk files end up open at once during the
+    /// final merge -- see [crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES]).
+    /// Callers that run several external sorts concurrently (e.g. from
+    /// sibling threads in the same `thread::scope`) should divide their
+    /// share of the budget accordingly -- this function has no way to
+    /// know how many others are running alongside it.
     pub fn create(
         elements: impl Iterator<Item = u64>,
         workdir: &Path,
         out: &Path,
+        chunk_bytes: usize,
     ) -> Result<U64Set> {
-        _ = writer::create(elements, workdir, out)?;
+        _ = writer::create(elements, workdir, out, chunk_bytes)?;
         Self::open(out)
     }
 
@@ -233,7 +241,12 @@ mod tests {
         let workdir = TempDir::new()?;
         let out = workdir.path().join("test.u64set");
 
-        let set = U64Set::create([42, 7, 23, 7].into_iter(), workdir.path(), &out)?;
+        let set = U64Set::create(
+            [42, 7, 23, 7].into_iter(),
+            workdir.path(),
+            &out,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+        )?;
         assert_eq!(set.len(), 3);
         assert!(set.contains(7));
         assert!(set.contains(23));
@@ -253,16 +266,27 @@ mod writer {
     use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::LimitedBufferBuilder};
     use std::fs::File;
     use std::io::{BufWriter, Seek, SeekFrom, Write};
+    use std::mem::size_of;
     use std::path::{Path, PathBuf};
 
-    pub fn create(elements: impl Iterator<Item = u64>, workdir: &Path, out: &Path) -> Result<u64> {
+    pub fn create(
+        elements: impl Iterator<Item = u64>,
+        workdir: &Path,
+        out: &Path,
+        chunk_bytes: usize,
+    ) -> Result<u64> {
         let mut tmp_out = PathBuf::from(out);
         tmp_out.add_extension("tmp");
-        let sorter: ExternalSorter<u64, std::io::Error, LimitedBufferBuilder> =
+        // Named as a local type alias, not spelled out twice, so the item
+        // type used to build the sorter and the one used to size its
+        // buffer can't silently drift apart under a future refactoring.
+        type Item = u64;
+        let sorter: ExternalSorter<Item, std::io::Error, LimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    /* buffer_size */ 5_000_000, /* preallocate */ true,
+                    /* buffer_size */ chunk_bytes / size_of::<Item>(),
+                    /* preallocate */ true,
                 ))
                 .build()?;
         let sorted = sorter.sort(elements.map(std::io::Result::Ok))?;
@@ -313,6 +337,7 @@ mod writer {
                 /* elements */ [42, 23, 23, 7777, 23].into_iter(),
                 /* workdir */ tmp.path(),
                 /* out */ &out,
+                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
             )?;
             assert_eq!(num_written, 3);
 
@@ -332,7 +357,12 @@ mod writer {
             let tmp = tempfile::TempDir::new()?;
             let out = tmp.path().join("test.u64_table");
 
-            let num_written = super::create([9].into_iter(), tmp.path(), &out)?;
+            let num_written = super::create(
+                [9].into_iter(),
+                tmp.path(),
+                &out,
+                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+            )?;
             assert_eq!(num_written, 1);
 
             let table = U64Set::open(&out)?;
@@ -350,7 +380,12 @@ mod writer {
             let tmp = tempfile::TempDir::new()?;
             let out = tmp.path().join("test.u64_table");
 
-            let num_written = super::create([].into_iter(), tmp.path(), &out)?;
+            let num_written = super::create(
+                [].into_iter(),
+                tmp.path(),
+                &out,
+                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+            )?;
             assert_eq!(num_written, 0);
 
             let table = U64Set::open(&out)?;

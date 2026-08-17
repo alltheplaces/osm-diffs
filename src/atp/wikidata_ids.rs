@@ -60,7 +60,14 @@ pub fn collect_wikidata_ids(atp: &Path, workdir: &Path) -> Result<PathBuf> {
     }
 
     let count = ids.len();
-    U64Set::create(ids.into_iter(), workdir, &out)?;
+    // Sole external sort in this step (see `run_step("collect_wikidata_ids",
+    // ...)` in pipeline/mod.rs), so it gets the full chunk-size budget.
+    U64Set::create(
+        ids.into_iter(),
+        workdir,
+        &out,
+        crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
+    )?;
     log::info!(count = count; "collect_wikidata_ids: done");
     Ok(out)
 }
