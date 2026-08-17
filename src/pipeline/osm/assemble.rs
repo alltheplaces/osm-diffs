@@ -94,8 +94,8 @@ fn assemble_strings<'a>(
         strings.len() as u64,
         "strings",
     );
-    // Not shared with any sibling thread (unlike several of the sorts in
-    // `prune.rs`), so it gets the full chunk-size budget; see
+    // Not concurrent with any other external sort (unlike several of the
+    // sorts in `prune.rs`), so it gets the full chunk-size budget; see
     // `crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES`. Strings vary in
     // length, so this is measured in actual bytes
     // (`MemoryLimitedBufferBuilder`), not an item count.

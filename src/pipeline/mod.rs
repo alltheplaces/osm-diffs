@@ -17,14 +17,16 @@ use time::UtcDateTime;
 /// the same input -- raise this if that ever runs into an OS file
 /// descriptor limit again, as happened during the pr665 Hetzner shakedown.
 ///
-/// This is a *per-thread-scope* budget, not a per-sorter one: several
-/// call sites run more than one external sort concurrently (sibling
-/// threads in the same `thread::scope`, e.g. `prune.rs`'s per-stage
-/// producer/writer pipelines), and each of those divides this constant
-/// by however many sorts run alongside it, so their combined peak memory
-/// stays within one `EXTERNAL_SORT_CHUNK_BYTES` rather than multiplying
-/// it. A call site that's the only external sort in its scope uses the
-/// full value.
+/// This budget is shared among however many external sorts run
+/// *concurrently*, not handed out per sorter: several call sites run
+/// more than one external sort at the same time (e.g. `prune.rs`'s
+/// per-stage producer/writer pipelines, each running a few sorts on
+/// sibling threads within one `thread::scope` -- though not every thread
+/// in such a scope runs a sort; some just move data between channels).
+/// Each such call site divides this constant by however many sorts run
+/// alongside it, so their combined peak memory stays within one
+/// `EXTERNAL_SORT_CHUNK_BYTES` rather than multiplying it. A call site
+/// that's the only external sort in its scope uses the full value.
 pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
 
 mod conflate;
