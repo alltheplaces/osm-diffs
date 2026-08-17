@@ -4,6 +4,8 @@
 - [`TESTING.md`](TESTING.md) — how this project's tests are organized,
   what CI enforces, and how to try a change on real hardware before it
   lands.
+- [`LOGGING.md`](LOGGING.md) — the JSON log format `osm-diffs run`
+  writes, and where weekly-run logs end up archived in S3.
 - [`RELEASING.md`](RELEASING.md) — how to cut a release of `osm-diffs`.
 - [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md) — the concepts
   behind our release process: containers, multi-architecture images,

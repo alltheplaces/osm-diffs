@@ -34,7 +34,9 @@ pub fn run_pipeline(
 ) -> Result<()> {
     // Captured before anything else runs, so it's a genuine start
     // time for this invocation -- embedded into the provenance BOM
-    // (crate::provenance) as formulation[].workflows[].timeStart.
+    // (crate::provenance) as formulation[].workflows[].timeStart, and
+    // reused below as pipeline.log's own upload key, so a run's log and
+    // its data output can always be tied back together.
     let pipeline_start_time = UtcDateTime::now();
 
     if !workdir.exists() {
@@ -42,37 +44,71 @@ pub fn run_pipeline(
     }
     crate::logging::init(workdir)?;
 
-    geostats::init()?;
     let progress = indicatif::MultiProgress::new();
+    let result = run_pipeline_steps(
+        http_client,
+        workdir,
+        pipeline_run_id,
+        pipeline_start_time,
+        &progress,
+    );
+
+    // Upload the log regardless of whether the run above succeeded --
+    // a failed run's log is exactly the one you want archived for
+    // debugging, not just a successful one's. `run_step` (below) has
+    // already logged whichever step failed and why, so that's already
+    // in the uploaded file; this just adds one more line making the
+    // overall outcome obvious without having to find that line first.
+    if let Err(e) = &result {
+        log::error!("pipeline run failed: {e:#}");
+    }
+    if let Err(upload_err) = upload::upload_logs(workdir, pipeline_start_time, &progress) {
+        log::error!("failed to upload pipeline.log: {upload_err:#}");
+    }
+
+    result
+}
+
+fn run_pipeline_steps(
+    http_client: &reqwest::Client,
+    workdir: &Path,
+    pipeline_run_id: &str,
+    pipeline_start_time: UtcDateTime,
+    progress: &indicatif::MultiProgress,
+) -> Result<()> {
+    geostats::init()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let atp = run_step("import_atp", || {
-        runtime.block_on(crate::atp::import_atp(http_client, &progress, workdir))
+        runtime.block_on(crate::atp::import_atp(http_client, progress, workdir))
     })?;
     // Not consumed by anything yet -- see crate::atp::collect_wikidata_ids
     // for what this is for.
     let _wikidata_ids = run_step("collect_wikidata_ids", || {
         crate::atp::collect_wikidata_ids(&atp, workdir)
     })?;
-    let osm_features = run_step("import_osm", || osm::import_osm(&progress, workdir))?;
+    let osm_features = run_step("import_osm", || osm::import_osm(progress, workdir))?;
     let conflated = run_step("conflate", || {
         conflate::conflate(
             &atp,
             &osm_features,
-            &progress,
+            progress,
             workdir,
             pipeline_run_id,
             pipeline_start_time,
         )
     })?;
+    run_step("upload_conflated", || {
+        upload::upload_conflated(&conflated, progress)
+    })?;
     let edits = run_step("suggest_edits", || {
-        edits::suggest_edits(&conflated, &progress, workdir)
+        edits::suggest_edits(&conflated, progress, workdir)
     })?;
     let tiles = run_step("render_tiles", || {
-        tiles::render_tiles(&edits, &progress, workdir)
+        tiles::render_tiles(&edits, progress, workdir)
     })?;
-    run_step("upload_tiles", || upload::upload_tiles(&tiles, &progress))?;
+    run_step("upload_tiles", || upload::upload_tiles(&tiles, progress))?;
 
     Ok(())
 }
