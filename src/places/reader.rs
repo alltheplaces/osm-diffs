@@ -7,12 +7,14 @@
 //! hit for.
 
 use anyhow::{Context, Result};
-use arrow::array::{Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt64Array};
+use arrow::array::{
+    Array, Int64Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt64Array,
+};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::{matchers::MatchMask, places::Place};
+use crate::{matchers::MatchMask, places::Place, utils::UtcTimestamp};
 
 pub struct PlaceReader {
     file_path: PathBuf,
@@ -67,7 +69,21 @@ fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
         spider: get_string_required(batch, "spider", row)?,
         mask: MatchMask(get_u16_required(batch, "mask", row)?),
         tags: get_tags(batch, row)?,
+        fetched: get_fetched(batch, row)?,
     })
+}
+
+fn get_fetched(batch: &RecordBatch, row: usize) -> Result<UtcTimestamp> {
+    let secs = batch
+        .column_by_name("fetched")
+        .context("missing required column 'fetched'")?
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .context("column 'fetched' is not Int64")?
+        .value(row);
+    let t = time::UtcDateTime::from_unix_timestamp(secs)
+        .with_context(|| format!("invalid 'fetched' timestamp: {secs}"))?;
+    Ok(UtcTimestamp(t))
 }
 
 fn get_u64_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u64> {
@@ -158,6 +174,7 @@ mod tests {
             for place in batch.expect("batch decode") {
                 assert_ne!(place.s2_cell_id, 0, "s2_cell_id should not be zero");
                 assert!(!place.spider.is_empty(), "spider should not be empty");
+                assert_eq!(place.fetched.unix_timestamp(), 1_767_225_600);
                 for (k, v) in &place.tags {
                     assert!(!k.is_empty(), "tag key should not be empty");
                     assert!(!v.is_empty(), "tag value should not be empty");
