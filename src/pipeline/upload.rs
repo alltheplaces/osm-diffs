@@ -103,6 +103,24 @@ impl<'a> Drop for Upload<'a> {
 
 /// S3 connection details, read once from the environment and reused
 /// for every upload in a pipeline run.
+///
+/// All five come from environment variables, none of them CLI flags
+/// (`osm-diffs run --help` won't mention them) -- they're ambient
+/// deployment config, the kind you'd set once for wherever this runs
+/// on a schedule, not something to pass per invocation:
+///
+/// - `S3_ENDPOINT` -- the S3-compatible service's base URL (e.g.
+///   `https://s3.amazonaws.com`, or a MinIO/other provider's own URL).
+///   Also the on/off switch: if this is unset, every upload in this
+///   module is skipped entirely (see [S3Config::from_env]) -- the
+///   established way to disable uploads for a local/dev run.
+/// - `S3_BUCKET` -- the bucket every upload in this module writes to
+///   (`edits.pmtiles`, `conflated.parquet`, `logs/<run-id>.log` all
+///   land in the same one, distinguished by key).
+/// - `S3_REGION` -- passed to the S3 client as-is; some S3-compatible
+///   services ignore it, but the client still requires a value.
+/// - `S3_ACCESS_KEY_ID` / `S3_ACCESS_KEY_SECRET` -- static credentials
+///   for that bucket.
 struct S3Config {
     endpoint: String,
     bucket: String,
