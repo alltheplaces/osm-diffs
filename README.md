@@ -19,7 +19,9 @@ manually check each edit before applying it to OpenStreetMap — which
 edits go where is still being worked out, see
 [#696](https://github.com/alltheplaces/osm-diffs/issues/696).
 
-New here? See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) to get
-started, and [`docs/`](docs/) generally for testing, cutting a
+New here? See [`docs/TECHNICAL_DESIGN.md`](docs/TECHNICAL_DESIGN.md)
+for why this exists and how it's built,
+[`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) to get started
+contributing, and [`docs/`](docs/) generally for testing, cutting a
 release, and our security practices. Looking for what the pipeline
 actually produces instead? See [`docs/outputs/`](docs/outputs/).

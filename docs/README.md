@@ -1,6 +1,8 @@
 # Documentation
 
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — start here if you're new.
+- [`TECHNICAL_DESIGN.md`](TECHNICAL_DESIGN.md) — why this pipeline
+  exists, the background it builds on, and how it's put together.
 - [`TESTING.md`](TESTING.md) — how this project's tests are organized,
   what CI enforces, and how to try a change on real hardware before it
   lands.
