@@ -1,4 +1,5 @@
 use crate::matchers::MatchMask;
+use crate::utils::UtcTimestamp;
 use deepsize::DeepSizeOf;
 use geo::Coord;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,11 @@ pub struct Place {
     pub spider: String,
     pub mask: MatchMask,
     pub tags: Vec<(String, String)>,
+
+    /// When AllThePlaces fetched this feature from its upstream source
+    /// (a spider's `spider:collection_time`, shared by every feature in
+    /// that spider's run). Exposed in `conflated.parquet` as `atp.fetched`.
+    pub fetched: UtcTimestamp,
 }
 
 impl Place {
@@ -24,6 +30,7 @@ impl Place {
         spider: String,
         mask: MatchMask,
         tags: Vec<(String, String)>,
+        fetched: UtcTimestamp,
     ) -> Option<Place> {
         let s2_lat_lng = s2::latlng::LatLng::from_degrees(coord.y, coord.x);
         if !s2_lat_lng.is_valid() || mask.is_empty() {
@@ -36,6 +43,7 @@ impl Place {
             spider,
             mask,
             tags,
+            fetched,
         })
     }
 
@@ -45,6 +53,7 @@ impl Place {
             spider: self.spider.clone(),
             mask: self.mask,
             tags: self.tags.clone(),
+            fetched: self.fetched,
         }
     }
 
@@ -62,6 +71,10 @@ mod tests {
     use super::*;
     use geo::Coord;
 
+    fn test_timestamp() -> UtcTimestamp {
+        UtcTimestamp(time::UtcDateTime::from_unix_timestamp(1_770_000_000).unwrap())
+    }
+
     #[test]
     fn test_new() {
         let p = Coord {
@@ -73,10 +86,12 @@ mod tests {
             ("building".to_string(), "tower".to_string()),
             ("name:gsw".to_string(), "Zytglogge".to_string()),
         ];
-        let place = Place::new(&p, spider, MatchMask::SHOP, tags.clone()).unwrap();
+        let place =
+            Place::new(&p, spider, MatchMask::SHOP, tags.clone(), test_timestamp()).unwrap();
         assert_eq!(place.s2_cell_id, 5156122125915201443);
         assert_eq!(place.spider, "test/spider");
         assert_eq!(place.tags, tags);
+        assert_eq!(place.fetched, test_timestamp());
     }
 
     #[test]
@@ -89,6 +104,7 @@ mod tests {
             "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
+            test_timestamp(),
         )
         .unwrap();
         let b = Place::new(
@@ -99,6 +115,7 @@ mod tests {
             "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
+            test_timestamp(),
         )
         .unwrap();
         assert!(!a.eq(&b));
@@ -117,6 +134,7 @@ mod tests {
             "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
+            test_timestamp(),
         )
         .unwrap();
         let shape = place.shape();

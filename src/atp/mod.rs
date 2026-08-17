@@ -289,7 +289,7 @@ fn is_usable_for_osm(fc: &geojson::FeatureCollection) -> bool {
     }
 }
 
-fn make_place(geojson: &str, _timestamp: time::UtcDateTime) -> Option<Place> {
+fn make_place(geojson: &str, timestamp: time::UtcDateTime) -> Option<Place> {
     let parsed = geojson.parse::<GeoJson>().ok()?;
     let coord = find_point(&parsed)?.0;
     let GeoJson::Feature(feature) = parsed else {
@@ -337,7 +337,13 @@ fn make_place(geojson: &str, _timestamp: time::UtcDateTime) -> Option<Place> {
         mask.add_tag(&key, &value);
         tags.push((key, value));
     }
-    Place::new(&coord, spider?, mask, tags)
+    Place::new(
+        &coord,
+        spider?,
+        mask,
+        tags,
+        crate::utils::UtcTimestamp(timestamp),
+    )
 }
 
 /// Finds a representative point for a GeoJson feature.
@@ -467,6 +473,7 @@ mod tests {
             UtcDateTime::parse("2026-07-01T13:14:14Z", &Iso8601::PARSING).expect("timestamp");
         let place = super::make_place(PLAYGROUND, timestamp).expect("place");
         assert_eq!(place.spider, "winterthur_ch");
+        assert_eq!(place.fetched.0, timestamp);
         assert_eq!(
             tags(&place),
             [

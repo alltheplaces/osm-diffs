@@ -57,12 +57,18 @@ impl Matcher for PoiMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::UtcTimestamp;
     use std::sync::LazyLock;
+
+    fn test_timestamp() -> UtcTimestamp {
+        UtcTimestamp(time::UtcDateTime::from_unix_timestamp(1_770_000_000).unwrap())
+    }
 
     static CH_CLOTHES_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664633565895,
         spider: String::from("newyorker"),
         mask: MatchMask::SHOP,
+        fetched: test_timestamp(),
         tags: tags(&[
             ("addr:city", "Rapperswil"),
             ("addr:country", "CH"),
@@ -82,6 +88,7 @@ mod tests {
         s2_cell_id: 5159637664662121729,
         spider: String::from("osm"),
         mask: MatchMask(1),
+        fetched: test_timestamp(),
         tags: tags(&[
             ("branch", "Rapperswil Sonnenhof"),
             ("brand", "New Yorker"),
@@ -98,6 +105,7 @@ mod tests {
         s2_cell_id: 5159637400739491865,
         spider: String::from("valora"),
         mask: MatchMask::SHOP,
+        fetched: test_timestamp(),
         tags: tags(&[
             ("addr:city", "Rapperswil"),
             ("addr:country", "CH"),
@@ -116,6 +124,7 @@ mod tests {
         s2_cell_id: 5159637400743919515,
         spider: String::from("osm"),
         mask: MatchMask::SHOP,
+        fetched: test_timestamp(),
         tags: tags(&[
             ("brand", "k kiosk"),
             ("brand:wikidata", "Q60381703"),
