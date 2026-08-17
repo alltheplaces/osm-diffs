@@ -81,7 +81,7 @@ impl<'a> CoordTable<'a> {
         coords: impl Iterator<Item = (u64, Coord)>,
         workdir: &Path,
         out: &Path,
-        chunk_bytes: u64,
+        chunk_bytes: usize,
     ) -> Result<CoordTable<'a>> {
         let mut writer = Writer::create(out)?;
         let coords_count = AtomicU64::new(0);
@@ -89,7 +89,7 @@ impl<'a> CoordTable<'a> {
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    chunk_bytes as usize / size_of::<(u64, u64)>(),
+                    chunk_bytes / size_of::<(u64, u64)>(),
                     /* preallocate */ true,
                 ))
                 .build()?;
@@ -320,7 +320,7 @@ mod tests {
             coords.into_iter(),
             workdir.path(),
             file.path(),
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )?;
         assert_eq!(table.len(), 3);
         assert_eq!(table.get(0), None);

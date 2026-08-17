@@ -58,7 +58,7 @@ impl U64Set {
         elements: impl Iterator<Item = u64>,
         workdir: &Path,
         out: &Path,
-        chunk_bytes: u64,
+        chunk_bytes: usize,
     ) -> Result<U64Set> {
         _ = writer::create(elements, workdir, out, chunk_bytes)?;
         Self::open(out)
@@ -245,7 +245,7 @@ mod tests {
             [42, 7, 23, 7].into_iter(),
             workdir.path(),
             &out,
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )?;
         assert_eq!(set.len(), 3);
         assert!(set.contains(7));
@@ -273,7 +273,7 @@ mod writer {
         elements: impl Iterator<Item = u64>,
         workdir: &Path,
         out: &Path,
-        chunk_bytes: u64,
+        chunk_bytes: usize,
     ) -> Result<u64> {
         let mut tmp_out = PathBuf::from(out);
         tmp_out.add_extension("tmp");
@@ -281,7 +281,7 @@ mod writer {
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
                 .with_buffer(LimitedBufferBuilder::new(
-                    /* buffer_size */ chunk_bytes as usize / size_of::<u64>(),
+                    /* buffer_size */ chunk_bytes / size_of::<u64>(),
                     /* preallocate */ true,
                 ))
                 .build()?;
@@ -333,7 +333,7 @@ mod writer {
                 /* elements */ [42, 23, 23, 7777, 23].into_iter(),
                 /* workdir */ tmp.path(),
                 /* out */ &out,
-                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
             )?;
             assert_eq!(num_written, 3);
 
@@ -357,7 +357,7 @@ mod writer {
                 [9].into_iter(),
                 tmp.path(),
                 &out,
-                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
             )?;
             assert_eq!(num_written, 1);
 
@@ -380,7 +380,7 @@ mod writer {
                 [].into_iter(),
                 tmp.path(),
                 &out,
-                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+                crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
             )?;
             assert_eq!(num_written, 0);
 

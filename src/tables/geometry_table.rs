@@ -40,7 +40,7 @@ impl<'a> GeometryTable<'a> {
         geometries: impl Iterator<Item = (u64, Geometry)>,
         workdir: &Path,
         out: &Path,
-        chunk_bytes: u64,
+        chunk_bytes: usize,
     ) -> Result<GeometryTable<'a>> {
         let blobs = BlobTable::create(
             geometries.map(|(key, geometry)| (key, encode_wkb(&geometry))),
@@ -115,7 +115,7 @@ mod tests {
             geometries.into_iter(),
             workdir.path(),
             file.path(),
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )?;
         assert_eq!(table.len(), 3);
         assert_eq!(table.lookup(0), None);
@@ -152,7 +152,7 @@ mod tests {
             geometries.into_iter(),
             workdir.path(),
             file.path(),
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )?;
 
         let table = GeometryTable::open(file.path())?;
@@ -178,7 +178,7 @@ mod tests {
             geometries.into_iter(),
             workdir.path(),
             file.path(),
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )?;
 
         let table = GeometryTable::open(file.path())?;

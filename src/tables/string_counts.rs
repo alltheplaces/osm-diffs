@@ -94,14 +94,14 @@ impl<'a> StringCounts<'a> {
         counts: impl Iterator<Item = (String, u64)>,
         workdir: &Path,
         out: &Path,
-        chunk_bytes: u64,
+        chunk_bytes: usize,
     ) -> Result<StringCounts<'a>> {
         let mut writer = Writer::create(out)?;
         let entry_count = AtomicU64::new(0);
         let sorter: ExternalSorter<(String, u64), std::io::Error, MemoryLimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
-                .with_buffer(MemoryLimitedBufferBuilder::new(chunk_bytes))
+                .with_buffer(MemoryLimitedBufferBuilder::new(chunk_bytes as u64))
                 .build()?;
         let sorted = sorter.sort(counts.map(|entry| {
             entry_count.fetch_add(1, Ordering::SeqCst);
@@ -355,7 +355,7 @@ mod tests {
             entries.map(|(s, n)| (String::from(s), n)).into_iter(),
             workdir.path(),
             &path,
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )
         .expect("StringCounts::create() failed")
     });
@@ -382,7 +382,7 @@ mod tests {
             entries.map(|(s, n)| (String::from(s), n)).into_iter(),
             workdir.path(),
             &path,
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )?;
 
         let table = StringCounts::open(&path)?;

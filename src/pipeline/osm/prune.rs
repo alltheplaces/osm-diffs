@@ -274,7 +274,7 @@ fn prune_relations_pass_1<'a>(
                 keep_rx.into_iter(),
                 workdir,
                 &keep_relations_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )
         });
         let graph_writer = s.spawn(|| {
@@ -282,7 +282,7 @@ fn prune_relations_pass_1<'a>(
                 edge_rx.into_iter(),
                 workdir,
                 &relation_graph_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -359,7 +359,7 @@ fn prune_relations_pass_2<'a>(
                 keep_rx.into_iter(),
                 workdir,
                 &rel_members_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -369,7 +369,7 @@ fn prune_relations_pass_2<'a>(
                 strings_rx.into_iter(),
                 workdir,
                 &strings_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )
         });
 
@@ -475,7 +475,7 @@ fn prune_ways<'a>(
                 ways_rx.into_iter(),
                 workdir,
                 &keep_ways_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -484,7 +484,7 @@ fn prune_ways<'a>(
                 coords_rx.into_iter(),
                 workdir,
                 &keep_coords_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -502,7 +502,7 @@ fn prune_ways<'a>(
                 strings_rx.into_iter(),
                 workdir,
                 &strings_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )
         });
 
@@ -637,7 +637,7 @@ fn prune_nodes<'a>(
                 strings_rx.into_iter(),
                 workdir,
                 &strings_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )
         });
         let coords_writer = s.spawn(|| {
@@ -645,7 +645,7 @@ fn prune_nodes<'a>(
                 coords_rx.into_iter(),
                 workdir,
                 &coords_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )
         });
         let keep_nodes_writer = s.spawn(|| {
@@ -653,7 +653,7 @@ fn prune_nodes<'a>(
                 keep_rx.into_iter(),
                 workdir,
                 &keep_nodes_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });

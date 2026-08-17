@@ -66,7 +66,7 @@ pub fn collect_wikidata_ids(atp: &Path, workdir: &Path) -> Result<PathBuf> {
         ids.into_iter(),
         workdir,
         &out,
-        crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+        crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
     )?;
     log::info!(count = count; "collect_wikidata_ids: done");
     Ok(out)

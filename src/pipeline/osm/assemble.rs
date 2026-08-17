@@ -343,7 +343,7 @@ fn assemble_ways<'a>(
                 geometry_rx.into_iter(),
                 workdir,
                 &ways_in_relations_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64,
+                EXTERNAL_SORT_CHUNK_BYTES,
             )
         });
 
@@ -520,7 +520,7 @@ fn assemble_leaf_relations<'a>(
                 super_rel_rx.into_iter(),
                 workdir,
                 &super_relations_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });
@@ -530,7 +530,7 @@ fn assemble_leaf_relations<'a>(
                 geometry_rx.into_iter(),
                 workdir,
                 &leaf_relations_geometry_path,
-                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
+                EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS,
             )?);
             Ok(())
         });

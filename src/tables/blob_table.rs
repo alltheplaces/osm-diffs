@@ -48,13 +48,13 @@ impl<'a> BlobTable<'a> {
         blobs: impl Iterator<Item = (u64, Vec<u8>)>,
         workdir: &Path,
         out: &Path,
-        chunk_bytes: u64,
+        chunk_bytes: usize,
     ) -> Result<BlobTable<'a>> {
         let mut writer = Writer::create(out)?;
         let sorter: ExternalSorter<(u64, Vec<u8>), std::io::Error, MemoryLimitedBufferBuilder> =
             ExternalSorterBuilder::new()
                 .with_tmp_dir(workdir)
-                .with_buffer(MemoryLimitedBufferBuilder::new(chunk_bytes))
+                .with_buffer(MemoryLimitedBufferBuilder::new(chunk_bytes as u64))
                 .build()?;
         let sorted = sorter.sort(blobs.map(std::io::Result::Ok))?;
         for s in sorted {
@@ -289,7 +289,7 @@ mod tests {
             blobs.into_iter(),
             workdir.path(),
             file.path(),
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES as u64,
+            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
         )?;
         assert_eq!(table.len(), 4);
         assert_eq!(table.lookup(0), None);
