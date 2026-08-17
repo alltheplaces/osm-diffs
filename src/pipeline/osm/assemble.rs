@@ -514,13 +514,13 @@ fn assemble_leaf_relations<'a>(
         // is a plain RecordWriter, not a sort) -- split the chunk-size
         // budget between the two so their combined peak memory stays
         // within one EXTERNAL_SORT_CHUNK_BYTES, not double it.
-        const CONCURRENT_SORTS: u64 = 2;
+        const CONCURRENT_SORTS: usize = 2;
         let super_rel_writer = s.spawn(|| {
             super_relations = Some(BlobTable::create(
                 super_rel_rx.into_iter(),
                 workdir,
                 &super_relations_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )?);
             Ok(())
         });
@@ -530,7 +530,7 @@ fn assemble_leaf_relations<'a>(
                 geometry_rx.into_iter(),
                 workdir,
                 &leaf_relations_geometry_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )?);
             Ok(())
         });

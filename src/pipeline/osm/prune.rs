@@ -268,13 +268,13 @@ fn prune_relations_pass_1<'a>(
         // concurrently in this scope -- split the chunk-size budget
         // between the two so their combined peak memory stays within one
         // EXTERNAL_SORT_CHUNK_BYTES, not double it.
-        const CONCURRENT_SORTS: u64 = 2;
+        const CONCURRENT_SORTS: usize = 2;
         let keep_writer = s.spawn(|| {
             U64Set::create(
                 keep_rx.into_iter(),
                 workdir,
                 &keep_relations_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )
         });
         let graph_writer = s.spawn(|| {
@@ -282,7 +282,7 @@ fn prune_relations_pass_1<'a>(
                 edge_rx.into_iter(),
                 workdir,
                 &relation_graph_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )?);
             Ok(())
         });
@@ -353,13 +353,13 @@ fn prune_relations_pass_2<'a>(
         // concurrently in this scope -- split the chunk-size budget
         // between the two so their combined peak memory stays within one
         // EXTERNAL_SORT_CHUNK_BYTES, not double it.
-        const CONCURRENT_SORTS: u64 = 2;
+        const CONCURRENT_SORTS: usize = 2;
         let keep_writer = s.spawn(|| {
             rel_members = Some(U64Set::create(
                 keep_rx.into_iter(),
                 workdir,
                 &rel_members_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )?);
             Ok(())
         });
@@ -369,7 +369,7 @@ fn prune_relations_pass_2<'a>(
                 strings_rx.into_iter(),
                 workdir,
                 &strings_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )
         });
 
@@ -469,13 +469,13 @@ fn prune_ways<'a>(
         // each run their own external sort concurrently in this scope --
         // split the chunk-size budget three ways so their combined peak
         // memory stays within one EXTERNAL_SORT_CHUNK_BYTES, not triple it.
-        const CONCURRENT_SORTS: u64 = 3;
+        const CONCURRENT_SORTS: usize = 3;
         let keep_ways_writer = s.spawn(|| {
             keep_ways = Some(U64Set::create(
                 ways_rx.into_iter(),
                 workdir,
                 &keep_ways_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )?);
             Ok(())
         });
@@ -484,7 +484,7 @@ fn prune_ways<'a>(
                 coords_rx.into_iter(),
                 workdir,
                 &keep_coords_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )?);
             Ok(())
         });
@@ -502,7 +502,7 @@ fn prune_ways<'a>(
                 strings_rx.into_iter(),
                 workdir,
                 &strings_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )
         });
 
@@ -631,13 +631,13 @@ fn prune_nodes<'a>(
         // their own external sort concurrently in this scope -- split the
         // chunk-size budget three ways so their combined peak memory
         // stays within one EXTERNAL_SORT_CHUNK_BYTES, not triple it.
-        const CONCURRENT_SORTS: u64 = 3;
+        const CONCURRENT_SORTS: usize = 3;
         let strings_writer = s.spawn(|| {
             StringCounts::create(
                 strings_rx.into_iter(),
                 workdir,
                 &strings_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )
         });
         let coords_writer = s.spawn(|| {
@@ -645,7 +645,7 @@ fn prune_nodes<'a>(
                 coords_rx.into_iter(),
                 workdir,
                 &coords_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )
         });
         let keep_nodes_writer = s.spawn(|| {
@@ -653,7 +653,7 @@ fn prune_nodes<'a>(
                 keep_rx.into_iter(),
                 workdir,
                 &keep_nodes_path,
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             )?);
             Ok(())
         });

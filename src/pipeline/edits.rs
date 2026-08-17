@@ -373,7 +373,7 @@ fn get_tags(s: &StructArray, name: &str, row: usize) -> Result<Vec<(String, Stri
 /// trees) -- so each gets a third of the chunk-size budget, keeping
 /// their combined peak memory within one EXTERNAL_SORT_CHUNK_BYTES
 /// rather than tripling it.
-const CONCURRENT_SORTS: u64 = 3;
+const CONCURRENT_SORTS: usize = 3;
 
 fn write_edits(edits: Receiver<SuggestedEdit>, path: &Path, workdir: &Path) -> Result<u64> {
     let mut tmp_path = PathBuf::from(&path);
@@ -384,7 +384,7 @@ fn write_edits(edits: Receiver<SuggestedEdit>, path: &Path, workdir: &Path) -> R
         ExternalSorterBuilder::new()
             .with_tmp_dir(workdir)
             .with_buffer(MemoryLimitedBufferBuilder::new(
-                EXTERNAL_SORT_CHUNK_BYTES as u64 / CONCURRENT_SORTS,
+                (EXTERNAL_SORT_CHUNK_BYTES / CONCURRENT_SORTS) as u64,
             ))
             .build()?;
 
