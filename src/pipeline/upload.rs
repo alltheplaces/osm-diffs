@@ -77,15 +77,15 @@ impl<'a> Upload<'a> {
     }
 
     /// Complete the multi-part upload. Returns the etag of the created file.
-    fn finish(&mut self) -> Result<()> {
-        let _result = self
+    fn finish(&mut self) -> Result<Option<String>> {
+        let result = self
             .client
             .objects()
             .complete_multipart_upload(self.bucket, self.destination, &self.upload_id)
             .parts(self.parts.clone())?
             .send()?;
         self.parts.clear();
-        Ok(())
+        Ok(result.etag)
     }
 }
 
@@ -218,11 +218,11 @@ fn upload_file_with_config(
     let num_bytes = file.metadata()?.len();
     let progress_bar = make_download_bar(progress, progress_label, Some(num_bytes));
 
-    if num_bytes < MULTIPART_THRESHOLD {
+    let etag = if num_bytes < MULTIPART_THRESHOLD {
         let mut body = Vec::with_capacity(num_bytes as usize);
         file.read_to_end(&mut body)
             .with_context(|| format!("cannot read {path:?}"))?;
-        client
+        let result = client
             .objects()
             .put(&config.bucket, destination)
             .content_type(content_type)?
@@ -230,6 +230,7 @@ fn upload_file_with_config(
             .send()
             .with_context(|| format!("put_object {destination} failed"))?;
         progress_bar.inc(num_bytes);
+        result.etag
     } else {
         let mut upload = Upload::create(&client, &config.bucket, destination, content_type)?;
         let mut buf = vec![0u8; PART_SIZE];
@@ -254,10 +255,26 @@ fn upload_file_with_config(
             upload.upload_part(chunk)?;
             progress_bar.inc(bytes_read as u64);
         }
-        upload.finish()?;
-    }
+        upload.finish()?
+    };
 
     progress_bar.finish();
+    // `s3://bucket/key` isn't an IANA/IETF-registered URI scheme -- there
+    // isn't one for S3-compatible object storage -- but it's the de
+    // facto convention across the ecosystem (AWS CLI, boto3, Terraform,
+    // Hadoop's S3A, ...), and endpoint-agnostic besides (unlike an
+    // https:// URL, which would depend on how a given S3-compatible
+    // provider maps buckets to hostnames/paths, if it exposes public
+    // HTTPS access at all). One log line rather than separate
+    // endpoint/bucket/destination fields, since this one value already
+    // says everything a reader needs to find the object.
+    log::info!(
+        s3_url = format!("s3://{}/{}", config.bucket, destination),
+        content_type = content_type,
+        bytes = num_bytes,
+        etag = etag;
+        "upload_file: done"
+    );
     Ok(())
 }
 
@@ -295,6 +312,11 @@ pub fn upload_logs(
 ) -> Result<()> {
     let log_path = workdir.join("pipeline.log");
     let destination = format!("logs/{}.log", run_id(pipeline_start_time)?);
+    // TODO: We should use an official, IANA-assigned content type for
+    // JSON Lines here, but as of August 2026, no consensus has yet been
+    // reached on what string to use, so the registration appears to be
+    // stalled -- see https://github.com/wardi/jsonlines/issues/19.
+    // Tracked in alltheplaces/osm-diffs#684 to check back in August 2027.
     upload_file(
         &log_path,
         &destination,
