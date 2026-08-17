@@ -178,8 +178,6 @@ fn output_component(run_timestamp: &str) -> Value {
         "licenses": license("ODbL-1.0", ODBL_URL),
         "copyright": OSM_COPYRIGHT,
         "externalReferences": [
-            // TODO(#645): docs/CONFLATED_OUTPUT.md doesn't exist yet --
-            // this link is intentionally broken until it's written.
             {"type": "documentation", "url": format!("{REPO_URL}/blob/main/docs/CONFLATED_OUTPUT.md")},
             license_external_reference(ODBL_URL),
         ],
