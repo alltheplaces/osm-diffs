@@ -40,7 +40,7 @@ successful one’s.
 Beyond debugging a single run, having every week’s log archived means
 you can compare stats *across* runs over time — memory/disk usage as
 the planet grows, how a code change shifted step timings, that kind of
-thing. Two real examples of what this data enables, both written by
+thing. Two concrete examples of what this data enables, both written by
 [Claude Code](https://claude.com/claude-code) straight from a run’s
 logs, with no other tooling built for the purpose:
 
@@ -50,10 +50,9 @@ logs, with no other tooling built for the purpose:
   `OsmFeatureIndex` (relying on the OS page cache instead of an
   explicit decode cache).
 - [alltheplaces/osm-diffs#636](https://github.com/alltheplaces/osm-diffs/issues/636) —
-  a survey of real OpenStreetMap data-quality issues, found entirely
-  by combing through `pipeline.log`’s `could not build geometry`
-  warnings and cross-referencing the flagged features against the
-  live OSM API.
+  a survey of OpenStreetMap data-quality issues, found by combing
+  through `pipeline.log`’s `could not build geometry` warnings and
+  cross-referencing the flagged features against the live OSM API.
 
 Neither of those needed bespoke analysis code — just the JSON logs
 already described above, and enough of them archived to look back at.
