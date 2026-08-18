@@ -3,12 +3,9 @@ use std::path::PathBuf;
 
 mod edit_suggesters;
 mod geometry;
-mod logging;
 mod matchers;
-mod memstats;
 mod pipeline;
 mod places;
-mod s2_util;
 mod tables;
 mod utils;
 

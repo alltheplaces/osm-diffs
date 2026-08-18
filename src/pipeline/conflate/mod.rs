@@ -4,7 +4,6 @@ use crate::{
     matchers::{OsmCandidate, create_matcher, match_distance},
     pipeline::EXTERNAL_SORT_CHUNK_BYTES,
     places::{Place, PlaceReader},
-    s2_util::MergedCellRanges,
     tables::{Feature, OsmFeatures},
 };
 use anyhow::{Context, Ok, Result};
@@ -29,7 +28,9 @@ use time::UtcDateTime;
 /// tables, not RSS at a fixed fraction of progress.
 const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
+mod s2_util;
 mod writer;
+use s2_util::MergedCellRanges;
 use writer::{ParquetRow, ParquetWriter};
 
 pub fn conflate(
@@ -169,7 +170,7 @@ fn produce_rows(
 }
 
 /// Logs a `conflate.match: progress` snapshot (elapsed time, the two
-/// counts from `counts`, and a `crate::memstats` snapshot -- `rss_bytes`/
+/// counts from `counts`, and a `pipeline::memstats` snapshot -- `rss_bytes`/
 /// `rss_file_bytes` in particular, since that's where resident pages of
 /// `OsmFeatureIndex`'s mmap'd tables are expected to show up) at most
 /// once per [PROGRESS_LOG_INTERVAL], across however many parallel
@@ -195,7 +196,7 @@ fn maybe_log_progress(
     }
 
     let (atp_features_processed, osm_candidates_decoded) = counts();
-    let stats = crate::memstats::snapshot();
+    let stats = crate::pipeline::memstats::snapshot();
     log::info!(
         elapsed_seconds = start.elapsed().as_secs_f64(),
         atp_features_processed = atp_features_processed,

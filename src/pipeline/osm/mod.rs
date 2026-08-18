@@ -205,7 +205,7 @@ pub(crate) fn compute_and_persist_metadata(
 /// here is the OSM planet dump, tens of GB, and mmap'ing something that
 /// large risks inflating RSS/page-cache accounting in ways that could
 /// trip this pipeline's own cgroup memory-limit warnings (see
-/// `crate::memstats`) for no benefit -- a small fixed buffer keeps
+/// `pipeline::memstats`) for no benefit -- a small fixed buffer keeps
 /// memory flat regardless of file size.
 fn hash_file(path: &Path, progress: &MultiProgress) -> Result<String> {
     let mut file = File::open(path).with_context(|| format!("could not open file `{:?}`", path))?;
