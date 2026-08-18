@@ -66,8 +66,10 @@ impl ParquetWriter {
 
     pub fn close(mut self) -> Result<()> {
         self.flush()?;
-        self.geometry_tally
-            .log("import_atp: alltheplaces.parquet geometry types");
+        self.geometry_tally.log(
+            module_path!(),
+            "import_atp: alltheplaces.parquet geometry types",
+        );
         self.writer.close()?;
         Ok(())
     }
