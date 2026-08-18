@@ -161,7 +161,7 @@ detail.
 ```mermaid
 graph TD
     ATP_SRC[AllThePlaces weekly dump]
-    OSM_SRC[OpenStreetMap planet + BitTorrent]
+    OSM_SRC[OpenStreetMap planet]
 
     ATP_SRC -->|import_atp| ATP_PARQUET[alltheplaces.parquet]
     ATP_PARQUET -->|collect_wikidata_ids| WIKIDATA[alltheplaces.wikidata-ids]
