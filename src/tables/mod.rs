@@ -5,7 +5,7 @@
 //! physical RAM installed on the machine. This makes it possible to
 //! process the entire OpenStreetMap planet on cheap worker machine.
 //!
-//! `crate::places` plays the same role for AllThePlaces data -- durable,
+//! `crate::places` plays the same role for AllThePlaces data --
 //! cross-pipeline-stage storage for one side of conflation -- but isn't
 //! one of these tables: ATP's data volume doesn't need the mmap +
 //! page-cache design this module is built around, so it's plain
