@@ -39,8 +39,8 @@ POIs, even though those still make up most of what it processes
 today.
 
 This project doesn’t apply bulk edits to OpenStreetMap, and has no
-plans to: AllThePlaces’ scraped data isn’t reliable enough to trust
-unreviewed, and even if it were, bulk edits don’t fit how the OSM
+plans to: scraped data isn’t reliable enough to trust unreviewed, and
+even if it were, bulk edits don’t fit how the OSM
 community works — edits get proposed and reviewed by humans, not
 pushed automatically by a script. What this project can do instead is
 find the delta between the two datasets systematically, for the whole
