@@ -42,6 +42,7 @@ use geo::{
 
 mod geometry_builder;
 mod geometry_tally;
+mod geostats;
 #[cfg(test)]
 mod grid_tests;
 mod line_stitcher;
@@ -52,6 +53,7 @@ mod wkb_writer;
 
 pub use geometry_builder::{GeometryBuilder, PolygonFill};
 pub use geometry_tally::GeometryTally;
+pub use geostats::init as init_geospatial_stats;
 pub use line_stitcher::LineStitcher;
 pub use polygon_assembler::PolygonAssembler;
 pub use polygon_union::PolygonUnion;

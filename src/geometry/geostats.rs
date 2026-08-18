@@ -42,6 +42,12 @@ impl GeoStatsAccumulatorFactory for CustomGeoStatsAccumulatorFactory {
     }
 }
 
+/// Installs [`CustomGeoStatsAccumulatorFactory`] as the process-wide
+/// `GeoStatsAccumulatorFactory` (see the module doc comment above for
+/// why this is needed at all). Global, `parquet`-crate-enforced state --
+/// must run once, before any Parquet file with a `GEOMETRY`/`GEOGRAPHY`
+/// column is written, which in practice means once at pipeline startup
+/// (see `pipeline::run_pipeline_steps`).
 pub fn init() -> Result<()> {
     let factory = Arc::new(CustomGeoStatsAccumulatorFactory {});
     init_geo_stats_accumulator_factory(factory)?;
