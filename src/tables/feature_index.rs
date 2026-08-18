@@ -1,13 +1,12 @@
 //! Spatial index over OSM [Feature] protos, keyed by S2 cell coverage.
 //!
-//! Unlike [crate::places::PlaceIndex] (which indexes single-point `Place`
-//! values backed by Parquet), `OsmFeatureIndex` indexes real OSM
-//! geometry -- points, lines, and polygons alike -- so a single feature
-//! can cover more than one S2 cell. That means the field used to sort
-//! features physically on disk (`centroid_s2_cell_id`, for locality only)
-//! is *not* a valid query key: a query has to test a feature's full
-//! `coverage_s2_cell_id` list, not just its centroid. So this index is
-//! really two on-disk structures:
+//! `OsmFeatureIndex` indexes real OSM geometry -- points, lines, and
+//! polygons alike -- so a single feature can cover more than one S2
+//! cell. That means the field used to sort features physically on disk
+//! (`centroid_s2_cell_id`, for locality only) is *not* a valid query
+//! key: a query has to test a feature's full `coverage_s2_cell_id`
+//! list, not just its centroid. So this index is really two on-disk
+//! structures:
 //!
 //! 1. **Feature storage**: features laid out in `centroid_s2_cell_id`
 //!    order (for locality -- never queried directly), each addressable by
@@ -23,6 +22,9 @@
 //! [OsmFeatureIndex::create]. A query only ever binary-searches and reads
 //! numeric arrays -- no protobuf decode happens until [OsmFeatureIndex::get_feature]
 //! is called for a specific candidate.
+//!
+//! `Place` (see `crate::places::Place::s2_cell_id`'s doc comment) has no
+//! equivalent multi-cell coverage of its own.
 //!
 //! # File format
 //!
