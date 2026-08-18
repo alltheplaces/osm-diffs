@@ -37,6 +37,20 @@ pub use writer::ParquetWriter;
 /// An AllThePlaces feature.
 #[derive(Debug, DeepSizeOf, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Place {
+    /// A single S2 cell, derived from one representative point --
+    /// `pipeline::atp::find_point`'s reduction of this feature's actual
+    /// geometry (see `shape_wkb` below), regardless of whether that
+    /// geometry is itself a point. Unlike `tables::OsmFeatureIndex`
+    /// (which indexes real OSM geometry by its full multi-cell
+    /// `coverage_s2_cell_id`), `Place` has no equivalent multi-cell
+    /// coverage of its own -- not because it's assumed to be small
+    /// enough to ignore, but because the `s2` crate this pipeline uses
+    /// doesn't yet support computing S2 coverage for lines/polygons,
+    /// only points. `pipeline::conflate` works around that by searching
+    /// a radius around this cell instead of querying by actual coverage
+    /// -- see
+    /// [alltheplaces/osm-diffs#700](https://github.com/alltheplaces/osm-diffs/issues/700)
+    /// for the plan to fix this once the library gains that support.
     pub s2_cell_id: u64,
     pub spider: String,
     pub mask: MatchMask,
@@ -48,10 +62,9 @@ pub struct Place {
     /// `geo::Geometry`, so `Place` can keep deriving `Eq`/`Ord` (needed
     /// for the external sort in `pipeline::atp::process_places`) --
     /// `f64` coordinates don't implement those. Distinct from
-    /// `s2_cell_id`, which is always derived from a single representative
-    /// point regardless of this field's actual geometry type -- that's a
-    /// spatial-index sort/query key, not the feature's real shape. Use
-    /// `shape()` for the decoded `geo::Geometry`.
+    /// `s2_cell_id` (see above), which is always a single cell derived
+    /// from one representative point regardless of this field's actual
+    /// geometry type. Use `shape()` for the decoded `geo::Geometry`.
     pub shape_wkb: Vec<u8>,
 
     /// When AllThePlaces fetched this feature from its upstream source
