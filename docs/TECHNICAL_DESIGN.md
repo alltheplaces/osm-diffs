@@ -44,7 +44,8 @@ else.
 
 ### What conflation is
 
-“Conflation” is the general GIS term for combining two independently
+“Conflation” is the general [GIS](https://en.wikipedia.org/wiki/Geographic_information_system)
+term for combining two independently
 produced geospatial datasets that describe overlapping real-world
 features, so as to reconcile them into one better (or at least
 cross-checked) result. It’s an old problem in GIS, going back to
