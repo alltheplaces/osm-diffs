@@ -200,9 +200,13 @@ full-planet run on production-representative hardware — a
 deliberately memory-constrained Hetzner cpx22 (2 vCPU / 4 GB RAM), not
 a dev machine; see
 [#665](https://github.com/alltheplaces/osm-diffs/issues/665) for the
-full writeup. They’re not tracked anywhere on an ongoing basis, so
-treat them as one data point rather than a guarantee — worth
-refreshing occasionally as the planet grows and the code changes.
+full writeup. Nothing aggregates or dashboards these on an ongoing
+basis, but every run's `pipeline.log` — with per-step timings for
+that specific run — is uploaded to S3 alongside its output (see
+`upload_logs` above), so up-to-date numbers are always one log fetch
+away. Treat the ones below as one data point rather than a guarantee
+— worth refreshing occasionally as the planet grows and the code
+changes.
 
 - **`import_atp`** ([`src/pipeline/atp/`](../src/pipeline/atp/)) —
   downloads AllThePlaces’ latest published run (`fetch.rs`) and parses
