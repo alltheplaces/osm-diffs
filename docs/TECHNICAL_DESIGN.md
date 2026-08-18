@@ -27,10 +27,13 @@ hospitality chains already publish exactly this information
 themselves, as store locators and branch listings, because they want
 customers to find them.
 
-AllThePlaces exists to scrape that already-public data at scale.
-Increasingly, it also ingests Open Government Data published under
-clear open licenses — municipal infrastructure, public datasets, and
-more — so its scope reaches beyond retail POIs, even though those
+AllThePlaces exists to scrape that already-public data at scale, and
+the OpenStreetMap Licensing Working Group has [confirmed first-party
+websites as an acceptable data source for
+OSM](https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources).
+Increasingly, AllThePlaces also ingests Open Government Data published
+under clear open licenses — municipal infrastructure, public datasets,
+and more — so its scope reaches beyond retail POIs, even though those
 still make up most of what it processes today.
 
 This project compares that combined data against what’s already in
