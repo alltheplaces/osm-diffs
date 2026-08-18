@@ -6,6 +6,8 @@
   lands.
 - [`LOGGING.md`](LOGGING.md) — the JSON log format `osm-diffs run`
   writes, and where weekly-run logs end up archived in S3.
+- [`outputs/`](outputs/) — the pipeline's output files: what's in
+  them, and how to read them.
 - [`RELEASING.md`](RELEASING.md) — how to cut a release of `osm-diffs`.
 - [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md) — the concepts
   behind our release process: containers, multi-architecture images,

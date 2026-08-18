@@ -19,4 +19,5 @@ OpenStreetMap.
 
 New here? See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) to get
 started, and [`docs/`](docs/) generally for testing, cutting a
-release, and our security practices.
+release, and our security practices. Looking for what the pipeline
+actually produces instead? See [`docs/outputs/`](docs/outputs/).

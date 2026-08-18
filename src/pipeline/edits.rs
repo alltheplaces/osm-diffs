@@ -280,14 +280,15 @@ fn extract_conflated_row(batch: &RecordBatch, row: usize) -> Result<Option<Confl
     if osm.is_null(row) {
         return Ok(None);
     }
+    let modified = get_child_struct(osm, "modified")?;
 
     Ok(Some(ConflatedRow {
         atp_tags: get_tags(atp, "tags", row)?,
         osm_type: get_string(osm, "type", row)?,
         osm_id: get_u64(osm, "id", row)?,
         osm_tags: get_tags(osm, "tags", row)?,
-        osm_changeset: get_u64(osm, "changeset", row)?,
-        osm_version: get_u32(osm, "version", row)?,
+        osm_changeset: get_u64(modified, "changeset", row)?,
+        osm_version: get_u32(modified, "version", row)?,
         osm_geometry_wkb: get_binary(osm, "geometry", row)?,
     }))
 }
@@ -299,6 +300,14 @@ fn get_struct<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StructArray>
         .as_any()
         .downcast_ref::<StructArray>()
         .with_context(|| format!("column '{name}' is not a struct"))
+}
+
+fn get_child_struct<'a>(s: &'a StructArray, name: &str) -> Result<&'a StructArray> {
+    s.column_by_name(name)
+        .with_context(|| format!("missing field '{name}'"))?
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .with_context(|| format!("field '{name}' is not a struct"))
 }
 
 fn get_string(s: &StructArray, name: &str, row: usize) -> Result<String> {

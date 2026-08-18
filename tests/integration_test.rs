@@ -59,13 +59,20 @@ struct ConflatedOsmSide {
     r#type: String,
     shop: Option<String>,
     is_polygon: bool,
+    changeset: u64,
+    version: u32,
+    modified_timestamp_millis: i64,
+    way_members_count: usize,
+    atp_spider: String,
+    atp_fetched_millis: i64,
 }
 
 /// Checks `conflate()`'s output against the fixture data's known shops
 /// (see `tests/test_data/zugerland.osm.pbf` / `alltheplaces.zip`).
 fn assert_conflated_parquet(path: &Path) -> Result<()> {
     use arrow::array::{
-        Array, BinaryArray, MapArray, RecordBatch, StringArray, StructArray, UInt64Array,
+        Array, BinaryArray, ListArray, MapArray, RecordBatch, StringArray, StructArray,
+        TimestampMillisecondArray, UInt32Array, UInt64Array,
     };
     use geo_traits::to_geo::ToGeoGeometry;
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -73,12 +80,27 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
     let file = std::fs::File::open(path).with_context(|| format!("could not open {path:?}"))?;
     let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
 
+    let get_child_struct = |s: &StructArray, name: &str| -> Result<StructArray> {
+        Ok(s.column_by_name(name)
+            .with_context(|| format!("missing field '{name}'"))?
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .with_context(|| format!("field '{name}' is not a struct"))?
+            .clone())
+    };
+
     let mut total_rows = 0;
     let mut matched = Vec::new();
     for batch in reader {
         let batch: RecordBatch = batch?;
         total_rows += batch.num_rows();
 
+        let atp = batch
+            .column_by_name("atp")
+            .context("missing 'atp' column")?
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .context("'atp' is not a struct")?;
         let osm = batch
             .column_by_name("osm")
             .context("missing 'osm' column")?
@@ -131,11 +153,66 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
                 .find(|&i| keys.value(i) == "shop")
                 .map(|i| values.value(i).to_string());
 
+            let modified = get_child_struct(osm, "modified")?;
+            let changeset = modified
+                .column_by_name("changeset")
+                .context("modified has no 'changeset' field")?
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .context("'changeset' is not UInt64")?
+                .value(row);
+            let version = modified
+                .column_by_name("version")
+                .context("modified has no 'version' field")?
+                .as_any()
+                .downcast_ref::<UInt32Array>()
+                .context("'version' is not UInt32")?
+                .value(row);
+            let modified_timestamp_millis = modified
+                .column_by_name("timestamp")
+                .context("modified has no 'timestamp' field")?
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .context("'timestamp' is not a millisecond timestamp")?
+                .value(row);
+
+            let way_members_count = osm
+                .column_by_name("way_members")
+                .context("missing 'way_members' field")?
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .context("'way_members' is not a list")?
+                .value(row)
+                .len();
+
+            let fetched = get_child_struct(atp, "fetched")?;
+            let atp_spider = fetched
+                .column_by_name("spider")
+                .context("fetched has no 'spider' field")?
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .context("'spider' is not a string")?
+                .value(row)
+                .to_string();
+            let atp_fetched_millis = fetched
+                .column_by_name("timestamp")
+                .context("fetched has no 'timestamp' field")?
+                .as_any()
+                .downcast_ref::<TimestampMillisecondArray>()
+                .context("'timestamp' is not a millisecond timestamp")?
+                .value(row);
+
             matched.push(ConflatedOsmSide {
                 id,
                 r#type,
                 shop,
                 is_polygon,
+                changeset,
+                version,
+                modified_timestamp_millis,
+                way_members_count,
+                atp_spider,
+                atp_fetched_millis,
             });
         }
     }
@@ -150,10 +227,47 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
         "expected 3 ATP features matched to an OSM feature"
     );
 
-    for (osm_id, expected_shop) in [
-        (608979139, "coffee"),      // Tchibo
-        (737021556, "electronics"), // MediaMarkt
-        (737021557, "supermarket"), // Denner
+    // (osm_id, shop, changeset, version, modified timestamp (Unix
+    // seconds -- OSM's own edit timestamps never carry sub-second
+    // precision), way_members count, atp spider, atp fetched (Unix
+    // *milliseconds* -- unlike modified, AllThePlaces' own
+    // spider:collection_time does carry sub-second precision, e.g.
+    // Denner's below is really ...952.804399 in the source GeoJSON, so
+    // this pins genuine sub-second digits, not just a round number))
+    // -- pinned via a real run's output, cross-checked with DuckDB
+    // against the fixture data directly, not just re-derived from this
+    // same code.
+    for (osm_id, expected_shop, changeset, version, ts_secs, way_members, spider, fetched_millis) in [
+        (
+            608979139,
+            "coffee",
+            131777778,
+            3,
+            1674832913,
+            5,
+            "tchibo",
+            1780317635860,
+        ), // Tchibo
+        (
+            737021556,
+            "electronics",
+            163100695,
+            10,
+            1740858960,
+            7,
+            "mediamarkt",
+            1779653420273,
+        ), // MediaMarkt
+        (
+            737021557,
+            "supermarket",
+            163100695,
+            5,
+            1740858960,
+            5,
+            "denner_ch",
+            1780209952804,
+        ), // Denner
     ] {
         let row = matched
             .iter()
@@ -164,6 +278,25 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
         assert!(
             row.is_polygon,
             "expected way/{osm_id} to carry real polygon geometry, not a synthetic point"
+        );
+        assert_eq!(
+            row.changeset, changeset,
+            "way/{osm_id} osm.modified.changeset"
+        );
+        assert_eq!(row.version, version, "way/{osm_id} osm.modified.version");
+        assert_eq!(
+            row.modified_timestamp_millis,
+            ts_secs * 1000,
+            "way/{osm_id} osm.modified.timestamp"
+        );
+        assert_eq!(
+            row.way_members_count, way_members,
+            "way/{osm_id} osm.way_members length"
+        );
+        assert_eq!(row.atp_spider, spider, "way/{osm_id} atp.fetched.spider");
+        assert_eq!(
+            row.atp_fetched_millis, fetched_millis,
+            "way/{osm_id} atp.fetched.timestamp"
         );
     }
 
