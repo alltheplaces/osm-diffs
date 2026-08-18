@@ -302,3 +302,8 @@ until the full pipeline was proven out:
   conflating municipal tree datasets against OSM by spatial distance
   and species looks particularly tractable). See
   [#708](https://github.com/alltheplaces/osm-diffs/issues/708).
+- `conflated.parquet` itself — every ATP feature, matched or not, not
+  just what `suggest_edits` decided to propose — has no visualization
+  of its own yet, which makes the matching step harder to review in
+  isolation. See
+  [#709](https://github.com/alltheplaces/osm-diffs/issues/709).
