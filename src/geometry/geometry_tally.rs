@@ -2,9 +2,7 @@
 //! how many of each [`WkbGeometryType`] ended up in it, and the single
 //! largest geometry seen, by byte size.
 //!
-//! WKB is [Well-Known Binary](https://libgeos.org/specifications/wkb/),
-//! a standard binary encoding for geometries (points, lines, polygons,
-//! ...) used throughout this crate and the wider GIS world.
+//! See `wkb_writer`'s module comment for what WKB is.
 
 use super::{WkbGeometryType, wkb_geometry_type};
 

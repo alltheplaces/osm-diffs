@@ -1,7 +1,11 @@
 use super::Place;
+use crate::geometry::GeometryTally;
 use anyhow::{Ok, Result};
 use arrow::{
-    array::{ArrayRef, Int64Array, MapArray, StringArray, StructArray, UInt16Array, UInt64Array},
+    array::{
+        ArrayRef, BinaryArray, Int64Array, MapArray, StringArray, StructArray, UInt16Array,
+        UInt64Array,
+    },
     buffer::OffsetBuffer,
     datatypes::{DataType, Field, Schema},
     record_batch::RecordBatch,
@@ -20,6 +24,7 @@ pub struct ParquetWriter {
     writer: ArrowWriter<File>,
     places: Vec<Place>,
     num_tags: usize,
+    geometry_tally: GeometryTally,
 }
 
 impl ParquetWriter {
@@ -41,6 +46,7 @@ impl ParquetWriter {
             writer,
             places: Vec::with_capacity(batch_size),
             num_tags: 0,
+            geometry_tally: GeometryTally::default(),
         })
     }
 
@@ -49,12 +55,19 @@ impl ParquetWriter {
             self.flush()?;
         }
         self.num_tags += place.tags.len();
+        // ATP doesn't have stable per-feature IDs, unlike OSM -- the
+        // spider is the best clue to log if this turns out to be the
+        // largest geometry written.
+        self.geometry_tally
+            .record(&place.shape_wkb, || place.spider.clone());
         self.places.push(place);
         Ok(())
     }
 
     pub fn close(mut self) -> Result<()> {
         self.flush()?;
+        self.geometry_tally
+            .log("import_atp: alltheplaces.parquet geometry types");
         self.writer.close()?;
         Ok(())
     }
@@ -72,6 +85,9 @@ impl ParquetWriter {
                 self.places
                     .iter()
                     .map(|p| p.fetched.unix_timestamp_millis()),
+            )),
+            Arc::new(BinaryArray::from_iter_values(
+                self.places.iter().map(|p| p.shape_wkb.as_slice()),
             )),
             make_tags(&self.places, self.num_tags),
         ];
@@ -146,6 +162,11 @@ fn make_schema() -> Schema {
         // `spider:collection_time` actually carries -- see
         // `crate::utils::UtcTimestamp::unix_timestamp_millis`.
         Field::new("fetched", DataType::Int64, /* nullable */ false),
+        // Same internal/ephemeral reasoning as `fetched` above: plain
+        // WKB bytes, not a GeoParquet-style GEOGRAPHY logical type --
+        // conflated.parquet's public `atp_geometry` column is what gets
+        // that treatment (see `pipeline::conflate::writer::new_geo_field`).
+        Field::new("shape", DataType::Binary, /* nullable */ false),
     ];
     fields.push(Field::new(
         "tags",

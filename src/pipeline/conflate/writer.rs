@@ -636,7 +636,7 @@ impl ParquetRow {
         let atp_shape_wkb;
         let atp_tags;
         if let Some(atp) = atp {
-            atp_shape_wkb = wkb(&atp.shape());
+            atp_shape_wkb = crate::geometry::encode_wkb(&atp.shape());
             atp_spider = Some(atp.spider);
             atp_fetched = Some(atp.fetched);
             atp_tags = atp.tags;
@@ -748,16 +748,6 @@ impl PartialEq for ParquetRow {
 }
 
 impl Eq for ParquetRow {}
-
-fn wkb(shape: &geo::Geometry<f64>) -> Vec<u8> {
-    // Most of our features have point geometry, which uses 21 bytes in WKB encoding.
-    let mut buf = Vec::<u8>::with_capacity(21);
-    let opts = wkb::writer::WriteOptions {
-        endianness: wkb::Endianness::LittleEndian,
-    };
-    wkb::writer::write_geometry(&mut buf, shape, &opts).expect("wkb encoding failed");
-    buf
-}
 
 mod schema {
     use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};

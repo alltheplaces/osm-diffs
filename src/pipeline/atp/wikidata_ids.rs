@@ -107,13 +107,18 @@ mod tests {
         let out = collect_wikidata_ids(&linked_atp, workdir.path())?;
         let set = U64Set::open(&out)?;
         // Verified against the fixture directly (via DuckDB) rather than
-        // assumed: of the 7 places in this file, 3 carry
-        // brand:wikidata=Q116151325 (Misenso) and 4 carry
-        // operator:wikidata=Q56825906 (Stadtgrün Winterthur) -- 2 unique
-        // IDs once deduplicated.
-        assert_eq!(set.len(), 2);
+        // assumed: of the 10 places in this file, 3 carry
+        // brand:wikidata=Q116151325 (Misenso), 4 carry
+        // operator:wikidata=Q56825906 (Stadtgrün Winterthur), and one
+        // each carry brand:wikidata=Q379911 (Denner), Q2381223
+        // (MediaMarkt), Q564213 (Tchibo) -- 5 unique IDs once
+        // deduplicated.
+        assert_eq!(set.len(), 5);
         assert!(set.contains(116151325));
         assert!(set.contains(56825906));
+        assert!(set.contains(379911));
+        assert!(set.contains(2381223));
+        assert!(set.contains(564213));
 
         // Calling again should hit the "already exists" memoization
         // path, not fail or recompute.

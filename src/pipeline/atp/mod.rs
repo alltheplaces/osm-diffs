@@ -291,7 +291,10 @@ fn is_usable_for_osm(fc: &geojson::FeatureCollection) -> bool {
 
 fn make_place(geojson: &str, timestamp: time::UtcDateTime) -> Option<Place> {
     let parsed = geojson.parse::<GeoJson>().ok()?;
-    let coord = find_point(&parsed)?.0;
+    // Borrows `parsed`, so it's still available for the by-value
+    // destructure below.
+    let shape = parse_geometry(&parsed)?;
+    let coord = find_point(&shape)?.0;
     let GeoJson::Feature(feature) = parsed else {
         return None;
     };
@@ -342,22 +345,33 @@ fn make_place(geojson: &str, timestamp: time::UtcDateTime) -> Option<Place> {
         spider?,
         mask,
         tags,
+        &shape,
         crate::utils::UtcTimestamp(timestamp),
     )
 }
 
-/// Finds a representative point for a GeoJson feature.
-fn find_point(geojson: &GeoJson) -> Option<Point> {
+/// Parses a GeoJSON Feature's geometry, as given -- `None` if `geojson`
+/// isn't a Feature, has no geometry, or has a geometry type `geo`
+/// doesn't understand. This is `Place`'s actual shape (see
+/// `Place::shape_wkb`'s doc comment) -- unlike `find_point` below, this
+/// does not reduce a line/polygon down to a single point.
+fn parse_geometry(geojson: &GeoJson) -> Option<geo::Geometry<f64>> {
     let GeoJson::Feature(f) = geojson else {
         return None;
     };
-    let Some(geometry) = &f.geometry else {
-        return None;
-    };
-    let geom = TryInto::<geo::Geometry<f64>>::try_into(geometry).ok()?;
+    let geometry = f.geometry.as_ref()?;
+    TryInto::<geo::Geometry<f64>>::try_into(geometry).ok()
+}
+
+/// Finds a representative point for a geometry -- used only to compute
+/// `Place::s2_cell_id`, the spatial-index sort/query key. Not the same
+/// as `Place`'s actual stored shape (see `parse_geometry` above): a
+/// line/polygon's real shape is preserved as-is, this is just where its
+/// single point goes for spatial indexing purposes.
+fn find_point(geom: &geo::Geometry<f64>) -> Option<Point> {
     match geom {
         geo::Geometry::LineString(line_string) => {
-            Haversine.point_at_ratio_from_start(&line_string, 0.5)
+            Haversine.point_at_ratio_from_start(line_string, 0.5)
         }
         geo::Geometry::MultiLineString(mls) => {
             if !mls.0.is_empty() {
@@ -417,7 +431,9 @@ mod tests {
     }"#;
 
     fn find_point(geojson: &str) -> Option<Point> {
-        super::find_point(&geojson.parse::<GeoJson>().unwrap())
+        let parsed = geojson.parse::<GeoJson>().unwrap();
+        let shape = super::parse_geometry(&parsed)?;
+        super::find_point(&shape)
     }
 
     #[test]
@@ -484,11 +500,47 @@ mod tests {
                 ("operator:wikidata", "Q56825906"),
             ]
         );
+        assert_eq!(place.shape(), point_shape(8.7339982, 47.5039168));
     }
 
     #[test]
     fn test_make_place_for_road() {
         assert!(super::make_place(BICYCLE_ROAD, UtcDateTime::now()).is_none());
+    }
+
+    fn point_shape(x: f64, y: f64) -> geo::Geometry<f64> {
+        geo::Geometry::from(Point::new(x, y))
+    }
+
+    /// Regression test for alltheplaces/osm-diffs#690: `find_point`
+    /// reduces a line/polygon down to a single point for
+    /// `Place::s2_cell_id`, but `Place::shape()` must return the
+    /// feature's real (non-point) geometry, not that reduced point.
+    #[test]
+    fn test_make_place_preserves_non_point_geometry() {
+        const SHOP_LINESTRING: &str = r#"{
+           "type": "Feature",
+           "properties": {
+               "shop": "bakery",
+               "@spider": "test_spider"
+           },
+           "geometry": {
+               "type": "LineString",
+               "coordinates": [
+                   [7.458535, 46.940702],
+                   [7.460838, 46.943692]
+               ]
+           }
+        }"#;
+        let place =
+            super::make_place(SHOP_LINESTRING, UtcDateTime::now()).expect("place with shop tag");
+        let geo::Geometry::LineString(line_string) = place.shape() else {
+            panic!("expected a LineString shape, got {:?}", place.shape());
+        };
+        assert_eq!(
+            line_string,
+            geo::LineString::from(vec![(7.458535, 46.940702), (7.460838, 46.943692)])
+        );
     }
 
     #[test]

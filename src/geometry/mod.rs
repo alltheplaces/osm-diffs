@@ -48,6 +48,7 @@ mod line_stitcher;
 mod polygon_assembler;
 mod polygon_union;
 mod wkb_type;
+mod wkb_writer;
 
 pub use geometry_builder::{GeometryBuilder, PolygonFill};
 pub use geometry_tally::GeometryTally;
@@ -55,6 +56,7 @@ pub use line_stitcher::LineStitcher;
 pub use polygon_assembler::PolygonAssembler;
 pub use polygon_union::PolygonUnion;
 pub use wkb_type::{WkbGeometryType, wkb_geometry_type};
+pub use wkb_writer::encode_wkb;
 
 // =======================================================================
 // build_points
