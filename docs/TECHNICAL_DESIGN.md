@@ -195,6 +195,15 @@ never lost.
 
 ### Pipeline steps
 
+Timings below (where known) are wall-clock numbers from one real
+full-planet run on production-representative hardware — a
+deliberately memory-constrained Hetzner cpx22 (2 vCPU / 4 GB RAM), not
+a dev machine; see
+[#665](https://github.com/alltheplaces/osm-diffs/issues/665) for the
+full writeup. They’re not tracked anywhere on an ongoing basis, so
+treat them as one data point rather than a guarantee — worth
+refreshing occasionally as the planet grows and the code changes.
+
 - **`import_atp`** ([`src/pipeline/atp/`](../src/pipeline/atp/)) —
   downloads AllThePlaces’ latest published run (`fetch.rs`) and parses
   every spider’s GeoJSON output out of the zip, in parallel, filtering
@@ -202,13 +211,13 @@ never lost.
   explicit `use:openstreetmap` marker (`is_usable_for_osm()` in
   [`src/pipeline/atp/mod.rs`](../src/pipeline/atp/mod.rs)), and writing
   the rest out as `alltheplaces.parquet`, sorted for spatial locality
-  (see [`src/places/`](../src/places/)).
+  (see [`src/places/`](../src/places/)). **~3 minutes.**
 - **`collect_wikidata_ids`**
   ([`src/pipeline/atp/wikidata_ids.rs`](../src/pipeline/atp/wikidata_ids.rs)) — extracts
   every `wikidata`/`brand:wikidata`/… tag value ATP carries, for a
   planned future feature (flagging OSM-only features whose brand ATP
   tracks elsewhere, [#682](https://github.com/alltheplaces/osm-diffs/issues/682));
-  not consumed by anything yet.
+  not consumed by anything yet. Not separately timed.
 - **`import_osm`** ([`src/pipeline/osm/`](../src/pipeline/osm/)) —
   downloads the OpenStreetMap planet dump via BitTorrent (`fetch.rs`);
   does a first pass over it that decides, by tag, which nodes/ways/
@@ -221,6 +230,10 @@ never lost.
   spatial index (`OsmFeatureIndex`), queryable by S2 cell range
   without decoding every candidate (`index.rs`,
   [`src/tables/feature_index.rs`](../src/tables/feature_index.rs)).
+  **~4h48m** for the whole step (dominated by the BitTorrent download,
+  which varies with swarm health well beyond this project’s control;
+  `OsmFeatureIndex::create` itself, the compute-heavy part, is only
+  ~26 minutes of that).
 - **`conflate`**
   ([`src/pipeline/conflate/mod.rs`](../src/pipeline/conflate/mod.rs))
   — a single scan over AllThePlaces (the smaller of the two datasets),
@@ -230,19 +243,21 @@ never lost.
   the best. Writes one row per ATP feature — matched or not — to
   `conflated.parquet`. See
   [`docs/outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)
-  for that file’s schema.
+  for that file’s schema. **~8 minutes** (~5 min matching, ~3 min
+  writing) for 3.8M ATP features against the full planet.
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
   — scans `conflated.parquet` for matched rows and asks an
   [`edit_suggesters`](../src/edit_suggesters/) implementation what
   should change, split into GeoJSON Lines layers by category (shops,
-  infrastructure, trees).
+  infrastructure, trees). Not yet measured at full-planet scale.
 - **`render_tiles`** ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs))
   — runs [tippecanoe](https://github.com/felt/tippecanoe) over those
-  layers to build one PMTiles archive for visual review.
+  layers to build one PMTiles archive for visual review. Not yet
+  measured at full-planet scale.
 - **`upload_conflated` / `upload_tiles` / `upload_logs`**
   ([`src/pipeline/upload.rs`](../src/pipeline/upload.rs)) — push the
   data output, the tiles, and the run’s own log to S3-compatible
-  storage.
+  storage. Not yet measured at full-planet scale.
 
 ### Why `conflate` doesn’t need its own cache
 
