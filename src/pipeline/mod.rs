@@ -41,8 +41,13 @@ mod osm;
 // rest of atp's/osm's API (import_atp, BlobReader, Node/Way/Relation,
 // import_osm, ...). atp's own `read_cached_metadata` is re-exported
 // under a different name here since osm already has one of its own.
+// decode_feature_id/osm_type_str are for pipeline::conflate::writer,
+// which decodes the same `Feature.id` encoding osm::assemble/prune
+// produce -- see decode_feature_id's own doc comment.
 pub(crate) use atp::{AtpMetadata, read_cached_metadata as read_cached_atp_metadata};
-pub(crate) use osm::{OsmMetadata, PLANET_PBF_FILENAME, read_cached_metadata};
+pub(crate) use osm::{
+    OsmMetadata, PLANET_PBF_FILENAME, decode_feature_id, osm_type_str, read_cached_metadata,
+};
 mod tiles;
 mod upload;
 

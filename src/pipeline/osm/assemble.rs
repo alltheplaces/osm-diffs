@@ -1,4 +1,4 @@
-use super::{BlobReader, Prunings};
+use super::{BlobReader, Prunings, decode_feature_id, encode_feature_id, osm_type_str};
 use crate::{
     geometry::{GeometryBuilder, PolygonFill, build_line, build_ring},
     make_progress_bar,
@@ -177,7 +177,7 @@ fn assemble_nodes(
                     if let Primitive::Node(node) = primitive
                         && keep_nodes.contains(node.id)
                     {
-                        let feature_id = make_feature_id(RelationMemberType::Node, node.id);
+                        let feature_id = encode_feature_id(RelationMemberType::Node, node.id);
                         let mut fti = assemble_feature(feature_id, &node.info);
                         let point = geo::Point::new(node.lon, node.lat); // x = longitude, y = latitude
                         if let Some(feature) = &mut fti.feature {
@@ -254,7 +254,7 @@ fn assemble_ways<'a>(
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Way(way) = primitive {
-                        let feature_id = make_feature_id(RelationMemberType::Way, way.id);
+                        let feature_id = encode_feature_id(RelationMemberType::Way, way.id);
                         let is_interesting = prunings.keep_ways.contains(way.id);
                         let is_relation_member = prunings.relation_members.contains(feature_id);
                         if !is_interesting && !is_relation_member {
@@ -444,7 +444,8 @@ fn assemble_leaf_relations<'a>(
                 let block = PrimitiveBlock::parse(&data);
                 for primitive in block.primitives() {
                     if let Primitive::Relation(relation) = primitive {
-                        let feature_id = make_feature_id(RelationMemberType::Relation, relation.id);
+                        let feature_id =
+                            encode_feature_id(RelationMemberType::Relation, relation.id);
                         let is_interesting = prunings.keep_relations.contains(relation.id);
                         let is_relation_member = prunings.relation_members.contains(feature_id);
                         if !is_interesting && !is_relation_member {
@@ -618,10 +619,11 @@ fn assemble_super_relations(
                 let rel_geometry = {
                     let feature = fti.feature.as_ref().expect("feature");
                     let relation_type = relation_type_from_feature_tags(&feature.tags, strings);
-                    let rel_members = feature
-                        .relation_members
-                        .iter()
-                        .map(|m| feature_to_osm_id(m.id));
+                    let rel_members = feature.relation_members.iter().map(|m| {
+                        decode_feature_id(m.id).unwrap_or_else(|| {
+                            panic!("unexpected osm_type for feature_id={}", m.id)
+                        })
+                    });
                     assemble_relation_geometry(
                         relation_type,
                         rel_members,
@@ -771,13 +773,14 @@ fn s2_cell_id_for_point(p: &geo::Point) -> CellID {
     s2::cellid::CellID::from(s2_lat_lng)
 }
 
-/// Helper for [assemble_tags].
+/// Helper for [assemble_tags]. Doesn't panic on a malformed `id` (unlike
+/// [`decode_feature_id`]) -- this exists specifically to build a
+/// message for a *different* panic, so it must never itself panic and
+/// obscure that original message.
 fn debug_id_str(id: u64) -> String {
-    match id % 10 {
-        1 => format!("node/{}", id / 10),
-        2 => format!("way/{}", id / 10),
-        3 => format!("relation/{}", id / 10),
-        _ => format!("unknown-feature-type/{}", id),
+    match decode_feature_id(id) {
+        Some((member_type, osm_id)) => format!("{}/{}", osm_type_str(member_type), osm_id),
+        None => format!("unknown-feature-type/{id}"),
     }
 }
 
@@ -826,27 +829,6 @@ fn is_super_relation(rel: &osm_pbf_iter::Relation<'_>) -> bool {
     false
 }
 
-/// Encodes an OpenStreetMap object's `(member_type, id)` as a `Feature.id`
-/// — `id * 10 + 1` for nodes, `+ 2` for ways, `+ 3` for relations. Inverse
-/// of [`feature_to_osm_id`]. See `Feature.id` in `feature.proto`.
-fn make_feature_id(member_type: RelationMemberType, id: u64) -> u64 {
-    match member_type {
-        RelationMemberType::Node => id * 10 + 1,
-        RelationMemberType::Way => id * 10 + 2,
-        RelationMemberType::Relation => id * 10 + 3,
-    }
-}
-
-fn feature_to_osm_id(fid: u64) -> (RelationMemberType, u64) {
-    let osm_id = fid / 10;
-    match fid % 10 {
-        1 => (RelationMemberType::Node, osm_id),
-        2 => (RelationMemberType::Way, osm_id),
-        3 => (RelationMemberType::Relation, osm_id),
-        _ => panic!("unexpected osm_type for feature_id={}", fid),
-    }
-}
-
 fn assemble_relation_members(
     rel: &osm_pbf_iter::Relation<'_>,
     strings: &StringPool,
@@ -866,7 +848,7 @@ fn assemble_relation_members(
         });
         let member = RelationMember {
             role: role_id as u32,
-            id: make_feature_id(member_type, id),
+            id: encode_feature_id(member_type, id),
         };
         feature.relation_members.push(member);
     }

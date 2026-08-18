@@ -1,4 +1,4 @@
-use super::BlobReader;
+use super::{BlobReader, decode_feature_id, encode_feature_id};
 use crate::{
     make_progress_bar,
     matchers::MatchMask,
@@ -170,12 +170,18 @@ impl<'a> Prunings<'a> {
 
     #[allow(unused)]
     pub fn keep_way(&self, id: u64) -> bool {
-        self.keep_ways.contains(id) || self.relation_members.contains(id * 10 + 2)
+        self.keep_ways.contains(id)
+            || self
+                .relation_members
+                .contains(encode_feature_id(RelationMemberType::Way, id))
     }
 
     #[allow(unused)]
     pub fn keep_relation(&self, id: u64) -> bool {
-        self.keep_relations.contains(id) || self.relation_members.contains(id * 10 + 3)
+        self.keep_relations.contains(id)
+            || self
+                .relation_members
+                .contains(encode_feature_id(RelationMemberType::Relation, id))
     }
 }
 
@@ -329,14 +335,10 @@ fn prune_relations_pass_2<'a>(
                     if let Primitive::Relation(rel) = primitive
                         && graph.ancestors(rel.id).any(|id| keep_1.contains(id))
                     {
-                        keep_tx.send(rel.id * 10 + 3)?;
+                        keep_tx.send(encode_feature_id(RelationMemberType::Relation, rel.id))?;
                         for (role_name, member_id, member_type) in rel.members() {
                             strings_tx.send((String::from(role_name), 1))?;
-                            match member_type {
-                                RelationMemberType::Node => keep_tx.send(member_id * 10 + 1)?,
-                                RelationMemberType::Way => keep_tx.send(member_id * 10 + 2)?,
-                                RelationMemberType::Relation => keep_tx.send(member_id * 10 + 3)?,
-                            }
+                            keep_tx.send(encode_feature_id(member_type, member_id))?;
                         }
                         for (tag_key, tag_value) in rel.tags() {
                             strings_tx.send((String::from(tag_key), 1))?;
@@ -435,7 +437,7 @@ fn prune_ways<'a>(
                             mask.add_tag(key, value);
                         }
 
-                        let way_feature_id = way.id * 10 + 2;
+                        let way_feature_id = encode_feature_id(RelationMemberType::Way, way.id);
                         if !mask.is_empty() || relation_members.contains(way_feature_id) {
                             ways_tx.send(way.id)?;
                             for node_id in way.refs() {
@@ -458,8 +460,7 @@ fn prune_ways<'a>(
         // We need the coordinates of all nodes that participate in any relation.
         let rel_member_collector = s.spawn(move || {
             for member_id in rels_output.relation_members.iter() {
-                if member_id % 10 == 1 {
-                    let node_id = member_id / 10;
+                if let Some((RelationMemberType::Node, node_id)) = decode_feature_id(member_id) {
                     coords_tx.send(node_id)?;
                 }
             }
