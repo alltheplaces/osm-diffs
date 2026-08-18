@@ -30,8 +30,8 @@ customers to find them.
 AllThePlaces exists to scrape that already-public data at scale, and
 the OSM Foundation’s [Licensing Working
 Group](https://osmfoundation.org/wiki/Licensing_Working_Group) has
-[confirmed first-party websites as an acceptable data source for
-OSM](https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources).
+[confirmed](https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources)
+first-party websites as an acceptable data source for OSM.
 In addition, AllThePlaces ingests various datasets, published under
 clearly declared open-data licenses — municipal infrastructure,
 government records, and more — so its scope reaches beyond retail
