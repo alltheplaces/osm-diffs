@@ -190,9 +190,6 @@ for that walkthrough, which is what `verify-release.sh` automates.
   dependencies
   ([#555](https://github.com/alltheplaces/osm-diffs/issues/555)), moving
   `cargo-cyclonedx` off Alpine’s edge repo once it’s available in stable
-  ([#556](https://github.com/alltheplaces/osm-diffs/issues/556)),
-  embedding the release version into the pipeline’s actual output data,
-  not just its logs
-  ([#588](https://github.com/alltheplaces/osm-diffs/issues/588)), and
+  ([#556](https://github.com/alltheplaces/osm-diffs/issues/556)), and
   watching for an emerging standard on index-level SBOMs for multi-arch
   images ([#589](https://github.com/alltheplaces/osm-diffs/issues/589)).
