@@ -91,7 +91,6 @@ use std::{
 pub struct StringPool<'a> {
     file: File,
     _mmap: Mmap,
-    len: usize,
     buckets: &'a [u32],
     hash_index: &'a [u32],
     hash_values: &'a [u16],
@@ -147,8 +146,6 @@ impl<'a> StringPool<'a> {
             let ptr = mmap.as_ptr() as *const u64;
             std::slice::from_raw_parts(ptr, HEADER_SIZE / size_of::<u64>())
         };
-        let len = usize::try_from(header[1])?;
-
         let buckets = {
             let offset = usize::try_from(header[2])?;
             let size = usize::try_from(header[3])?;
@@ -258,7 +255,6 @@ impl<'a> StringPool<'a> {
         Ok(StringPool {
             file,
             _mmap: mmap,
-            len,
             buckets,
             hash_index,
             hash_values,
@@ -270,19 +266,13 @@ impl<'a> StringPool<'a> {
     /// Returns the string that was written at index `idx` in
     /// [StringPool::create], in `O(1)`.
     ///
-    /// Panics if `idx >= self.len()`.
-    #[allow(unused)]
+    /// Panics if `idx` is out of range, i.e. no string was written at
+    /// that index in `create()`.
     pub fn get(&self, idx: usize) -> &'a str {
         let start = u64::from_le(self.starts[idx]) as usize;
         let end = u64::from_le(self.starts[idx + 1]) as usize;
         // SAFETY: Writer API only takes Rust strings, which are valid UTF-8.
         unsafe { str::from_utf8_unchecked(&self.chars[start..end]) }
-    }
-
-    /// Returns the number of entries in the table.
-    #[allow(unused)]
-    pub fn len(&self) -> usize {
-        self.len
     }
 
     /// Returns the modification time of the backing file.
@@ -297,7 +287,6 @@ impl<'a> StringPool<'a> {
     /// format" section above, rather than scanning every entry, so this
     /// is close to `O(1)` rather than `O(n)`. If `key` was written more
     /// than once, the smallest matching index is returned.
-    #[allow(unused)]
     pub fn lookup(&self, key: &str) -> Option<usize> {
         let hash_value: u32 = Self::hash(key);
         let bucket = (hash_value >> 16) as usize;
@@ -706,11 +695,6 @@ mod tests {
     }
 
     #[test]
-    fn test_len() {
-        assert_eq!(TEST_POOL.len(), 4);
-    }
-
-    #[test]
     fn test_lookup() {
         assert_eq!(TEST_POOL.lookup(""), None);
         assert_eq!(TEST_POOL.lookup("not in table"), None);
@@ -734,7 +718,6 @@ mod tests {
     #[test]
     fn test_empty_pool() {
         let pool = make_pool(&[]);
-        assert_eq!(pool.len(), 0);
         assert_eq!(pool.lookup(""), None);
         assert_eq!(pool.lookup("anything"), None);
     }
@@ -754,7 +737,6 @@ mod tests {
     #[test]
     fn test_duplicate_strings_lookup_returns_smallest_index() {
         let pool = make_pool(&["a", "b", "a", "c", "a", "b"]);
-        assert_eq!(pool.len(), 6);
         assert_eq!(pool.lookup("a"), Some(0));
         assert_eq!(pool.lookup("b"), Some(1));
         assert_eq!(pool.lookup("c"), Some(3));
@@ -782,7 +764,6 @@ mod tests {
         // which the small TEST_POOL above (4 entries) almost never hits.
         let entries: Vec<String> = (0..5000).map(|i| format!("string-{i}")).collect();
         let pool = make_pool(&entries.iter().map(String::as_str).collect::<Vec<_>>());
-        assert_eq!(pool.len(), 5000);
         for (i, s) in entries.iter().enumerate() {
             assert_eq!(pool.get(i), s.as_str());
             assert_eq!(pool.lookup(s), Some(i));

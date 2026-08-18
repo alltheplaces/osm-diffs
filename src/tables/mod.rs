@@ -12,15 +12,12 @@
 //! Arrow/Parquet instead (compressed, opened and decoded batch by
 //! batch, not mapped into memory).
 
-#[allow(unused)]
 mod blob_table;
 mod coord_table;
 mod feature_index;
-#[allow(unused)]
 mod geometry_store;
 mod geometry_table;
 mod graph;
-#[allow(unused)]
 mod records;
 mod sorted_u64_index;
 mod string_counts;
@@ -31,18 +28,15 @@ mod features {
     include!(concat!(env!("OUT_DIR"), "/tables.features.rs"));
 }
 
-#[allow(unused)]
 pub use blob_table::BlobTable;
 pub use coord_table::CoordTable;
 #[allow(unused)]
 pub use feature_index::LocalFeatureRef;
 pub use feature_index::{OsmFeatureIndex, OsmFeatures};
 pub use features::{Feature, FeatureToIndex, RelationMember};
-#[allow(unused)]
 pub use geometry_store::GeometryStore;
 pub use geometry_table::GeometryTable;
 pub use graph::{Edge, GraphTable};
-#[allow(unused)]
 pub use records::{RecordReader, RecordWriter};
 pub use string_counts::StringCounts;
 pub use string_pool::StringPool;

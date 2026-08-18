@@ -67,11 +67,6 @@ impl RecordReader {
         self.count as usize
     }
 
-    /// Whether this spool file has no records.
-    pub fn is_empty(&self) -> bool {
-        self.count == 0
-    }
-
     /// Iterate over the records in this spool file.
     pub fn iter(&self) -> Result<impl Iterator<Item = Result<Vec<u8>>>> {
         let mut file = File::open(&self.path)
@@ -249,7 +244,6 @@ mod tests {
 
         let spool = RecordReader::open(path)?;
         assert_eq!(spool.len(), 2);
-        assert!(!spool.is_empty());
 
         let records: Result<Vec<Vec<u8>>> = spool.iter()?.collect();
         let records = records?;
@@ -271,7 +265,6 @@ mod tests {
 
         let spool = RecordReader::open(path)?;
         assert_eq!(spool.len(), 0);
-        assert!(spool.is_empty());
         assert_eq!(spool.iter()?.count(), 0);
 
         Ok(())
