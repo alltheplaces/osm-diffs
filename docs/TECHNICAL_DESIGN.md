@@ -38,11 +38,15 @@ government records, and more — so its scope reaches beyond retail
 POIs, even though those still make up most of what it processes
 today.
 
-This project compares that combined data against what’s already in
-OpenStreetMap and surfaces the difference, so volunteers can spend
-their time more meaningfully. They review and confirm candidate edits
-instead of manually re-discovering places that were already public
-knowledge somewhere else.
+This project doesn’t solve that scarcity of volunteer attention —
+matching AllThePlaces against OpenStreetMap doesn’t create more hours
+in anyone’s day, and a volunteer still has to review and confirm each
+candidate edit by hand. What it changes is what gets *noticed* in the
+first place: instead of a gap or a stale entry surfacing only if
+someone happens to stumble on it, this project compares the two
+datasets systematically, for the whole planet, within a week —
+turning “maybe someone notices eventually” into a standing, repeatable
+check.
 
 ### What conflation is
 
