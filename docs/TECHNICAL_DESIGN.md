@@ -142,9 +142,17 @@ interchangeable — way of taking in machine-generated proposals:
   desk), which matters when deciding what kind of edit is worth
   proposing through which channel.
 
-None of this is wired up yet (see “Status”): today’s output is a
-[PMTiles](https://docs.protomaps.com/pmtiles/) archive for visual
-review, not a submission to any of the above.
+None of this is wired up yet (see “Status”): today’s outputs are
+`conflated.parquet` (the raw match/no-match result; see
+[`docs/outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md))
+and a [PMTiles](https://docs.protomaps.com/pmtiles/) archive for
+visual review — not a submission to any of the above. Publishing
+`conflated.parquet` itself is deliberate, not just a stopgap: how to
+best turn a match into a human-reviewable edit proposal is still an
+open question worth experimenting with, so the raw conflation result
+is a public output in its own right — an intermediate milestone
+toward this project’s actual goal, not just an internal implementation
+detail.
 
 ## Technical design
 
