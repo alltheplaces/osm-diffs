@@ -301,7 +301,7 @@ pub fn upload_conflated(conflated: &Path, progress: &MultiProgress) -> Result<()
 /// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log`, where
 /// `<run-id>` is `pipeline_start_time` -- the same timestamp already
 /// embedded into `conflated.parquet`'s provenance BOM as
-/// `formulation[].workflows[].timeStart` (see `crate::provenance`), so
+/// `formulation[].workflows[].timeStart` (see `pipeline::provenance`), so
 /// a given run's log and its data output can always be tied back
 /// together. See [docs/LOGGING.md](../../../docs/LOGGING.md) for the
 /// user-facing explanation of this layout.

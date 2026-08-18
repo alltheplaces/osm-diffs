@@ -237,7 +237,7 @@ fn write_conflated(
         std::io::Result::Ok(row)
     }))?;
     progress.set_length(row_count.load(Ordering::SeqCst));
-    let provenance_bom = crate::provenance::build_bom_for_conflated_parquet(
+    let provenance_bom = crate::pipeline::provenance::build_bom_for_conflated_parquet(
         workdir,
         pipeline_run_id,
         pipeline_start_time,
