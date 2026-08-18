@@ -2,11 +2,7 @@
 //! part of the crate -- e.g. `UtcTimestamp` below is used by both
 //! `places::Place::fetched` and `pipeline::conflate::writer`. A natural
 //! home for other such helpers as they accumulate, as long as they're
-//! genuinely small and genuinely cross-cutting: `pipeline::memstats`/
-//! `pipeline::logging` looked like candidates once, but turned out to
-//! be substantial, self-contained subsystems used only from within
-//! `pipeline` -- pipeline-internal details, not general-purpose
-//! helpers, so they live there instead.
+//! genuinely small and genuinely cross-cutting.
 
 /// Renders `bytes` as a lowercase hex string, e.g. for a digest.
 pub(crate) fn to_hex(bytes: &[u8]) -> String {
