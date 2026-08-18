@@ -1,9 +1,21 @@
-//! Encodes a `geo::Geometry` as WKB (Well-Known Binary -- see
-//! `geometry_tally`'s module comment).
+//! Encodes a `geo::Geometry` as WKB.
+//!
+//! WKB is [Well-Known Binary](https://libgeos.org/specifications/wkb/),
+//! a standard binary encoding for geometries (points, lines, polygons,
+//! ...) used throughout this crate and the wider GIS world.
 
 use geo::Geometry;
 
 /// Encodes `shape` as little-endian WKB.
+///
+/// A thin wrapper around the `wkb` crate's own writer, not a direct
+/// call to it: most of what we encode is a point (21 bytes), so this
+/// pre-sizes the output buffer for that up front, saving a reallocation
+/// in the common case; and since we only ever write our own data (never
+/// re-encoding something read as big-endian), fixing the byte order
+/// here once means call sites don't each have to repeat
+/// `wkb::writer::WriteOptions { endianness: ... }` -- a simpler API,
+/// and one less thing that could end up inconsistent between call sites.
 pub fn write_wkb(shape: &Geometry<f64>) -> Vec<u8> {
     // Most of our features have point geometry, which uses 21 bytes in WKB encoding.
     let mut buf = Vec::<u8>::with_capacity(21);

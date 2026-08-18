@@ -167,12 +167,7 @@ mod tests {
     /// `import_atp` pipeline stage against `tests/test_data/
     /// alltheplaces.zip` (see `tests/integration_test.rs`'s own use of
     /// that same zip), not hand-crafted; this only needs the total count
-    /// and that every place decodes cleanly. (A previous version of this
-    /// fixture had drifted out of sync with the zip -- 7 places,
-    /// `"atp/"`-prefixed spider names, one uniform `fetched` timestamp
-    /// -- unnoticed for a while because these tests only check loose
-    /// invariants, not exact values; regenerating it for #690's new
-    /// `shape` column also fixed that staleness.)
+    /// and that every place decodes cleanly.
     fn test_file() -> PathBuf {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("tests/test_data/alltheplaces.parquet");
