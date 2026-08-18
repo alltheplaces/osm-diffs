@@ -247,15 +247,15 @@ never lost.
 ### Why `conflate` doesn’t need its own cache
 
 `OsmFeatureIndex` is memory-mapped rather than backed by an explicit
-decode cache. The bet: since `conflate` visits ATP in spatial order,
-the OSM candidates it looks up tend to cluster the same way, so the
-OS/CPU page cache keeps the relevant part of a planet-scale index
+decode cache. The reasoning: since `conflate` visits ATP in spatial
+order, the OSM candidates it looks up tend to cluster the same way, so
+the OS/CPU page cache keeps the relevant part of a planet-scale index
 resident on its own, without this project having to build and tune a
-cache of its own. That’s a hardware-dependent assumption, not a given
-— it was validated by actually running the pipeline on production
-hardware, not just a development machine, since page-cache behavior
-under real memory pressure and container limits doesn’t reliably
-transfer from a laptop.
+cache of its own. That depends on how the hardware actually behaves,
+so it wasn’t taken on faith — it was verified by running the pipeline
+on production hardware, not just a development machine, since
+page-cache behavior under real memory pressure and container limits
+doesn’t reliably transfer from a laptop.
 
 ### Code structure
 
