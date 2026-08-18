@@ -171,8 +171,8 @@ graph TD
     ATP_PARQUET --> CONFLATE
     OSM_INDEX -->|conflate| CONFLATE[conflated.parquet]
     CONFLATE -->|upload_conflated| S3A[(S3)]
-    CONFLATE -->|suggest_edits| LAYERS[shops / infrastructure / trees .jsonl]
-    LAYERS -->|render_tiles| PMTILES[diffed-places.pmtiles]
+    CONFLATE -->|suggest_edits| LAYERS["*.jsonl (for visualization)"]
+    LAYERS -->|render_tiles/tippecanoe| PMTILES[diffed-places.pmtiles]
     PMTILES -->|upload_tiles| S3B[(S3)]
 ```
 
