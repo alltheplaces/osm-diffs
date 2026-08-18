@@ -75,14 +75,14 @@ A few things worth calling out that aren’t obvious from the above:
 `atp_geometry`/`osm_geometry` are standard [OGC Simple
 Features](https://postgis.net/workshops/postgis-intro/geometries.html)
 geometries — the same model QGIS, PostGIS, and most other GIS tools
-already use. Both columns use [OGC:CRS84](https://en.wikipedia.org/wiki/World_Geodetic_System)
+already use. `atp_geometry` is whatever AllThePlaces’ own scrape
+provides for that feature — nearly always a point, though a handful of
+sources provide lines or polygons instead. `osm_geometry` is the
+matched OpenStreetMap feature’s shape: a polygon for an area, a line
+for a way that isn’t an area, a point for a node. Both columns use
+[OGC:CRS84](https://en.wikipedia.org/wiki/World_Geodetic_System)
 (WGS84 longitude/latitude, the same coordinates GPS uses) — GeoParquet’s
-default CRS, so it isn’t spelled out explicitly in the file. `atp_geometry`
-is whatever AllThePlaces’ own scrape provides for that feature — nearly
-always a point, though a handful of sources provide lines or polygons
-instead. `osm_geometry` is the matched OpenStreetMap feature’s shape: a
-polygon for an area, a line for a way that isn’t an area, a point for a
-node.
+default CRS, so it isn’t spelled out explicitly in the file.
 
 `osm_geometry` isn’t always byte-for-byte what’s in OpenStreetMap,
 though: we automatically repair certain geometry errors (like
