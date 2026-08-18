@@ -51,8 +51,18 @@ impl GeometryTally {
     /// INFO, as one structured record. `log::info!`'s field list has to
     /// be literal field names, so the indices below are hardcoded --
     /// they line up with [`WkbGeometryType::ALL`]'s declaration order.
-    pub fn log(&self, message: &str) {
+    ///
+    /// `target` is taken as an explicit parameter -- callers should pass
+    /// `module_path!()` -- rather than left to `log::info!`'s own
+    /// default, which would resolve to wherever this macro call is
+    /// physically written (i.e. always `geometry::geometry_tally`,
+    /// regardless of which caller's data is actually being logged).
+    /// `LOGGING.md` documents `target` as "which module logged it";
+    /// defeating that for every caller of a shared helper like this one
+    /// would make the field useless for exactly the callers who need it.
+    pub fn log(&self, target: &str, message: &str) {
         log::info!(
+            target: target,
             point = self.counts[0],
             line_string = self.counts[1],
             polygon = self.counts[2],

@@ -406,10 +406,14 @@ impl ParquetWriter {
             self.write_row_group()?;
         }
 
-        self.atp_geometry_tally
-            .log("conflate.write: atp_geometry geometry types");
-        self.osm_geometry_tally
-            .log("conflate.write: osm_geometry geometry types");
+        self.atp_geometry_tally.log(
+            module_path!(),
+            "conflate.write: atp_geometry geometry types",
+        );
+        self.osm_geometry_tally.log(
+            module_path!(),
+            "conflate.write: osm_geometry geometry types",
+        );
 
         // Both of this file's key-value metadata entries are set here,
         // uniformly, via `append_key_value_metadata` -- rather than
