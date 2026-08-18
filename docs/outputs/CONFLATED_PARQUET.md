@@ -37,13 +37,15 @@ A few things worth calling out that aren’t obvious from the above:
 
 - **`osm` is `null` whenever nothing in OpenStreetMap matched.** That
   can happen for perfectly ordinary reasons — it doesn’t mean anything
-  is wrong with the row.
+  is wrong with the conflation pipeline; rather, it’s a signal that
+  the feature may be missing from OpenStreetMap.
 - **`atp.fetched` and `osm.modified` mirror each other on purpose**:
   both answer “who produced this side of the row, and when” —
   `atp.fetched` for AllThePlaces’ own scrape, `osm.modified` for
   OpenStreetMap’s own edit metadata (the timestamp, changeset, and
-  version number of that feature’s most recent edit — not its full
-  edit history, just its current state).
+  version number of that feature’s most recent edit). We don’t
+  preserve OpenStreetMap’s full edit history here, only its current
+  state as of the database snapshot this file was built from.
 - **`osm.way_members`/`osm.relation_members` are `null`, not an empty
   list, when they don’t apply** — a `null` `way_members` means “this
   isn’t a way”, not “this way has no members”. Only one of the two is
