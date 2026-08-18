@@ -2,8 +2,8 @@
 //!
 //! `GeometryTable` wraps [BlobTable], adding geometry-specific encoding on
 //! top of it: values passed to [GeometryTable::create] and returned by
-//! [GeometryTable::lookup] and [GeometryTable::iter] are [geo::Geometry]
-//! values, not raw bytes. Internally, each geometry is stored as a WKB
+//! [GeometryTable::lookup] are [geo::Geometry] values, not raw bytes.
+//! Internally, each geometry is stored as a WKB
 //! (Well-Known Binary) blob in little-endian encoding, so on disk a
 //! `GeometryTable` is indistinguishable from a `BlobTable` of WKB blobs.
 //!
@@ -65,15 +65,11 @@ impl<'a> GeometryTable<'a> {
         self.blobs.len()
     }
 
-    /// Returns an iterator over all entries, in ascending order of key.
-    #[allow(unused)]
-    pub fn iter(&self) -> impl Iterator<Item = (u64, Geometry)> + '_ {
-        self.blobs
-            .iter()
-            .map(|(key, wkb)| (key, decode_wkb(key, wkb)))
-    }
-
     /// Returns the modification time of the backing file.
+    ///
+    /// Currently unused -- part of the memoization surface every table in
+    /// this module exposes, but no pipeline stage's staleness check reads
+    /// it yet. See https://github.com/alltheplaces/osm-diffs/issues/704.
     #[allow(unused)]
     pub fn modified(&self) -> Result<SystemTime> {
         self.blobs.modified()
@@ -95,7 +91,7 @@ fn decode_wkb(key: u64, wkb: &[u8]) -> Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{LineString, Point, Polygon, point};
+    use geo::{LineString, Polygon, point};
     use tempfile::{NamedTempFile, TempDir};
 
     #[test]
@@ -162,34 +158,6 @@ mod tests {
         );
         assert_eq!(table.len(), 1);
         assert_eq!(table.lookup(1), Some(Geometry::Polygon(polygon)));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_iter_returns_entries_in_ascending_key_order() -> Result<()> {
-        let workdir = TempDir::new()?;
-        let file = NamedTempFile::new()?;
-        let geometries: Vec<(u64, Geometry)> = vec![
-            (42, Geometry::Point(Point::new(2.0, 2.0))),
-            (17, Geometry::Point(Point::new(1.0, 1.0))),
-        ];
-        GeometryTable::create(
-            geometries.into_iter(),
-            workdir.path(),
-            file.path(),
-            crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES,
-        )?;
-
-        let table = GeometryTable::open(file.path())?;
-        let entries: Vec<(u64, Geometry)> = table.iter().collect();
-        assert_eq!(
-            entries,
-            vec![
-                (17, Geometry::Point(Point::new(1.0, 1.0))),
-                (42, Geometry::Point(Point::new(2.0, 2.0))),
-            ]
-        );
 
         Ok(())
     }

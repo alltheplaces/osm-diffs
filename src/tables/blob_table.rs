@@ -5,7 +5,6 @@
 //! like serialized protobuf messages, WKB geeometry, or other opaque
 //! binary payloads.
 
-use crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES;
 use anyhow::{Ok, Result};
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use memmap2::Mmap;
@@ -141,16 +140,6 @@ impl<'a> BlobTable<'a> {
 
     pub fn len(&self) -> usize {
         self.entries_count
-    }
-
-    /// Returns an iterator over all entries, in ascending order of key.
-    pub fn iter(&self) -> impl Iterator<Item = (u64, &'a [u8])> + '_ {
-        (0..self.entries_count).map(move |i| {
-            let key = u64::from_le(self.keys[i]);
-            let start = u64::from_le(self.starts[i]) as usize;
-            let end = u64::from_le(self.starts[i + 1]) as usize;
-            (key, &self.blob[start..end])
-        })
     }
 
     /// Returns the modification time of the backing file.
@@ -326,29 +315,6 @@ mod tests {
         assert_eq!(table.lookup(43), None);
         assert_eq!(table.lookup(44), Some(b"melbourne".as_slice()));
         assert_eq!(table.lookup(99), None);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_iter() -> Result<()> {
-        let file = NamedTempFile::new()?;
-        let mut writer = Writer::create(file.path())?;
-        writer.write(17, b"bern")?;
-        writer.write(41, b"")?;
-        writer.write(42, b"ottawa")?;
-        writer.close()?;
-
-        let table = BlobTable::open(file.path())?;
-        let entries: Vec<(u64, &[u8])> = table.iter().collect();
-        assert_eq!(
-            entries,
-            vec![
-                (17, b"bern".as_slice()),
-                (41, b"".as_slice()),
-                (42, b"ottawa".as_slice()),
-            ]
-        );
 
         Ok(())
     }

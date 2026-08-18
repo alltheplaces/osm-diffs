@@ -18,7 +18,6 @@ use std::{
 };
 
 /// Which parts of OpenStreetMap we need for conflation.
-#[allow(unused)]
 pub struct Prunings<'a> {
     pub coords: CoordTable<'a>,
     pub strings: StringCounts<'a>,
@@ -161,27 +160,6 @@ impl<'a> Prunings<'a> {
             relation_members: rels_output.relation_members,
             relation_graph: rels_output.relation_graph,
         })
-    }
-
-    #[allow(unused)]
-    pub fn coord(&self, node_id: u64) -> Option<Coord> {
-        self.coords.get(node_id)
-    }
-
-    #[allow(unused)]
-    pub fn keep_way(&self, id: u64) -> bool {
-        self.keep_ways.contains(id)
-            || self
-                .relation_members
-                .contains(encode_feature_id(RelationMemberType::Way, id))
-    }
-
-    #[allow(unused)]
-    pub fn keep_relation(&self, id: u64) -> bool {
-        self.keep_relations.contains(id)
-            || self
-                .relation_members
-                .contains(encode_feature_id(RelationMemberType::Relation, id))
     }
 }
 

@@ -29,7 +29,6 @@ use std::{
 };
 use wkb::writer::{write_geometry, write_point};
 
-#[allow(unused)]
 pub struct Assembly<'a> {
     pub strings: StringPool<'a>,
     pub nodes: RecordReader,
@@ -373,7 +372,6 @@ struct AssembledLeafRelations<'a> {
 
     /// Geometry of leaf relations that are members in super relations,
     /// keyed by osm_id of the relation.
-    #[allow(unused)]
     leaf_relations_geometry: GeometryTable<'a>,
 
     /// FeatureToIndex protos for super relations, *not* yet ready

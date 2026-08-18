@@ -77,7 +77,6 @@ pub fn conflate(
     Ok(out_path)
 }
 
-#[allow(unused)]
 struct ConflatedFeature {
     atp: Option<Place>,
     osm: Option<Feature>,

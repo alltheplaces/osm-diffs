@@ -124,6 +124,10 @@ impl U64Set {
     }
 
     /// Returns the modification time of the underlying file.
+    ///
+    /// Currently unused -- part of the memoization surface every table in
+    /// this module exposes, but no pipeline stage's staleness check reads
+    /// it yet. See https://github.com/alltheplaces/osm-diffs/issues/704.
     #[allow(unused)]
     pub fn modified(&self) -> Result<SystemTime> {
         Ok(self.file.metadata()?.modified()?)

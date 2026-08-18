@@ -149,23 +149,6 @@ impl GeometryStore {
         let err = format!("invalid WKB for key {} in {}", key, self.path.display());
         Ok(Some(read_wkb(&buf).expect(&err).to_geometry()))
     }
-
-    /// Returns whether `key` is present.
-    #[allow(unused)]
-    pub fn contains_key(&self, key: u64) -> bool {
-        self.index.contains_key(&key)
-    }
-
-    /// Returns the number of entries.
-    pub fn len(&self) -> usize {
-        self.index.len()
-    }
-
-    /// Returns whether the store has no entries.
-    #[allow(unused)]
-    pub fn is_empty(&self) -> bool {
-        self.index.is_empty()
-    }
 }
 
 fn encode_wkb(geometry: &Geometry) -> Vec<u8> {
@@ -234,25 +217,6 @@ mod tests {
             store.lookup(1)?,
             Some(Geometry::Point(point!(x: 2.0, y: 2.0)))
         );
-
-        assert_eq!(store.len(), 1);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_len_and_is_empty_and_contains_key() -> Result<()> {
-        let file = NamedTempFile::new()?;
-        let mut store = GeometryStore::create(file.path())?;
-        assert!(store.is_empty());
-        assert_eq!(store.len(), 0);
-        assert!(!store.contains_key(1));
-
-        store.insert(1, &Geometry::Point(point!(x: 1.0, y: 1.0)))?;
-        assert!(!store.is_empty());
-        assert_eq!(store.len(), 1);
-        assert!(store.contains_key(1));
-        assert!(!store.contains_key(2));
 
         Ok(())
     }
