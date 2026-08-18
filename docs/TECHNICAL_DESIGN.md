@@ -9,7 +9,8 @@ exists today, not a target architecture — see the repository’s
 ## Objective
 
 Compute a weekly diff between [AllThePlaces](https://alltheplaces.xyz/)
-(a large, open, crowdsourced database of point-of-interest scrapes) and
+(a large, open database combining point-of-interest scrapes with
+Open Government Data) and
 [OpenStreetMap](https://www.openstreetmap.org/about), and turn that
 diff into edit suggestions that a human can review and, if correct,
 apply to OpenStreetMap.
@@ -25,11 +26,15 @@ notice it and add it by hand. Meanwhile, most retail and hospitality
 chains already publish exactly this information on their own websites
 — store locators, branch listings — because they need customers to
 find them. AllThePlaces exists to scrape that already-public data at
-scale; this project exists to compare it against what’s already in
-OpenStreetMap and surface the difference, so volunteers spend their
-time reviewing and confirming candidate edits instead of manually
-re-discovering places that were already public knowledge somewhere
-else.
+scale — and increasingly, beyond individual chains' own websites, also
+ingests Open Government Data published under clear open licenses
+(municipal infrastructure, public datasets, …), so this project's
+scope isn't limited to retail POIs either, even though those remain
+the majority of what it processes today. This project exists to
+compare that combined data against what’s already in OpenStreetMap and
+surface the difference, so volunteers spend their time reviewing and
+confirming candidate edits instead of manually re-discovering places
+that were already public knowledge somewhere else.
 
 ### What conflation is
 
@@ -72,14 +77,17 @@ geometry for all three cases, not just look up a point (see
 ### What AllThePlaces does
 
 AllThePlaces runs several thousand site-specific scrapers (“spiders”),
-one per retail chain or brand, each written in Python against the
-[Scrapy](https://scrapy.org/) framework — deliberately easy to write
-and contribute, which is a large part of why the project has grown as
-far as it has. It publishes a combined weekly dump of every spider’s
-output as open data (CC0), which several other projects already
-consume, including OpenStreetMap-adjacent tooling and commercial
-mapping platforms. As one (deliberately brief) indicator of how active
-the project is: as of this writing, its
+each written in Python against the [Scrapy](https://scrapy.org/)
+framework — deliberately easy to write and contribute, which is a
+large part of why the project has grown as far as it has. Most spiders
+target one retail chain or brand's own store-locator page, but a
+growing share instead pull from Open Government Data portals under
+clear open licenses, so the combined dump isn't retail-only. It
+publishes a combined weekly dump of every spider’s output as open data
+(CC0), which several other projects already consume, including
+OpenStreetMap-adjacent tooling and commercial mapping platforms. As
+one (deliberately brief) indicator of how active the project is: as of
+this writing, its
 [repository](https://github.com/alltheplaces/alltheplaces) has around
 16,000 commits, 800+ stars, and roughly 180 contributors.
 
@@ -131,15 +139,10 @@ graph TD
     ATP_SRC[AllThePlaces weekly dump]
     OSM_SRC[OpenStreetMap planet + BitTorrent]
 
-    ATP_SRC -->|fetch_atp| ATP_ZIP[alltheplaces.zip]
-    ATP_ZIP -->|import_atp| ATP_PARQUET[alltheplaces.parquet]
+    ATP_SRC -->|import_atp| ATP_PARQUET[alltheplaces.parquet]
     ATP_PARQUET -->|collect_wikidata_ids| WIKIDATA[alltheplaces.wikidata-ids]
 
-    OSM_SRC -->|fetch_planet| PBF[planet-latest.osm.pbf]
-    PBF -->|prune| PRUNINGS[Prunings]
-    PBF --> ASSEMBLE
-    PRUNINGS -->|assemble| ASSEMBLE[Assembly]
-    ASSEMBLE -->|build_index| OSM_INDEX[osm-features.index]
+    OSM_SRC -->|import_osm| OSM_INDEX[osm-features.index]
 
     ATP_PARQUET --> CONFLATE
     OSM_INDEX -->|conflate| CONFLATE[conflated.parquet]
@@ -149,49 +152,44 @@ graph TD
     PMTILES -->|upload_tiles| S3B[(S3)]
 ```
 
-Every top-level step is memoized against files already in `--workdir`
-(re-running the pipeline skips whatever it already built), and every
-step’s wall-clock time and memory snapshot is logged regardless of
-success or failure — see
-[`docs/LOGGING.md`](LOGGING.md). `pipeline.log` itself is uploaded to
-S3 at the very end of a run no matter how the run went (see
+Every top-level step above is logged with its own wall-clock time and
+memory snapshot, regardless of success or failure — see
+[`docs/LOGGING.md`](LOGGING.md). Steps are meant to be memoized
+against files already in `--workdir`, so re-running the pipeline in
+the same directory skips whatever it already built (this also applies
+below the step level, e.g. within `import_atp`/`import_osm`'s own
+sub-stages) — though that memoization isn't fully reliable yet, see
+[#704](https://github.com/alltheplaces/osm-diffs/issues/704).
+`pipeline.log` itself is uploaded to S3 at the very end of a run no
+matter how the run went (see
 [`upload_logs`](../src/pipeline/upload.rs)), so a failed run’s log is
 never lost.
 
 ### Pipeline steps
 
-- **`fetch_atp`** ([`src/atp/fetch.rs`](../src/atp/fetch.rs)) —
-  downloads AllThePlaces’ latest published run.
-- **`import_atp`** ([`src/atp/mod.rs`](../src/atp/mod.rs)) — parses
-  every spider’s GeoJSON output out of the zip, in parallel, and
-  writes it out as `alltheplaces.parquet`, sorted for spatial
-  locality (see [`src/places/`](../src/places/)).
+- **`import_atp`** ([`src/pipeline/atp/`](../src/pipeline/atp/)) —
+  downloads AllThePlaces’ latest published run (`fetch.rs`) and parses
+  every spider’s GeoJSON output out of the zip, in parallel, writing
+  it out as `alltheplaces.parquet`, sorted for spatial locality (see
+  [`src/places/`](../src/places/)).
 - **`collect_wikidata_ids`**
-  ([`src/atp/wikidata_ids.rs`](../src/atp/wikidata_ids.rs)) — extracts
+  ([`src/pipeline/atp/wikidata_ids.rs`](../src/pipeline/atp/wikidata_ids.rs)) — extracts
   every `wikidata`/`brand:wikidata`/… tag value ATP carries, for a
   planned future feature (flagging OSM-only features whose brand ATP
   tracks elsewhere, [#682](https://github.com/alltheplaces/osm-diffs/issues/682));
   not consumed by anything yet.
-- **`fetch_planet`**
-  ([`src/pipeline/osm/fetch.rs`](../src/pipeline/osm/fetch.rs)) —
-  downloads the OpenStreetMap planet dump via BitTorrent.
-- **`prune`** ([`src/pipeline/osm/prune.rs`](../src/pipeline/osm/prune.rs))
-  — a first pass over the planet file that decides, by tag, which
-  nodes/ways/relations are even worth fully assembling (and which
-  node coordinates and relation members they’ll need), so the
-  expensive step below doesn’t have to look at the whole planet.
-- **`assemble`**
-  ([`src/pipeline/osm/assemble.rs`](../src/pipeline/osm/assemble.rs))
-  — builds real OGC geometry (point/line/polygon) for everything
-  `prune` kept, resolving ways and relations down through their
-  member nodes as OpenStreetMap’s data model requires (see
-  “Background” above).
-- **`build_index`**
-  ([`src/pipeline/osm/index.rs`](../src/pipeline/osm/index.rs),
-  [`src/tables/feature_index.rs`](../src/tables/feature_index.rs)) —
-  writes the assembled features into a memory-mapped spatial index
-  (`OsmFeatureIndex`), queryable by S2 cell range without decoding
-  every candidate.
+- **`import_osm`** ([`src/pipeline/osm/`](../src/pipeline/osm/)) —
+  downloads the OpenStreetMap planet dump via BitTorrent (`fetch.rs`);
+  does a first pass over it that decides, by tag, which nodes/ways/
+  relations are even worth fully assembling, and which node
+  coordinates and relation members they’ll need (`prune.rs`); builds
+  real OGC geometry (point/line/polygon) for everything kept,
+  resolving ways and relations down through their member nodes as
+  OpenStreetMap’s data model requires (`assemble.rs`; see
+  “Background” above); and writes the result into a memory-mapped
+  spatial index (`OsmFeatureIndex`), queryable by S2 cell range
+  without decoding every candidate (`index.rs`,
+  [`src/tables/feature_index.rs`](../src/tables/feature_index.rs)).
 - **`conflate`**
   ([`src/pipeline/conflate/mod.rs`](../src/pipeline/conflate/mod.rs))
   — for every AllThePlaces feature, queries the OSM index for nearby
@@ -219,16 +217,13 @@ Top-level modules (see [`src/lib.rs`](../src/lib.rs)):
 
 | Module | Purpose |
 |---|---|
-| [`atp`](../src/atp/) | Fetches and parses AllThePlaces’ data. |
-| [`pipeline`](../src/pipeline/) | Orchestrates the steps above; `pipeline::osm` is the OSM-side sub-pipeline (fetch/prune/assemble/index). |
+| [`pipeline`](../src/pipeline/) | Orchestrates every step above, and owns their implementation: `pipeline::osm` (fetch/prune/assemble/index), `pipeline::conflate`, `pipeline::edits`, `pipeline::atp` (fetches and parses AllThePlaces’ data), plus pipeline-internal subsystems (`pipeline::provenance`, `pipeline::logging`, `pipeline::memstats`) that, despite the name, aren’t generic utilities — they’re only ever used from within `pipeline`. |
 | [`tables`](../src/tables/) | On-disk, memory-mapped data structures shared across the pipeline (string pools, spatial indexes, external-sort-backed tables). |
 | [`places`](../src/places/) | The `Place` type (an AllThePlaces feature) and its Parquet reader/writer. |
 | [`matchers`](../src/matchers/) | Scores an OSM candidate against an ATP feature. |
 | [`edit_suggesters`](../src/edit_suggesters/) | Decides what to actually change, for a matched pair. |
-| [`geometry`](../src/geometry/) | Shared geometry-construction helpers (ring-building, polygon unions, …). |
-| [`provenance`](../src/provenance.rs) | Assembles `conflated.parquet`’s embedded CycloneDX provenance document. |
-| [`logging`](../src/logging.rs), [`memstats`](../src/memstats.rs) | Structured JSON logging and per-step memory/cgroup snapshots. |
-| [`s2_util`](../src/s2_util.rs), [`utils`](../src/utils.rs) | Small shared helpers. |
+| [`geometry`](../src/geometry/) | Shared geometry-construction helpers (ring-building, polygon unions, S2 coverage stats, …). |
+| [`utils`](../src/utils.rs) | Small, generic helpers genuinely shared by more than one otherwise-independent part of the crate. |
 
 Related documentation:
 
