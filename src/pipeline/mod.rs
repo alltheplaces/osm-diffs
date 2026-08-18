@@ -29,15 +29,19 @@ use time::UtcDateTime;
 /// that's the only external sort in its scope uses the full value.
 pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
 
+mod atp;
 mod conflate;
 mod edits;
 mod geostats; // TODO: Move into crate::geometry?
 mod osm;
 
-// Only these three re-exported crate-wide (rather than making all of
-// `osm` pub(crate)): crate::provenance needs them to assemble this
-// pipeline's provenance BOM, nothing outside `pipeline` needs the rest
-// of osm's API (BlobReader, Node/Way/Relation, import_osm, ...).
+// Only these re-exported crate-wide (rather than making all of
+// `atp`/`osm` pub(crate)): crate::provenance needs them to assemble
+// this pipeline's provenance BOM, nothing outside `pipeline` needs the
+// rest of atp's/osm's API (import_atp, BlobReader, Node/Way/Relation,
+// import_osm, ...). atp's own `read_cached_metadata` is re-exported
+// under a different name here since osm already has one of its own.
+pub(crate) use atp::{AtpMetadata, read_cached_metadata as read_cached_atp_metadata};
 pub(crate) use osm::{OsmMetadata, PLANET_PBF_FILENAME, read_cached_metadata};
 mod tiles;
 mod upload;
@@ -96,12 +100,12 @@ fn run_pipeline_steps(
         .enable_all()
         .build()?;
     let atp = run_step("import_atp", || {
-        runtime.block_on(crate::atp::import_atp(http_client, progress, workdir))
+        runtime.block_on(atp::import_atp(http_client, progress, workdir))
     })?;
-    // Not consumed by anything yet -- see crate::atp::collect_wikidata_ids
-    // for what this is for.
+    // Not consumed by anything yet -- see atp::collect_wikidata_ids for
+    // what this is for.
     let _wikidata_ids = run_step("collect_wikidata_ids", || {
-        crate::atp::collect_wikidata_ids(&atp, workdir)
+        atp::collect_wikidata_ids(&atp, workdir)
     })?;
     let osm_features = run_step("import_osm", || osm::import_osm(progress, workdir))?;
     let conflated = run_step("conflate", || {
