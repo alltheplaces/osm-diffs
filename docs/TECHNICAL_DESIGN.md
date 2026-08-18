@@ -176,6 +176,10 @@ graph TD
     PMTILES -->|upload_tiles| S3B[(S3)]
 ```
 
+(`alltheplaces.wikidata-ids` has no outgoing edge above: nothing
+consumes it yet, it’s generated on behalf of planned future work, see
+[#682](https://github.com/alltheplaces/osm-diffs/issues/682).)
+
 Every top-level step above is logged with its own wall-clock time and
 memory snapshot, regardless of success or failure — see
 [`docs/LOGGING.md`](LOGGING.md). Steps are meant to be memoized
