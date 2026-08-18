@@ -4,6 +4,13 @@
 //! as there is enough disk space, a table can be larger than the
 //! physical RAM installed on the machine. This makes it possible to
 //! process the entire OpenStreetMap planet on cheap worker machine.
+//!
+//! `crate::places` plays the same role for AllThePlaces data -- durable,
+//! cross-pipeline-stage storage for one side of conflation -- but isn't
+//! one of these tables: ATP's data volume doesn't need the mmap +
+//! page-cache design this module is built around, so it's plain
+//! Arrow/Parquet instead (compressed, opened and decoded batch by
+//! batch, not mapped into memory).
 
 #[allow(unused)]
 mod blob_table;

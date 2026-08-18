@@ -1,3 +1,14 @@
+//! `Place`, AllThePlaces' own durable on-disk representation --
+//! `alltheplaces.parquet` -- written by `pipeline::atp`, read back by
+//! `pipeline::conflate`/`pipeline::atp::wikidata_ids`, and consumed
+//! directly by `matchers` when scoring a candidate match.
+//!
+//! Plays the same cross-pipeline-stage-storage role `crate::tables`
+//! plays for OSM data, but isn't one of `tables`' mmap'd structures:
+//! AllThePlaces' data volume is nowhere near planet scale, so plain
+//! Arrow/Parquet (compressed, decoded batch by batch) is simpler and
+//! sufficient here -- no need for `tables`' mmap + page-cache design.
+
 use crate::matchers::MatchMask;
 use crate::utils::UtcTimestamp;
 use deepsize::DeepSizeOf;
