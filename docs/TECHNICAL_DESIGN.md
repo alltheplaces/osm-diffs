@@ -197,8 +197,10 @@ never lost.
 
 Timings below (where known) are wall-clock numbers from one real
 full-planet run on production-representative hardware — a
-deliberately memory-constrained Hetzner cpx22 (2 vCPU / 4 GB RAM), not
-a dev machine; see
+deliberately memory-constrained Hetzner cpx22 (2 vCPU / 4 GB RAM) with
+its working directory on an attached volume that peaked at ~174 GB
+used (settling to ~148 GB once `import_osm` finished), not a dev
+machine; see
 [#665](https://github.com/alltheplaces/osm-diffs/issues/665) for the
 full writeup. Nothing aggregates or dashboards these on an ongoing
 basis, but every run's `pipeline.log` — with per-step timings for
@@ -275,6 +277,17 @@ so it wasn’t taken on faith — it was verified by running the pipeline
 on production hardware, not just a development machine, since
 page-cache behavior under real memory pressure and container limits
 doesn’t reliably transfer from a laptop.
+
+On the same [#665](https://github.com/alltheplaces/osm-diffs/issues/665)
+run, peak RSS was 3.16–3.39 GiB on a 3.7 GiB box (cgroup accounting
+agrees: ~3.5 GB) — and during `conflate.match` specifically, over 94%
+of that was page-cache-backed (`rss_file_bytes`), not heap. That’s not
+a hard ceiling the way heap-allocated memory would be: below it, the
+kernel doesn’t crash, it just evicts and re-reads pages more often,
+which shows up as slower wall-clock time, not an out-of-memory kill —
+so it’s not moot even though the memory is “just” cache. A box with
+meaningfully less RAM than the actively-touched working set erodes
+exactly the speed benefit this design exists for.
 
 ### Code structure
 
