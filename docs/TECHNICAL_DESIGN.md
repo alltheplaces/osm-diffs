@@ -284,10 +284,21 @@ Related documentation:
 
 ## Status
 
-As of this writing: the pipeline runs end to end and produces
+We wanted to get the pipeline running end to end before polishing any
+single piece of it. As of this writing, it does: it produces
 `conflated.parquet` and a PMTiles archive for visual review, each
-uploaded to S3 at the end of a run. It does not yet run on an
-automatic weekly schedule in production, and nothing yet uploads
-suggested edits to any of the tools described above — that
-integration (most likely MapRoulette first, given its API is the
-closest fit) is future work, not yet designed in detail.
+uploaded to S3 at the end of a run. What’s still ahead follows from
+that same choice — several pieces are deliberately simple placeholders
+until the full pipeline was proven out:
+
+- It does not yet run on an automatic weekly schedule in production.
+- Nothing yet uploads suggested edits to any of the tools described
+  above — that integration (most likely MapRoulette first, given its
+  API is the closest fit) is future work, not yet designed in detail.
+- The only matcher implemented, `PoiMatcher`, matches shop-category
+  POIs solely on an exact `brand:wikidata` tag. We’d like to extend
+  this well beyond it: matching stores by name too, not just
+  `brand:wikidata`, and matching well beyond stores (a tree matcher
+  conflating municipal tree datasets against OSM by spatial distance
+  and species looks particularly tractable). See
+  [#708](https://github.com/alltheplaces/osm-diffs/issues/708).
