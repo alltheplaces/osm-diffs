@@ -63,44 +63,29 @@ geometries — the same model QGIS, PostGIS, and most other GIS tools
 already use. `atp.geometry` is whatever AllThePlaces’ own scrape
 provides for that feature — nearly always a point, though a handful of
 sources provide lines or polygons instead. `osm.geometry` is the
-matched OpenStreetMap feature’s actual shape: a polygon for an area, a
-line for a way that isn’t an area, a point for a node.
+matched OpenStreetMap feature’s shape: a polygon for an area, a line
+for a way that isn’t an area, a point for a node.
 
-Rows are sorted along a Hilbert curve, for better compression and
-faster spatial queries. At the moment, we compute this from the S2
-cell ID of each geometry’s centroid, but we don’t want to commit to
-that particular way of doing the sort, so the sort key itself isn’t
-exposed as a column.
+`osm.geometry` isn’t always byte-for-byte what’s in OpenStreetMap,
+though: we automatically repair certain geometry errors (like
+self-intersecting lines), and if a shape would otherwise end up with a
+very large number of coordinates, we simplify it — trading a small
+amount of positional accuracy for a smaller file, currently using a
+topology-preserving variant of the
+[Visvalingam–Whyatt algorithm](https://en.wikipedia.org/wiki/Visvalingam%E2%80%93Whyatt_algorithm)
+(this may change in the future). Treat `osm.geometry` as good enough
+to display — e.g. to mark the affected OSM feature on a map — but not
+as a guaranteed-exact copy of OpenStreetMap’s own data. If you need to
+generate an actual edit against OpenStreetMap, use `way_members`/
+`relation_members` instead, which always refer to OpenStreetMap’s real
+nodes.
 
-## Data provenance
-
-Every file carries a [CycloneDX](https://cyclonedx.org/) document
-embedded in its own metadata — CycloneDX being an established,
-widely-used format for exactly this kind of “where did this data come
-from” record. It answers questions like which AllThePlaces run and
-which OpenStreetMap snapshot went into this file, and which version of
-our pipeline produced it. It also records licensing information for
-both inputs and the output.
-
-```sh
-duckdb -c "
-SELECT
-    json_extract_string(decode(value), '\$.metadata.tools.components[0].version') AS pipeline_version,
-    json_extract_string(decode(value), '\$.components[0].version') AS alltheplaces_run,
-    json_extract_string(decode(value), '\$.components[1].version') AS openstreetmap_snapshot
-FROM parquet_kv_metadata('conflated.parquet')
-WHERE key::VARCHAR = 'org.cyclonedx.bom';
-"
-```
-
-```text
-┌──────────────────┬──────────────────────┬────────────────────────┐
-│ pipeline_version │   alltheplaces_run   │ openstreetmap_snapshot │
-│     varchar      │       varchar        │         varchar        │
-├──────────────────┼──────────────────────┼────────────────────────┤
-│ 0.6.10           │ 2026-01-01T00:00:00Z │ 2026-01-27T08:11:02Z   │
-└──────────────────┴──────────────────────┴────────────────────────┘
-```
+Rows are sorted along a
+[Hilbert curve](https://towardsdatascience.com/spatial-index-space-filling-curves-e67baec2186a/),
+for better compression and faster spatial queries. At the moment, we
+compute this from the S2 cell ID of each geometry’s centroid, but we
+don’t want to commit to that particular way of doing the sort, so the
+sort key itself isn’t exposed as a column.
 
 ## A quick look
 
@@ -123,4 +108,35 @@ LIMIT 3;
 │ way     │ 737021556 │ mediamarkt │ POLYGON       │
 │ way     │ 737021557 │ denner_ch  │ POLYGON       │
 └─────────┴───────────┴────────────┴───────────────┘
+```
+
+## Data provenance
+
+Every file carries a [CycloneDX](https://cyclonedx.org/) document
+embedded in its own metadata — CycloneDX being an established,
+[standardized](https://ecma-international.org/wp-content/uploads/ECMA-424_2nd_edition_december_2025.pdf)
+format for exactly this kind of “where did this data come from”
+record. It answers questions like which AllThePlaces run and which
+OpenStreetMap snapshot went into this file, and which version of our
+pipeline produced it. It also records licensing information for both
+inputs and the output.
+
+```sh
+duckdb -c "
+SELECT
+    json_extract_string(decode(value), '\$.metadata.tools.components[0].version') AS pipeline_version,
+    json_extract_string(decode(value), '\$.components[0].version') AS alltheplaces_run,
+    json_extract_string(decode(value), '\$.components[1].version') AS openstreetmap_snapshot
+FROM parquet_kv_metadata('conflated.parquet')
+WHERE key::VARCHAR = 'org.cyclonedx.bom';
+"
+```
+
+```text
+┌──────────────────┬──────────────────────┬────────────────────────┐
+│ pipeline_version │   alltheplaces_run   │ openstreetmap_snapshot │
+│     varchar      │       varchar        │         varchar        │
+├──────────────────┼──────────────────────┼────────────────────────┤
+│ 0.6.10           │ 2026-01-01T00:00:00Z │ 2026-01-27T08:11:02Z   │
+└──────────────────┴──────────────────────┴────────────────────────┘
 ```
