@@ -27,10 +27,7 @@ use std::{
 
 use super::ConflatedFeature;
 use crate::{
-    geometry::{WkbGeometryType, wkb_geometry_type},
-    matchers::OsmCandidate,
-    tables::StringPool,
-    utils::UtcTimestamp,
+    geometry::GeometryTally, matchers::OsmCandidate, tables::StringPool, utils::UtcTimestamp,
 };
 
 pub struct ParquetWriter {
@@ -136,65 +133,6 @@ const PROVENANCE_KEY: &str = "org.cyclonedx.bom";
 /// `close()` -- because `geometry_types` below depends on what
 /// geometries actually ended up in the file.
 const GEO_METADATA_KEY: &str = "geo";
-
-/// Per-column bookkeeping accumulated while writing one of the two
-/// geometry columns: how many of each [`WkbGeometryType`] were written
-/// (becomes the GeoParquet `geo` metadata's `geometry_types`, and an
-/// INFO log line), and the single largest geometry seen so far, by byte
-/// size (also logged, together with a caller-supplied label identifying
-/// which row it came from -- e.g. "way/608979139" for OSM, a spider name
-/// for ATP -- so an unusually large geometry can be tracked down without
-/// having to scan the whole file).
-#[derive(Default)]
-struct GeometryTally {
-    counts: [u64; WkbGeometryType::ALL.len()],
-    largest_bytes: usize,
-    largest_label: String,
-}
-
-impl GeometryTally {
-    fn record(&mut self, wkb: &[u8], label: impl FnOnce() -> String) {
-        let index = WkbGeometryType::ALL
-            .iter()
-            .position(|t| *t == wkb_geometry_type(wkb))
-            .expect("WkbGeometryType::ALL covers every type wkb_geometry_type can return");
-        self.counts[index] += 1;
-        if wkb.len() > self.largest_bytes {
-            self.largest_bytes = wkb.len();
-            self.largest_label = label();
-        }
-    }
-
-    /// Distinct types actually seen, as GeoParquet `geometry_types`
-    /// strings -- e.g. `["Point"]`, or `["LineString", "Polygon"]`.
-    fn geoparquet_types(&self) -> Vec<&'static str> {
-        WkbGeometryType::ALL
-            .iter()
-            .zip(self.counts.iter())
-            .filter(|&(_, &count)| count > 0)
-            .map(|(t, _)| t.geoparquet_name())
-            .collect()
-    }
-
-    /// Logs this tally's per-type counts and largest geometry seen, at
-    /// INFO, as one structured record. `log::info!`'s field list has to
-    /// be literal field names, so the indices below are hardcoded --
-    /// they line up with [`WkbGeometryType::ALL`]'s declaration order.
-    fn log(&self, message: &str) {
-        log::info!(
-            point = self.counts[0],
-            line_string = self.counts[1],
-            polygon = self.counts[2],
-            multi_point = self.counts[3],
-            multi_line_string = self.counts[4],
-            multi_polygon = self.counts[5],
-            geometry_collection = self.counts[6],
-            largest_bytes = self.largest_bytes,
-            largest = self.largest_label.as_str();
-            "{}", message
-        );
-    }
-}
 
 impl ParquetWriter {
     /// `provenance_bom` is the CycloneDX document from `crate::provenance`,

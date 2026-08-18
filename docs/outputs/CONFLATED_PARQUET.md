@@ -85,7 +85,7 @@ for a way that isn’t an area, a point for a node. Both columns use
 (WGS84 longitude/latitude, the same coordinates GPS uses) — GeoParquet’s
 default CRS, so it isn’t spelled out explicitly in the file.
 
-`osm_geometry` isn’t always byte-for-byte what’s in OpenStreetMap,
+`osm_geometry` isn’t always point-for-point what’s in OpenStreetMap,
 though: we automatically repair certain geometry errors (like
 self-intersecting lines), and if a shape would otherwise end up with a
 very large number of coordinates, we simplify it — trading a small

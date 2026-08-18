@@ -40,7 +40,10 @@ impl WkbGeometryType {
     ];
 
     /// The GeoParquet `geometry_types` string for this type, e.g.
-    /// `"Point"`, `"MultiPolygon"`.
+    /// `"Point"`, `"MultiPolygon"` -- see "geometry_types" in the
+    /// [GeoParquet 2.0-rc.1 spec](https://geoparquet.org/releases/v2.0.0-rc.1/)
+    /// (that page has no anchor links yet to point at the section
+    /// directly).
     pub fn geoparquet_name(&self) -> &'static str {
         match self {
             Self::Point => "Point",
