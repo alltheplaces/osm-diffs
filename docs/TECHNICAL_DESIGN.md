@@ -32,10 +32,11 @@ OSM Foundation’s [Licensing Working
 Group](https://osmfoundation.org/wiki/Licensing_Working_Group) has
 [confirmed first-party websites as an acceptable data source for
 OSM](https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources).
-Increasingly, AllThePlaces also ingests Open Government Data published
-under clear open licenses — municipal infrastructure, public datasets,
-and more — so its scope reaches beyond retail POIs, even though those
-still make up most of what it processes today.
+In addition, AllThePlaces ingests various datasets, published under
+clearly declared open-data licenses — municipal infrastructure,
+government records, and more — so its scope reaches beyond retail
+POIs, even though those still make up most of what it processes
+today.
 
 This project compares that combined data against what’s already in
 OpenStreetMap and surfaces the difference, so volunteers spend their
