@@ -1,6 +1,10 @@
 //! Bookkeeping for a WKB geometry column written to some output file:
 //! how many of each [`WkbGeometryType`] ended up in it, and the single
 //! largest geometry seen, by byte size.
+//!
+//! WKB is [Well-Known Binary](https://libgeos.org/specifications/wkb/),
+//! a standard binary encoding for geometries (points, lines, polygons,
+//! ...) used throughout this crate and the wider GIS world.
 
 use super::{WkbGeometryType, wkb_geometry_type};
 
@@ -9,8 +13,8 @@ use super::{WkbGeometryType, wkb_geometry_type};
 /// `geometry_types`, or an INFO log line), and the single largest
 /// geometry seen so far, by byte size, together with a caller-supplied
 /// label identifying which row it came from (e.g. an OSM `type/id`
-/// string, or a spider name) -- so an unusually large geometry can be
-/// tracked down without having to scan the whole file.
+/// string, or an AllThePlaces spider name) -- so an unusually large
+/// geometry can be tracked down without having to scan the whole file.
 #[derive(Default)]
 pub struct GeometryTally {
     counts: [u64; WkbGeometryType::ALL.len()],
