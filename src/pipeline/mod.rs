@@ -32,6 +32,8 @@ pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
 mod atp;
 mod conflate;
 mod edits;
+mod logging;
+mod memstats;
 mod osm;
 mod provenance;
 
@@ -66,7 +68,7 @@ pub fn run_pipeline(
     if !workdir.exists() {
         std::fs::create_dir(workdir)?;
     }
-    crate::logging::init(workdir)?;
+    logging::init(workdir)?;
 
     let progress = indicatif::MultiProgress::new();
     let result = run_pipeline_steps(
@@ -137,7 +139,7 @@ fn run_pipeline_steps(
     Ok(())
 }
 
-/// Runs one top-level pipeline step, logging a [`crate::memstats`]
+/// Runs one top-level pipeline step, logging a [`memstats`]
 /// snapshot and the step's wall-clock run time -- to help diagnose
 /// out-of-memory kills and resource misconfigurations, since each step
 /// here (import, build tables, conflate, ...) tends to be where a
@@ -170,15 +172,15 @@ fn run_step<T>(name: &str, step: impl FnOnce() -> Result<T>) -> Result<T> {
 /// catching a real problem before it turns into a kill.
 const CGROUP_WARN_THRESHOLD: f64 = 0.85;
 
-/// Logs one [`crate::memstats`] snapshot for a pipeline step, as
-/// structured fields (see `crate::logging`) rather than baked into the
+/// Logs one [`memstats`] snapshot for a pipeline step, as
+/// structured fields (see `logging`) rather than baked into the
 /// message text, so a log consumer can query/aggregate on them directly
 /// (e.g. `jq '.fields.elapsed_seconds'`) instead of parsing a string.
 /// `elapsed_seconds` is `None` for the "start" record -- there's no
 /// elapsed time to report yet -- and the step's wall-clock run time for
 /// "end".
 fn log_snapshot(name: &str, phase: &str, elapsed_seconds: Option<f64>) {
-    let stats = crate::memstats::snapshot();
+    let stats = memstats::snapshot();
     log::info!(
         step = name,
         phase = phase,
