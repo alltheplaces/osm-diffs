@@ -197,9 +197,12 @@ never lost.
 
 - **`import_atp`** ([`src/pipeline/atp/`](../src/pipeline/atp/)) —
   downloads AllThePlaces’ latest published run (`fetch.rs`) and parses
-  every spider’s GeoJSON output out of the zip, in parallel, writing
-  it out as `alltheplaces.parquet`, sorted for spatial locality (see
-  [`src/places/`](../src/places/)).
+  every spider’s GeoJSON output out of the zip, in parallel, filtering
+  out any dataset not usable for OSM by its declared license or an
+  explicit `use:openstreetmap` marker (`is_usable_for_osm()` in
+  [`src/pipeline/atp/mod.rs`](../src/pipeline/atp/mod.rs)), and writing
+  the rest out as `alltheplaces.parquet`, sorted for spatial locality
+  (see [`src/places/`](../src/places/)).
 - **`collect_wikidata_ids`**
   ([`src/pipeline/atp/wikidata_ids.rs`](../src/pipeline/atp/wikidata_ids.rs)) — extracts
   every `wikidata`/`brand:wikidata`/… tag value ATP carries, for a
