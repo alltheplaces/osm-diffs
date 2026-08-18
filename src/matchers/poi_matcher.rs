@@ -64,11 +64,25 @@ mod tests {
         UtcTimestamp(time::UtcDateTime::from_unix_timestamp(1_770_000_000).unwrap())
     }
 
+    /// A placeholder point shape for fixtures below that only care about
+    /// `s2_cell_id`/`mask`/`tags`, not the real geometry -- reconstructs
+    /// a point at the cell's own center, so it's at least consistent
+    /// with `s2_cell_id` rather than an arbitrary unrelated coordinate.
+    fn test_shape(s2_cell_id: u64) -> Vec<u8> {
+        let cell = s2::cellid::CellID(s2_cell_id);
+        let lat_lng = s2::latlng::LatLng::from(cell);
+        crate::geometry::write_wkb(&geo::Geometry::from(geo::Point::new(
+            lat_lng.lng.deg(),
+            lat_lng.lat.deg(),
+        )))
+    }
+
     static CH_CLOTHES_ATP: LazyLock<Place> = LazyLock::new(|| Place {
         s2_cell_id: 5159637664633565895,
         spider: String::from("newyorker"),
         mask: MatchMask::SHOP,
         fetched: test_timestamp(),
+        shape_wkb: test_shape(5159637664633565895),
         tags: tags(&[
             ("addr:city", "Rapperswil"),
             ("addr:country", "CH"),
@@ -89,6 +103,7 @@ mod tests {
         spider: String::from("osm"),
         mask: MatchMask(1),
         fetched: test_timestamp(),
+        shape_wkb: test_shape(5159637664662121729),
         tags: tags(&[
             ("branch", "Rapperswil Sonnenhof"),
             ("brand", "New Yorker"),
@@ -106,6 +121,7 @@ mod tests {
         spider: String::from("valora"),
         mask: MatchMask::SHOP,
         fetched: test_timestamp(),
+        shape_wkb: test_shape(5159637400739491865),
         tags: tags(&[
             ("addr:city", "Rapperswil"),
             ("addr:country", "CH"),
@@ -125,6 +141,7 @@ mod tests {
         spider: String::from("osm"),
         mask: MatchMask::SHOP,
         fetched: test_timestamp(),
+        shape_wkb: test_shape(5159637400743919515),
         tags: tags(&[
             ("brand", "k kiosk"),
             ("brand:wikidata", "Q60381703"),

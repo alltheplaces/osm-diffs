@@ -2,6 +2,7 @@ use crate::matchers::MatchMask;
 use crate::utils::UtcTimestamp;
 use deepsize::DeepSizeOf;
 use geo::Coord;
+use geo_traits::to_geo::ToGeoGeometry;
 use serde::{Deserialize, Serialize};
 
 mod reader;
@@ -18,6 +19,18 @@ pub struct Place {
     pub mask: MatchMask,
     pub tags: Vec<(String, String)>,
 
+    /// This feature's actual shape, as given by AllThePlaces' upstream
+    /// source -- almost always a point, but not necessarily (some
+    /// sources provide lines or polygons). Stored as WKB, not
+    /// `geo::Geometry`, so `Place` can keep deriving `Eq`/`Ord` (needed
+    /// for the external sort in `pipeline::atp::process_places`) --
+    /// `f64` coordinates don't implement those. Distinct from
+    /// `s2_cell_id`, which is always derived from a single representative
+    /// point regardless of this field's actual geometry type -- that's a
+    /// spatial-index sort/query key, not the feature's real shape. Use
+    /// `shape()` for the decoded `geo::Geometry`.
+    pub shape_wkb: Vec<u8>,
+
     /// When AllThePlaces fetched this feature from its upstream source
     /// (a spider's `spider:collection_time`, shared by every feature in
     /// that spider's run). Exposed in `conflated.parquet` as `atp.fetched`.
@@ -30,6 +43,7 @@ impl Place {
         spider: String,
         mask: MatchMask,
         tags: Vec<(String, String)>,
+        shape: &geo::Geometry<f64>,
         fetched: UtcTimestamp,
     ) -> Option<Place> {
         let s2_lat_lng = s2::latlng::LatLng::from_degrees(coord.y, coord.x);
@@ -43,6 +57,7 @@ impl Place {
             spider,
             mask,
             tags,
+            shape_wkb: crate::geometry::write_wkb(shape),
             fetched,
         })
     }
@@ -53,26 +68,30 @@ impl Place {
             spider: self.spider.clone(),
             mask: self.mask,
             tags: self.tags.clone(),
+            shape_wkb: self.shape_wkb.clone(),
             fetched: self.fetched,
         }
     }
 
+    /// This feature's actual shape -- see `shape_wkb`'s doc comment.
     pub fn shape(&self) -> geo::Geometry<f64> {
-        let s2_cell_id = s2::cellid::CellID(self.s2_cell_id);
-        let lat_lon = s2::latlng::LatLng::from(s2_cell_id);
-        let rounded_lon = (lat_lon.lng.deg() * 1e7).round() / 1e7;
-        let rounded_lat = (lat_lon.lat.deg() * 1e7).round() / 1e7;
-        geo::Geometry::from(geo::Point::<f64>::new(rounded_lon, rounded_lat))
+        wkb::reader::read_wkb(&self.shape_wkb)
+            .expect("Place.shape_wkb should always be valid WKB -- we wrote it ourselves")
+            .to_geometry()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::Coord;
+    use geo::{Coord, Point, Polygon};
 
     fn test_timestamp() -> UtcTimestamp {
         UtcTimestamp(time::UtcDateTime::from_unix_timestamp(1_770_000_000).unwrap())
+    }
+
+    fn point_shape(x: f64, y: f64) -> geo::Geometry<f64> {
+        geo::Geometry::from(Point::new(x, y))
     }
 
     #[test]
@@ -86,8 +105,16 @@ mod tests {
             ("building".to_string(), "tower".to_string()),
             ("name:gsw".to_string(), "Zytglogge".to_string()),
         ];
-        let place =
-            Place::new(&p, spider, MatchMask::SHOP, tags.clone(), test_timestamp()).unwrap();
+        let shape = point_shape(p.x, p.y);
+        let place = Place::new(
+            &p,
+            spider,
+            MatchMask::SHOP,
+            tags.clone(),
+            &shape,
+            test_timestamp(),
+        )
+        .unwrap();
         assert_eq!(place.s2_cell_id, 5156122125915201443);
         assert_eq!(place.spider, "test/spider");
         assert_eq!(place.tags, tags);
@@ -96,25 +123,29 @@ mod tests {
 
     #[test]
     fn test_cmp() {
+        let coord_a = Coord {
+            x: 7.4478123,
+            y: 46.9479801,
+        };
+        let coord_b = Coord {
+            x: -122.4630042,
+            y: 37.8045878,
+        };
         let a = Place::new(
-            &Coord {
-                x: 7.4478123,
-                y: 46.9479801,
-            },
+            &coord_a,
             "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
+            &point_shape(coord_a.x, coord_a.y),
             test_timestamp(),
         )
         .unwrap();
         let b = Place::new(
-            &Coord {
-                x: -122.4630042,
-                y: 37.8045878,
-            },
+            &coord_b,
             "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
+            &point_shape(coord_b.x, coord_b.y),
             test_timestamp(),
         )
         .unwrap();
@@ -125,15 +156,17 @@ mod tests {
     }
 
     #[test]
-    fn test_shape() {
+    fn test_shape_round_trips_a_point() {
+        let coord = Coord {
+            x: 7.4478123,
+            y: 46.9479801,
+        };
         let place = Place::new(
-            &Coord {
-                x: 7.4478123,
-                y: 46.9479801,
-            },
+            &coord,
             "test/spider".to_string(),
             MatchMask::SHOP,
             vec![],
+            &point_shape(coord.x, coord.y),
             test_timestamp(),
         )
         .unwrap();
@@ -144,5 +177,38 @@ mod tests {
         } else {
             panic!("expected a point, got {:?}", shape);
         };
+    }
+
+    /// Regression test for
+    /// alltheplaces/osm-diffs#690: `Place::shape()` must return this
+    /// feature's real geometry, not a point reconstructed from
+    /// `s2_cell_id` -- so this pins a *non-point* shape and a `coord`
+    /// that's deliberately not one of its vertices (a real representative
+    /// point -- e.g. an interior point -- would be, but the two are
+    /// conceptually independent: `coord` only ever feeds `s2_cell_id`).
+    #[test]
+    fn test_shape_round_trips_a_polygon_not_reconstructed_from_s2_cell_id() {
+        let coord = Coord { x: 0.0, y: 0.0 };
+        let polygon = Polygon::new(
+            geo::LineString::from(vec![
+                (7.0, 46.0),
+                (7.0, 47.0),
+                (8.0, 47.0),
+                (8.0, 46.0),
+                (7.0, 46.0),
+            ]),
+            vec![],
+        );
+        let shape = geo::Geometry::from(polygon.clone());
+        let place = Place::new(
+            &coord,
+            "test/spider".to_string(),
+            MatchMask::SHOP,
+            vec![],
+            &shape,
+            test_timestamp(),
+        )
+        .unwrap();
+        assert_eq!(place.shape(), geo::Geometry::from(polygon));
     }
 }

@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use arrow::array::{
-    Array, Int64Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt64Array,
+    Array, BinaryArray, Int64Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt64Array,
 };
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
@@ -69,6 +69,7 @@ fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
         spider: get_string_required(batch, "spider", row)?,
         mask: MatchMask(get_u16_required(batch, "mask", row)?),
         tags: get_tags(batch, row)?,
+        shape_wkb: get_binary_required(batch, "shape", row)?,
         fetched: get_fetched(batch, row)?,
     })
 }
@@ -117,6 +118,17 @@ fn get_string_required(batch: &RecordBatch, name: &str, row: usize) -> Result<St
         .to_owned())
 }
 
+fn get_binary_required(batch: &RecordBatch, name: &str, row: usize) -> Result<Vec<u8>> {
+    Ok(batch
+        .column_by_name(name)
+        .with_context(|| format!("missing required column '{name}'"))?
+        .as_any()
+        .downcast_ref::<BinaryArray>()
+        .with_context(|| format!("column '{name}' is not Binary"))?
+        .value(row)
+        .to_vec())
+}
+
 fn get_tags(batch: &RecordBatch, row: usize) -> Result<Vec<(String, String)>> {
     let col = batch
         .column_by_name("tags")
@@ -151,9 +163,16 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// Test file with 7 places -- see the old `PlaceIndex` tests (git
-    /// history) for the full per-place s2_cell_id/mask breakdown; this
-    /// only needs the total count and that every place decodes cleanly.
+    /// Test file with 10 places -- produced by running the real
+    /// `import_atp` pipeline stage against `tests/test_data/
+    /// alltheplaces.zip` (see `tests/integration_test.rs`'s own use of
+    /// that same zip), not hand-crafted; this only needs the total count
+    /// and that every place decodes cleanly. (A previous version of this
+    /// fixture had drifted out of sync with the zip -- 7 places,
+    /// `"atp/"`-prefixed spider names, one uniform `fetched` timestamp
+    /// -- unnoticed for a while because these tests only check loose
+    /// invariants, not exact values; regenerating it for #690's new
+    /// `shape` column also fixed that staleness.)
     fn test_file() -> PathBuf {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("tests/test_data/alltheplaces.parquet");
@@ -163,7 +182,7 @@ mod tests {
     #[test]
     fn total_rows_matches_metadata() {
         let reader = PlaceReader::open(&test_file()).expect("open");
-        assert_eq!(reader.total_rows(), 7);
+        assert_eq!(reader.total_rows(), 10);
     }
 
     #[test]
@@ -174,7 +193,15 @@ mod tests {
             for place in batch.expect("batch decode") {
                 assert_ne!(place.s2_cell_id, 0, "s2_cell_id should not be zero");
                 assert!(!place.spider.is_empty(), "spider should not be empty");
-                assert_eq!(place.fetched.unix_timestamp_millis(), 1_767_225_600_000);
+                assert!(
+                    place.fetched.unix_timestamp_millis() > 0,
+                    "fetched should be a real, positive timestamp"
+                );
+                // Every place's shape should decode cleanly -- exact
+                // values (and non-point geometry) are covered by
+                // pipeline::atp's own unit tests and
+                // tests/integration_test.rs, not needed again here.
+                place.shape();
                 for (k, v) in &place.tags {
                     assert!(!k.is_empty(), "tag key should not be empty");
                     assert!(!v.is_empty(), "tag value should not be empty");
