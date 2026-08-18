@@ -1,7 +1,7 @@
 use anyhow::{Context, Ok, Result, anyhow};
 use aws_lc_rs::digest::{Context as DigestContext, SHA256};
 use indicatif::MultiProgress;
-use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock};
+use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use protobuf_iter::MessageIter;
 use serde::{Deserialize, Serialize};
 use std::fs::File;
@@ -23,6 +23,44 @@ mod index;
 mod prune;
 
 use prune::Prunings;
+
+/// Encodes an OpenStreetMap element's `(type, id)` as a `Feature.id` --
+/// `id * 10 + 1` for nodes, `+ 2` for ways, `+ 3` for relations. The same
+/// encoding is also used for relation member references
+/// (`RelationMember.id`) -- see `feature.proto`. Inverse of
+/// [`decode_feature_id`].
+pub(crate) fn encode_feature_id(member_type: RelationMemberType, id: u64) -> u64 {
+    match member_type {
+        RelationMemberType::Node => id * 10 + 1,
+        RelationMemberType::Way => id * 10 + 2,
+        RelationMemberType::Relation => id * 10 + 3,
+    }
+}
+
+/// Decodes a `Feature.id`-encoded value into `(type, id)` -- `None` if
+/// `fid`'s last decimal digit isn't 1/2/3, which should never happen for
+/// a value this pipeline produced itself. Inverse of
+/// [`encode_feature_id`].
+pub(crate) fn decode_feature_id(fid: u64) -> Option<(RelationMemberType, u64)> {
+    let id = fid / 10;
+    match fid % 10 {
+        1 => Some((RelationMemberType::Node, id)),
+        2 => Some((RelationMemberType::Way, id)),
+        3 => Some((RelationMemberType::Relation, id)),
+        _ => None,
+    }
+}
+
+/// `"node"`/`"way"`/`"relation"` -- the string OSM's own API and tag
+/// conventions use for this element type (e.g. `conflated.parquet`'s
+/// `osm.type` column).
+pub(crate) fn osm_type_str(member_type: RelationMemberType) -> &'static str {
+    match member_type {
+        RelationMemberType::Node => "node",
+        RelationMemberType::Way => "way",
+        RelationMemberType::Relation => "relation",
+    }
+}
 
 pub fn import_osm<'a>(progress: &MultiProgress, workdir: &Path) -> Result<OsmFeatures<'a>> {
     assert!(workdir.exists());
@@ -461,6 +499,31 @@ mod tests {
     use super::*;
     use std::io::Cursor;
     use std::path::PathBuf;
+
+    #[test]
+    fn test_encode_decode_feature_id_round_trip() {
+        for (member_type, id) in [
+            (RelationMemberType::Node, 123),
+            (RelationMemberType::Way, 608979139),
+            (RelationMemberType::Relation, 999_999_999),
+        ] {
+            let fid = encode_feature_id(member_type.clone(), id);
+            assert_eq!(decode_feature_id(fid), Some((member_type, id)));
+        }
+    }
+
+    #[test]
+    fn test_decode_feature_id_rejects_bad_last_digit() {
+        assert_eq!(decode_feature_id(1230), None);
+        assert_eq!(decode_feature_id(1234), None);
+    }
+
+    #[test]
+    fn test_osm_type_str() {
+        assert_eq!(osm_type_str(RelationMemberType::Node), "node");
+        assert_eq!(osm_type_str(RelationMemberType::Way), "way");
+        assert_eq!(osm_type_str(RelationMemberType::Relation), "relation");
+    }
     use std::sync::mpsc::sync_channel;
 
     #[test]

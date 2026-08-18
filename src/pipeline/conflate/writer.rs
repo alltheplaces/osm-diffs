@@ -27,8 +27,13 @@ use std::{
 
 use super::ConflatedFeature;
 use crate::{
-    geometry::GeometryTally, matchers::OsmCandidate, tables::StringPool, utils::UtcTimestamp,
+    geometry::GeometryTally,
+    matchers::OsmCandidate,
+    pipeline::{decode_feature_id, osm_type_str},
+    tables::StringPool,
+    utils::UtcTimestamp,
 };
+use osm_pbf_iter::RelationMemberType;
 
 pub struct ParquetWriter {
     path: PathBuf,
@@ -307,14 +312,10 @@ impl ParquetWriter {
 
         if let Some(osm_id) = row.osm_id {
             self.osm_present.append_non_null();
-            let osm_type_str = match osm_id.get() % 10 {
-                1 => "node",
-                2 => "way",
-                3 => "relation",
-                _ => panic!("osm_id {} with unexpected last digit", osm_id.get()),
-            };
-            let osm_plain_id = osm_id.get() / 10;
-            self.osm_types.append_value(osm_type_str);
+            let (osm_member_type, osm_plain_id) = decode_feature_id(osm_id.get())
+                .unwrap_or_else(|| panic!("osm_id {} with unexpected last digit", osm_id.get()));
+            let osm_type = osm_type_str(osm_member_type);
+            self.osm_types.append_value(osm_type);
             self.osm_ids.append_value(osm_plain_id);
 
             for (key, value) in row.osm_tags.iter() {
@@ -381,9 +382,8 @@ impl ParquetWriter {
             }
 
             self.osm_geometries.append_value(&row.osm_shape_wkb);
-            self.osm_geometry_tally.record(&row.osm_shape_wkb, || {
-                format!("{osm_type_str}/{osm_plain_id}")
-            });
+            self.osm_geometry_tally
+                .record(&row.osm_shape_wkb, || format!("{osm_type}/{osm_plain_id}"));
         } else {
             self.osm_present.append_null();
             self.osm_types.append_value("");
@@ -573,20 +573,18 @@ impl ParquetWriter {
     }
 }
 
-/// Decodes a `Feature.id`-encoded value (`osm_id * 10 + {1,2,3}`) into
-/// `(type, osm_id)`. Same encoding `feature_to_osm_id` in
-/// `pipeline::osm::assemble` decodes -- not shared with it (that
-/// function is private to a different module, and this crate hasn't
-/// consolidated the encode/decode helpers yet, see
-/// alltheplaces/osm-diffs#662's discussion) -- but mirrors the `% 10`
-/// dispatch already used a few lines below for `osm.type` itself.
+/// Decodes a relation member's `Feature.id`-encoded `id` into
+/// `(type, osm_id)`, as `&'static str`/`u64` -- the shape
+/// `osm_relation_members` (below) needs for its `member_type` column.
+/// A thin wrapper around `pipeline::osm`'s shared
+/// `decode_feature_id`/`osm_type_str` (which operate on the OSM-domain
+/// `RelationMemberType`, not a string), kept as its own function mainly
+/// so this call site's `unwrap_or_else` panic message can say "relation
+/// member id" specifically.
 fn decode_member_id(id: u64) -> (&'static str, u64) {
-    match id % 10 {
-        1 => ("node", id / 10),
-        2 => ("way", id / 10),
-        3 => ("relation", id / 10),
-        _ => panic!("relation member id {id} with unexpected last digit"),
-    }
+    let (member_type, osm_id) = decode_feature_id(id)
+        .unwrap_or_else(|| panic!("relation member id {id} with unexpected last digit"));
+    (osm_type_str(member_type), osm_id)
 }
 
 impl ParquetRow {
@@ -679,8 +677,11 @@ impl ParquetRow {
                 })
                 .collect();
 
-            osm_way_members = (feature.id % 10 == 2).then(|| feature.way_members.clone());
-            osm_relation_members = (feature.id % 10 == 3).then(|| {
+            let (feature_type, _) = decode_feature_id(feature.id)
+                .unwrap_or_else(|| panic!("feature id {} with unexpected last digit", feature.id));
+            osm_way_members =
+                (feature_type == RelationMemberType::Way).then(|| feature.way_members.clone());
+            osm_relation_members = (feature_type == RelationMemberType::Relation).then(|| {
                 feature
                     .relation_members
                     .iter()
