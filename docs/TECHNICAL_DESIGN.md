@@ -38,15 +38,15 @@ government records, and more — so its scope reaches beyond retail
 POIs, even though those still make up most of what it processes
 today.
 
-This project doesn’t solve that scarcity of volunteer attention —
-matching AllThePlaces against OpenStreetMap doesn’t create more hours
-in anyone’s day, and a volunteer still has to review and confirm each
-candidate edit by hand. What it changes is what gets *noticed* in the
-first place: instead of a gap or a stale entry surfacing only if
-someone happens to stumble on it, this project compares the two
-datasets systematically, for the whole planet, within a week —
-turning “maybe someone notices eventually” into a standing, repeatable
-check.
+This project doesn’t apply bulk edits to OpenStreetMap, and has no
+plans to: AllThePlaces’ scraped data isn’t reliable enough to trust
+unreviewed, and even if it were, bulk edits don’t fit how the OSM
+community works — edits get proposed and reviewed by humans, not
+pushed automatically by a script. What this project can do instead is
+find the delta between the two datasets systematically, for the whole
+planet, within a week, and turn it into edit proposals for volunteers
+to review — turning “maybe someone notices eventually” into a
+standing, repeatable check.
 
 ### What conflation is
 
