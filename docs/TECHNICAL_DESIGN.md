@@ -49,9 +49,11 @@ produced geospatial datasets that describe overlapping real-world
 features, so as to reconcile them into one better (or at least
 cross-checked) result. It’s an old problem in GIS, going back to
 combining paper maps and different survey sources long before
-crowdsourced data existed; see [GIS Geography’s introduction to
-conflation](https://gisgeography.com/conflation-edgematching-rubbersheeting/)
-for accessible general background. Matching points of interest
+crowdsourced data existed; see the [OpenStreetMap wiki’s Conflation
+page](https://wiki.openstreetmap.org/wiki/Conflation) for accessible
+general background, including the tooling OSM’s own community already
+uses for it (Hootenanny, JOSM’s Conflation plugin, Osmose). Matching
+points of interest
 specifically — deciding whether a point in one dataset and a point in
 another dataset describe the same real-world place — is its own
 well-studied sub-problem, surveyed in [Sun et al., “Conflating point of
