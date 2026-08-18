@@ -107,6 +107,15 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
             .as_any()
             .downcast_ref::<StructArray>()
             .context("'osm' is not a struct")?;
+        // Top-level, not nested inside `osm` -- GeoParquet 2.0 requires
+        // geometry columns to live at the schema root (see
+        // `pipeline::conflate::writer::GEO_METADATA_KEY`'s doc comment).
+        let osm_geometry = batch
+            .column_by_name("osm_geometry")
+            .context("missing 'osm_geometry' column")?
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .context("'osm_geometry' is not binary")?;
         for row in 0..batch.num_rows() {
             if osm.is_null(row) {
                 continue;
@@ -123,11 +132,7 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
                 .context("'type' is not a string")?
                 .value(row)
                 .to_string();
-            let wkb = get("geometry")?
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .context("'geometry' is not binary")?
-                .value(row);
+            let wkb = osm_geometry.value(row);
             let is_polygon = matches!(
                 wkb::reader::read_wkb(wkb)?.to_geometry(),
                 geo::Geometry::Polygon(_)

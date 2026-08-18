@@ -17,6 +17,7 @@ use parquet::{
     schema::types::ColumnPath,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     fs::File,
     num::{NonZeroU32, NonZeroU64},
@@ -25,7 +26,9 @@ use std::{
 };
 
 use super::ConflatedFeature;
-use crate::{matchers::OsmCandidate, tables::StringPool, utils::UtcTimestamp};
+use crate::{
+    geometry::GeometryTally, matchers::OsmCandidate, tables::StringPool, utils::UtcTimestamp,
+};
 
 pub struct ParquetWriter {
     path: PathBuf,
@@ -35,6 +38,9 @@ pub struct ParquetWriter {
     last_s2_cell_id: u64,
     rows_in_group: usize,
     max_rows_per_group: usize,
+    // Set aside in `create()`, written out (together with `geo`) only in
+    // `close()` -- see `close()`'s doc comment.
+    provenance_bom: String,
 
     atp_present: NullBufferBuilder,
     atp_tags: MapBuilder<StringBuilder, StringBuilder>,
@@ -43,6 +49,11 @@ pub struct ParquetWriter {
     atp_fetched_timestamps: TimestampMillisecondBuilder,
     atp_fetched_spiders: StringBuilder,
     atp_geometries: BinaryBuilder,
+    // Per-type counts and largest-geometry tracking for this column,
+    // across the whole file -- becomes this column's `geometry_types` in
+    // the GeoParquet `geo` metadata, and an INFO summary, both written
+    // in `close()`.
+    atp_geometry_tally: GeometryTally,
 
     osm_present: NullBufferBuilder,
     osm_types: StringBuilder,
@@ -54,6 +65,8 @@ pub struct ParquetWriter {
     osm_way_members: ListBuilder<UInt64Builder>,
     osm_relation_members: ListBuilder<StructBuilder>,
     osm_geometries: BinaryBuilder,
+    // See `atp_geometry_tally` above.
+    osm_geometry_tally: GeometryTally,
 }
 
 /// A single row in the conflated parquet file.
@@ -109,10 +122,25 @@ pub struct ParquetRow {
 /// `org.cyclonedx.bom` follows that same reverse-DNS-style namespacing.
 const PROVENANCE_KEY: &str = "org.cyclonedx.bom";
 
+/// Key under which this file's [GeoParquet](https://geoparquet.org/)
+/// metadata is stored -- required by the spec to be named exactly
+/// `geo`. Targets [GeoParquet 2.0-rc.1](https://github.com/opengeospatial/geoparquet/blob/v2.0.0-rc.1/format-specs/geoparquet.md),
+/// the newest available at the time this was written (2.0.0 hasn't
+/// had a final release yet, but the RC's on-disk format is what the
+/// eventual 2.0.0 will also expect -- the `version` field itself is a
+/// fixed `"2.0.0"` string in both). Unlike `PROVENANCE_KEY` above,
+/// this can't be built until every row has been written -- see
+/// `close()` -- because `geometry_types` below depends on what
+/// geometries actually ended up in the file.
+const GEO_METADATA_KEY: &str = "geo";
+
 impl ParquetWriter {
     /// `provenance_bom` is the CycloneDX document from `crate::provenance`,
     /// already serialized to a JSON string -- embedded verbatim as this
-    /// file's `PROVENANCE_KEY` key-value metadata.
+    /// file's `PROVENANCE_KEY` key-value metadata once `close()` writes
+    /// it out (see `close()`'s own doc comment for why this is deferred
+    /// rather than passed to `WriterProperties` here, even though the
+    /// value itself is already known at this point).
     pub fn create(
         path: &Path,
         max_rows_per_group: usize,
@@ -124,10 +152,6 @@ impl ParquetWriter {
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::try_new(22)?))
             .set_max_row_group_row_count(Some(max_rows_per_group))
-            .set_key_value_metadata(Some(vec![KeyValue::new(
-                PROVENANCE_KEY.to_string(),
-                provenance_bom.to_string(),
-            )]))
             .set_column_bloom_filter_enabled(Self::column_path("atp.fetched.spider"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.key"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.value"), true)
@@ -148,6 +172,7 @@ impl ParquetWriter {
             last_s2_cell_id: 0,
             rows_in_group: 0,
             max_rows_per_group,
+            provenance_bom: provenance_bom.to_string(),
 
             atp_present: NullBufferBuilder::new(max_rows_per_group),
             atp_tags: Self::new_key_value_map_builder(max_rows_per_group),
@@ -162,6 +187,7 @@ impl ParquetWriter {
                 /* item_capacity */ max_rows_per_group,
                 /* data_capacity */ max_rows_per_group * 21,
             ),
+            atp_geometry_tally: GeometryTally::default(),
 
             osm_present: NullBufferBuilder::new(max_rows_per_group),
             // TODO: Use dictionary instead of string for osm_types?
@@ -192,6 +218,7 @@ impl ParquetWriter {
                 /* item_capacity */ max_rows_per_group,
                 /* data_capacity */ max_rows_per_group * 21,
             ),
+            osm_geometry_tally: GeometryTally::default(),
         })
     }
 
@@ -262,8 +289,14 @@ impl ParquetWriter {
                     .expect("atp_fetched")
                     .unix_timestamp_millis(),
             );
-            self.atp_fetched_spiders.append_value(atp_spider);
             self.atp_geometries.append_value(&row.atp_shape_wkb);
+            // ATP doesn't have stable feature IDs (unlike OSM), so the
+            // spider is the best clue we can log if this geometry turns
+            // out to be the largest one written -- borrow it for that
+            // before handing it to `append_value` below.
+            self.atp_geometry_tally
+                .record(&row.atp_shape_wkb, || atp_spider.clone());
+            self.atp_fetched_spiders.append_value(atp_spider);
         } else {
             self.atp_present.append_null();
             self.atp_tags.append(false)?;
@@ -274,13 +307,15 @@ impl ParquetWriter {
 
         if let Some(osm_id) = row.osm_id {
             self.osm_present.append_non_null();
-            self.osm_types.append_value(match osm_id.get() % 10 {
+            let osm_type_str = match osm_id.get() % 10 {
                 1 => "node",
                 2 => "way",
                 3 => "relation",
                 _ => panic!("osm_id {} with unexpected last digit", osm_id.get()),
-            });
-            self.osm_ids.append_value(osm_id.get() / 10);
+            };
+            let osm_plain_id = osm_id.get() / 10;
+            self.osm_types.append_value(osm_type_str);
+            self.osm_ids.append_value(osm_plain_id);
 
             for (key, value) in row.osm_tags.iter() {
                 self.osm_tags.keys().append_value(key);
@@ -346,6 +381,9 @@ impl ParquetWriter {
             }
 
             self.osm_geometries.append_value(&row.osm_shape_wkb);
+            self.osm_geometry_tally.record(&row.osm_shape_wkb, || {
+                format!("{osm_type_str}/{osm_plain_id}")
+            });
         } else {
             self.osm_present.append_null();
             self.osm_types.append_value("");
@@ -367,9 +405,76 @@ impl ParquetWriter {
         if self.rows_in_group > 0 {
             self.write_row_group()?;
         }
+
+        self.atp_geometry_tally
+            .log("conflate.write: atp_geometry geometry types");
+        self.osm_geometry_tally
+            .log("conflate.write: osm_geometry geometry types");
+
+        // Both of this file's key-value metadata entries are set here,
+        // uniformly, via `append_key_value_metadata` -- rather than
+        // `provenance_bom` going through `WriterProperties` up front and
+        // only `geo` being added here -- even though `provenance_bom`
+        // itself is known before the first row is written. `geo` has to
+        // be added late regardless (see `GEO_METADATA_KEY`: its
+        // `geometry_types` isn't known until every row has been
+        // written), so setting both the same way keeps there from being
+        // two different places in this file where output metadata gets
+        // set, which would otherwise force a reader to know which one
+        // applies to which key.
+        self.writer.append_key_value_metadata(KeyValue::new(
+            PROVENANCE_KEY.to_string(),
+            self.provenance_bom.clone(),
+        ));
+        self.writer.append_key_value_metadata(KeyValue::new(
+            GEO_METADATA_KEY.to_string(),
+            self.geo_metadata_json(),
+        ));
         self.writer.close()?;
         std::fs::rename(self.tmp_path, self.path)?;
         Ok(())
+    }
+
+    /// Builds this file's [GeoParquet `geo`
+    /// metadata](https://github.com/opengeospatial/geoparquet/blob/v2.0.0-rc.1/format-specs/geoparquet.md#metadata),
+    /// naming `osm_geometry` as the `primary_column` -- OpenStreetMap is
+    /// the dataset a reader is actually meant to correct, so it's the
+    /// more natural default geometry for a GeoParquet-aware tool to
+    /// display. `crs` is deliberately omitted on both columns: it
+    /// defaults to OGC:CRS84 per spec, which is the same CRS
+    /// `new_geo_field` requests for the columns' native Parquet
+    /// `GEOGRAPHY` logical type -- so the two stay consistent (both
+    /// resolving to OGC:CRS84) without having to spell out a PROJJSON
+    /// object here.
+    ///
+    /// (`parquet-tools meta`/DuckDB show the native logical type's own
+    /// `crs`/`algorithm` sub-fields as unset, which looked like a
+    /// `parquet`-rs bug at first glance -- but it isn't: per
+    /// `parquet::arrow::schema::extension::logical_type_for_binary`
+    /// (`parquet` 59.2), a lon/lat CRS and `Spherical` edges are each
+    /// canonicalized to `None` *because* those are themselves the
+    /// Parquet spec's own defaults for `GEOGRAPHY` -- the same
+    /// omit-if-default encoding GeoParquet's own `geo` metadata uses
+    /// for `crs`. Confirmed with an isolated repro against plain
+    /// `arrow`/`parquet`/`parquet-geospatial`, independent of this
+    /// pipeline, before concluding that -- no bug to report upstream.)
+    fn geo_metadata_json(&self) -> String {
+        let column_metadata = |tally: &GeometryTally| {
+            json!({
+                "encoding": "WKB",
+                "geometry_types": tally.geoparquet_types(),
+                "edges": "spherical",
+            })
+        };
+        json!({
+            "version": "2.0.0",
+            "primary_column": "osm_geometry",
+            "columns": {
+                "osm_geometry": column_metadata(&self.osm_geometry_tally),
+                "atp_geometry": column_metadata(&self.atp_geometry_tally),
+            },
+        })
+        .to_string()
     }
 
     fn write_row_group(&mut self) -> Result<()> {
@@ -401,10 +506,17 @@ impl ParquetWriter {
             vec![
                 Arc::new(self.atp_tags.finish()) as ArrayRef,
                 Arc::new(atp_fetched_struct) as ArrayRef,
-                Arc::new(self.atp_geometries.finish()) as ArrayRef,
             ],
             self.atp_present.finish(),
         )?;
+        // Top-level, not nested inside `atp_struct` -- GeoParquet
+        // requires geometry columns to live at the schema root (see
+        // `GEO_METADATA_KEY`'s doc comment). Its own null buffer
+        // already mirrors "ATP present on this row" -- `write()` calls
+        // `append_null()`/`append_value()` on this builder in lockstep
+        // with `atp_present` above, so no null buffer needs to be
+        // shared between the two.
+        let atp_geometry = self.atp_geometries.finish();
 
         let osm_fields = match self.schema.field_with_name("osm")?.data_type() {
             DataType::Struct(fields) => fields,
@@ -439,16 +551,19 @@ impl ParquetWriter {
                 Arc::new(modified_struct) as ArrayRef,
                 Arc::new(self.osm_way_members.finish()) as ArrayRef,
                 Arc::new(self.osm_relation_members.finish()) as ArrayRef,
-                Arc::new(self.osm_geometries.finish()) as ArrayRef,
             ],
             self.osm_present.finish(),
         )?;
+        // See `atp_geometry` above.
+        let osm_geometry = self.osm_geometries.finish();
 
         let batch = RecordBatch::try_new(
             self.schema.clone(),
             vec![
                 Arc::new(atp_struct) as ArrayRef,
+                Arc::new(atp_geometry) as ArrayRef,
                 Arc::new(osm_struct) as ArrayRef,
+                Arc::new(osm_geometry) as ArrayRef,
             ],
         )?;
 
@@ -662,15 +777,14 @@ mod schema {
             NOT_NULLABLE,
         );
 
-        let atp = Field::new_struct(
-            "atp",
-            vec![
-                new_key_value_field("tags"),
-                fetched,
-                new_geo_field("geometry", NOT_NULLABLE),
-            ],
-            NULLABLE,
-        );
+        let atp = Field::new_struct("atp", vec![new_key_value_field("tags"), fetched], NULLABLE);
+
+        // Top-level, not nested inside `atp`/`osm` -- GeoParquet
+        // requires geometry columns to live at the schema root (a
+        // geometry MUST NOT be a group field or nested in a group).
+        // Nullable, mirroring `atp`/`osm`'s own nullability: a row with
+        // no OSM match leaves `osm_geometry` null, and vice versa.
+        let atp_geometry = new_geo_field("atp_geometry", NULLABLE);
 
         let modified = Field::new_struct(
             "modified",
@@ -703,12 +817,12 @@ mod schema {
                     ),
                     NULLABLE,
                 ),
-                new_geo_field("geometry", NOT_NULLABLE),
             ],
             NULLABLE,
         );
+        let osm_geometry = new_geo_field("osm_geometry", NULLABLE);
 
-        Schema::new(vec![atp, osm])
+        Schema::new(vec![atp, atp_geometry, osm, osm_geometry])
     }
 
     /// Fields of one `osm.relation_members` list entry: the member's own
@@ -738,8 +852,14 @@ mod schema {
         )
     }
 
+    /// `"OGC:CRS84"`, not `"EPSG:4326"`: the two describe the same
+    /// datum, but `OGC:CRS84` is also GeoParquet's own default CRS when
+    /// a column's `geo` metadata omits `crs` (see `geo_metadata_json`)
+    /// -- using it here too means the native Parquet `GEOGRAPHY`
+    /// logical type and the GeoParquet metadata agree without having to
+    /// spell out a PROJJSON object in the latter.
     fn new_geo_field(name: &str, nullable: bool) -> Field {
-        let metadata = WkbMetadata::new(Some("EPSG:4326"), Some(WkbEdges::Spherical));
+        let metadata = WkbMetadata::new(Some("OGC:CRS84"), Some(WkbEdges::Spherical));
         Field::new(name, DataType::Binary, nullable)
             .with_extension_type(WkbType::new(Some(metadata)))
     }
