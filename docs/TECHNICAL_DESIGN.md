@@ -39,10 +39,10 @@ POIs, even though those still make up most of what it processes
 today.
 
 This project compares that combined data against what’s already in
-OpenStreetMap and surfaces the difference, so volunteers spend their
-time reviewing and confirming candidate edits instead of manually
-re-discovering places that were already public knowledge somewhere
-else.
+OpenStreetMap and surfaces the difference, so volunteers can spend
+their time more meaningfully. They review and confirm candidate edits
+instead of manually re-discovering places that were already public
+knowledge somewhere else.
 
 ### What conflation is
 
