@@ -192,10 +192,12 @@ never lost.
   [`src/tables/feature_index.rs`](../src/tables/feature_index.rs)).
 - **`conflate`**
   ([`src/pipeline/conflate/mod.rs`](../src/pipeline/conflate/mod.rs))
-  — for every AllThePlaces feature, queries the OSM index for nearby
-  candidates and scores them (see
-  [`src/matchers/`](../src/matchers/)), writing one row per ATP
-  feature — matched or not — to `conflated.parquet`. See
+  — a single scan over AllThePlaces (the smaller of the two datasets),
+  in spatial order; for each feature, builds a search cap around its
+  centroid and queries `OsmFeatureIndex` for OSM candidates inside it,
+  scoring each (see [`src/matchers/`](../src/matchers/)) and keeping
+  the best. Writes one row per ATP feature — matched or not — to
+  `conflated.parquet`. See
   [`docs/outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)
   for that file’s schema.
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
@@ -210,6 +212,19 @@ never lost.
   ([`src/pipeline/upload.rs`](../src/pipeline/upload.rs)) — push the
   data output, the tiles, and the run’s own log to S3-compatible
   storage.
+
+### Why `conflate` doesn’t need its own cache
+
+`OsmFeatureIndex` is memory-mapped rather than backed by an explicit
+decode cache. The bet: since `conflate` visits ATP in spatial order,
+the OSM candidates it looks up tend to cluster the same way, so the
+OS/CPU page cache keeps the relevant part of a planet-scale index
+resident on its own, without this project having to build and tune a
+cache of its own. That’s a hardware-dependent assumption, not a given
+— it was validated by actually running the pipeline on production
+hardware, not just a development machine, since page-cache behavior
+under real memory pressure and container limits doesn’t reliably
+transfer from a laptop.
 
 ### Code structure
 
