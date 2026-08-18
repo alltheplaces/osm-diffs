@@ -1,7 +1,6 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use std::path::PathBuf;
 
-mod atp;
 mod edit_suggesters;
 mod geometry;
 mod logging;

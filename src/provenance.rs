@@ -7,14 +7,13 @@
 //! `pipeline::conflate::writer`).
 //!
 //! Reads each input source's metadata straight back from `workdir` --
-//! [`AtpMetadata`] via [`crate::atp::read_cached_metadata`],
+//! [`AtpMetadata`] via [`crate::pipeline::read_cached_atp_metadata`],
 //! [`OsmMetadata`] via [`crate::pipeline::read_cached_metadata`] -- rather than
 //! having it threaded through from `import_atp`/`import_osm`'s return
 //! values, so this stays decoupled from however those importers (and
 //! whatever indexing they feed into) end up wired together.
 
-use crate::atp::{self, AtpMetadata};
-use crate::pipeline::{self, OsmMetadata};
+use crate::pipeline::{self, AtpMetadata, OsmMetadata};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -110,8 +109,8 @@ pub fn build_bom_for_conflated_parquet(
     pipeline_run_id: &str,
     pipeline_start_time: UtcDateTime,
 ) -> Result<Value> {
-    let atp_metadata =
-        atp::read_cached_metadata(workdir).context("could not read AllThePlaces provenance")?;
+    let atp_metadata = pipeline::read_cached_atp_metadata(workdir)
+        .context("could not read AllThePlaces provenance")?;
     let osm_metadata = pipeline::read_cached_metadata(workdir)
         .context("could not read OpenStreetMap provenance")?;
 
