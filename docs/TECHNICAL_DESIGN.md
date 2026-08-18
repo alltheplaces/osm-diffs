@@ -19,22 +19,25 @@ apply to OpenStreetMap.
 
 ### Why OpenStreetMap needs this
 
-OpenStreetMap is comprehensive for roads and administrative boundaries,
-but point-of-interest (POI) coverage is uneven: a shop, restaurant, or
-other business only ends up on the map if a volunteer happened to
-notice it and add it by hand. Meanwhile, most retail and hospitality
-chains already publish exactly this information on their own websites
-— store locators, branch listings — because they need customers to
-find them. AllThePlaces exists to scrape that already-public data at
-scale — and increasingly, beyond individual chains' own websites, also
-ingests Open Government Data published under clear open licenses
-(municipal infrastructure, public datasets, …), so this project's
-scope isn't limited to retail POIs either, even though those remain
-the majority of what it processes today. This project exists to
-compare that combined data against what’s already in OpenStreetMap and
-surface the difference, so volunteers spend their time reviewing and
-confirming candidate edits instead of manually re-discovering places
-that were already public knowledge somewhere else.
+OpenStreetMap's coverage of roads and administrative boundaries is
+comprehensive. Points of interest are a different story: a shop,
+restaurant, or other business only ends up on the map if a volunteer
+happened to notice it and add it by hand — while most retail and
+hospitality chains already publish exactly this information
+themselves, as store locators and branch listings, because they want
+customers to find them.
+
+AllThePlaces exists to scrape that already-public data at scale.
+Increasingly, it also ingests Open Government Data published under
+clear open licenses — municipal infrastructure, public datasets, and
+more — so its scope reaches beyond retail POIs, even though those
+still make up most of what it processes today.
+
+This project compares that combined data against what’s already in
+OpenStreetMap and surfaces the difference, so volunteers spend their
+time reviewing and confirming candidate edits instead of manually
+re-discovering places that were already public knowledge somewhere
+else.
 
 ### What conflation is
 
