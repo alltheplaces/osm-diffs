@@ -36,10 +36,9 @@ use std::time::Instant;
 use wkb::reader::read_wkb;
 
 /// One suggested change to an existing OpenStreetMap feature -- never a
-/// suggestion to create a new feature (see the TODO on
-/// `crate::places::Place::to_geojson`, which this mirrors for now: we
-/// only ever suggest edits for AllThePlaces features `conflate()` has
-/// matched to something that already exists in OSM).
+/// suggestion to create a new feature: we only ever suggest edits for
+/// AllThePlaces features `conflate()` has matched to something that
+/// already exists in OSM.
 ///
 /// `Ord`/`Eq` are implemented by hand (not derived) because they only
 /// need to compare `osm_id` -- that's the only thing `write_edits`'s
