@@ -13,9 +13,11 @@ and up to date.
 
 At the moment, this is still work in progress; the pipeline does not
 yet run on a weekly basis. Once it does, the plan is to automatically
-feed edit proposals to [MapRoulette](https://maproulette.org/) where
-human users can manually check each edit before applying it to
-OpenStreetMap.
+feed edit proposals to tools such as
+[MapRoulette](https://maproulette.org/), where human users can
+manually check each edit before applying it to OpenStreetMap — which
+edits go where is still being worked out, see
+[#696](https://github.com/alltheplaces/osm-diffs/issues/696).
 
 New here? See [`docs/CONTRIBUTING.md`](docs/CONTRIBUTING.md) to get
 started, and [`docs/`](docs/) generally for testing, cutting a
