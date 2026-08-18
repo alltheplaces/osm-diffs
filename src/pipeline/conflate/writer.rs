@@ -17,7 +17,9 @@ use parquet::{
     schema::types::ColumnPath,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
+    collections::BTreeSet,
     fs::File,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -43,6 +45,12 @@ pub struct ParquetWriter {
     atp_fetched_timestamps: TimestampMillisecondBuilder,
     atp_fetched_spiders: StringBuilder,
     atp_geometries: BinaryBuilder,
+    // Distinct WKB geometry types seen on this side so far (e.g.
+    // "Point", "Polygon") -- becomes this column's `geometry_types` in
+    // the GeoParquet `geo` metadata written in `close()`. A `BTreeSet`,
+    // not a `HashSet`, so the metadata's array is written in a
+    // deterministic order across runs.
+    atp_geometry_types: BTreeSet<&'static str>,
 
     osm_present: NullBufferBuilder,
     osm_types: StringBuilder,
@@ -54,6 +62,8 @@ pub struct ParquetWriter {
     osm_way_members: ListBuilder<UInt64Builder>,
     osm_relation_members: ListBuilder<StructBuilder>,
     osm_geometries: BinaryBuilder,
+    // See `atp_geometry_types` above.
+    osm_geometry_types: BTreeSet<&'static str>,
 }
 
 /// A single row in the conflated parquet file.
@@ -109,6 +119,18 @@ pub struct ParquetRow {
 /// `org.cyclonedx.bom` follows that same reverse-DNS-style namespacing.
 const PROVENANCE_KEY: &str = "org.cyclonedx.bom";
 
+/// Key under which this file's [GeoParquet](https://geoparquet.org/)
+/// metadata is stored -- required by the spec to be named exactly
+/// `geo`. Targets [GeoParquet 2.0-rc.1](https://github.com/opengeospatial/geoparquet/blob/v2.0.0-rc.1/format-specs/geoparquet.md),
+/// the newest available at the time this was written (2.0.0 hasn't
+/// had a final release yet, but the RC's on-disk format is what the
+/// eventual 2.0.0 will also expect -- the `version` field itself is a
+/// fixed `"2.0.0"` string in both). Unlike `PROVENANCE_KEY` above,
+/// this can't be built until every row has been written -- see
+/// `close()` -- because `geometry_types` below depends on what
+/// geometries actually ended up in the file.
+const GEO_METADATA_KEY: &str = "geo";
+
 impl ParquetWriter {
     /// `provenance_bom` is the CycloneDX document from `crate::provenance`,
     /// already serialized to a JSON string -- embedded verbatim as this
@@ -162,6 +184,7 @@ impl ParquetWriter {
                 /* item_capacity */ max_rows_per_group,
                 /* data_capacity */ max_rows_per_group * 21,
             ),
+            atp_geometry_types: BTreeSet::new(),
 
             osm_present: NullBufferBuilder::new(max_rows_per_group),
             // TODO: Use dictionary instead of string for osm_types?
@@ -192,6 +215,7 @@ impl ParquetWriter {
                 /* item_capacity */ max_rows_per_group,
                 /* data_capacity */ max_rows_per_group * 21,
             ),
+            osm_geometry_types: BTreeSet::new(),
         })
     }
 
@@ -264,6 +288,8 @@ impl ParquetWriter {
             );
             self.atp_fetched_spiders.append_value(atp_spider);
             self.atp_geometries.append_value(&row.atp_shape_wkb);
+            self.atp_geometry_types
+                .insert(wkb_geometry_type_name(&row.atp_shape_wkb)?);
         } else {
             self.atp_present.append_null();
             self.atp_tags.append(false)?;
@@ -346,6 +372,8 @@ impl ParquetWriter {
             }
 
             self.osm_geometries.append_value(&row.osm_shape_wkb);
+            self.osm_geometry_types
+                .insert(wkb_geometry_type_name(&row.osm_shape_wkb)?);
         } else {
             self.osm_present.append_null();
             self.osm_types.append_value("");
@@ -367,9 +395,56 @@ impl ParquetWriter {
         if self.rows_in_group > 0 {
             self.write_row_group()?;
         }
+        // Only knowable now that every row has been written (see
+        // `GEO_METADATA_KEY`) -- `append_key_value_metadata` folds this
+        // into the footer `writer.close()` is about to flush, same as
+        // if it had been passed to `WriterProperties` up front.
+        self.writer.append_key_value_metadata(KeyValue::new(
+            GEO_METADATA_KEY.to_string(),
+            self.geo_metadata_json(),
+        ));
         self.writer.close()?;
         std::fs::rename(self.tmp_path, self.path)?;
         Ok(())
+    }
+
+    /// Builds this file's [GeoParquet `geo`
+    /// metadata](https://github.com/opengeospatial/geoparquet/blob/v2.0.0-rc.1/format-specs/geoparquet.md#metadata),
+    /// naming `osm_geometry` as the `primary_column` -- OpenStreetMap is
+    /// the dataset a reader is actually meant to correct, so it's the
+    /// more natural default geometry for a GeoParquet-aware tool to
+    /// display. `crs` is deliberately omitted on both columns: it
+    /// defaults to OGC:CRS84 per spec, which is the same CRS
+    /// `new_geo_field` requests for the columns' native Parquet
+    /// `GEOGRAPHY` logical type -- so the two stay consistent (both
+    /// resolving to OGC:CRS84) without having to spell out a PROJJSON
+    /// object here. (Empirically, `parquet`-rs 59.2 doesn't actually
+    /// carry that requested `crs` through to the native logical type's
+    /// own `crs` sub-field -- `parquet-tools meta`/DuckDB both show it
+    /// unset there, even though it does show up correctly in the
+    /// Arrow-extension `ARROW:schema` metadata. Doesn't affect
+    /// conformance here, since "unset" already means OGC:CRS84 on both
+    /// sides, but if a future `parquet`/`parquet-geospatial` upgrade
+    /// starts requesting a non-default CRS, this comment -- and
+    /// whether `gpio check spec`/`gpio check all` still pass -- is
+    /// worth revisiting.)
+    fn geo_metadata_json(&self) -> String {
+        let column_metadata = |geometry_types: &BTreeSet<&'static str>| {
+            json!({
+                "encoding": "WKB",
+                "geometry_types": geometry_types.iter().collect::<Vec<_>>(),
+                "edges": "spherical",
+            })
+        };
+        json!({
+            "version": "2.0.0",
+            "primary_column": "osm_geometry",
+            "columns": {
+                "osm_geometry": column_metadata(&self.osm_geometry_types),
+                "atp_geometry": column_metadata(&self.atp_geometry_types),
+            },
+        })
+        .to_string()
     }
 
     fn write_row_group(&mut self) -> Result<()> {
@@ -401,10 +476,17 @@ impl ParquetWriter {
             vec![
                 Arc::new(self.atp_tags.finish()) as ArrayRef,
                 Arc::new(atp_fetched_struct) as ArrayRef,
-                Arc::new(self.atp_geometries.finish()) as ArrayRef,
             ],
             self.atp_present.finish(),
         )?;
+        // Top-level, not nested inside `atp_struct` -- GeoParquet
+        // requires geometry columns to live at the schema root (see
+        // `GEO_METADATA_KEY`'s doc comment). Its own null buffer
+        // already mirrors "ATP present on this row" -- `write()` calls
+        // `append_null()`/`append_value()` on this builder in lockstep
+        // with `atp_present` above, so no null buffer needs to be
+        // shared between the two.
+        let atp_geometry = self.atp_geometries.finish();
 
         let osm_fields = match self.schema.field_with_name("osm")?.data_type() {
             DataType::Struct(fields) => fields,
@@ -439,16 +521,19 @@ impl ParquetWriter {
                 Arc::new(modified_struct) as ArrayRef,
                 Arc::new(self.osm_way_members.finish()) as ArrayRef,
                 Arc::new(self.osm_relation_members.finish()) as ArrayRef,
-                Arc::new(self.osm_geometries.finish()) as ArrayRef,
             ],
             self.osm_present.finish(),
         )?;
+        // See `atp_geometry` above.
+        let osm_geometry = self.osm_geometries.finish();
 
         let batch = RecordBatch::try_new(
             self.schema.clone(),
             vec![
                 Arc::new(atp_struct) as ArrayRef,
+                Arc::new(atp_geometry) as ArrayRef,
                 Arc::new(osm_struct) as ArrayRef,
+                Arc::new(osm_geometry) as ArrayRef,
             ],
         )?;
 
@@ -644,6 +729,27 @@ fn wkb(shape: &geo::Geometry<f64>) -> Vec<u8> {
     buf
 }
 
+/// The GeoParquet `geometry_types` name for a WKB-encoded geometry
+/// (e.g. `"Point"`, `"Polygon"`, `"MultiPolygon"`) -- read straight off
+/// the WKB header (byte order + type code) via `wkb::reader`, without
+/// decoding any coordinates.
+fn wkb_geometry_type_name(wkb: &[u8]) -> Result<&'static str> {
+    use ::wkb::reader::GeometryType;
+    let geometry_type = ::wkb::reader::read_wkb(wkb)
+        .context("failed to read WKB header for geometry_types")?
+        .geometry_type();
+    Ok(match geometry_type {
+        GeometryType::Point => "Point",
+        GeometryType::LineString => "LineString",
+        GeometryType::Polygon => "Polygon",
+        GeometryType::MultiPoint => "MultiPoint",
+        GeometryType::MultiLineString => "MultiLineString",
+        GeometryType::MultiPolygon => "MultiPolygon",
+        GeometryType::GeometryCollection => "GeometryCollection",
+        other => anyhow::bail!("unsupported WKB geometry type {other:?}"),
+    })
+}
+
 mod schema {
     use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
     use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType};
@@ -662,15 +768,14 @@ mod schema {
             NOT_NULLABLE,
         );
 
-        let atp = Field::new_struct(
-            "atp",
-            vec![
-                new_key_value_field("tags"),
-                fetched,
-                new_geo_field("geometry", NOT_NULLABLE),
-            ],
-            NULLABLE,
-        );
+        let atp = Field::new_struct("atp", vec![new_key_value_field("tags"), fetched], NULLABLE);
+
+        // Top-level, not nested inside `atp`/`osm` -- GeoParquet
+        // requires geometry columns to live at the schema root (a
+        // geometry MUST NOT be a group field or nested in a group).
+        // Nullable, mirroring `atp`/`osm`'s own nullability: a row with
+        // no OSM match leaves `osm_geometry` null, and vice versa.
+        let atp_geometry = new_geo_field("atp_geometry", NULLABLE);
 
         let modified = Field::new_struct(
             "modified",
@@ -703,12 +808,12 @@ mod schema {
                     ),
                     NULLABLE,
                 ),
-                new_geo_field("geometry", NOT_NULLABLE),
             ],
             NULLABLE,
         );
+        let osm_geometry = new_geo_field("osm_geometry", NULLABLE);
 
-        Schema::new(vec![atp, osm])
+        Schema::new(vec![atp, atp_geometry, osm, osm_geometry])
     }
 
     /// Fields of one `osm.relation_members` list entry: the member's own
@@ -738,8 +843,14 @@ mod schema {
         )
     }
 
+    /// `"OGC:CRS84"`, not `"EPSG:4326"`: the two describe the same
+    /// datum, but `OGC:CRS84` is also GeoParquet's own default CRS when
+    /// a column's `geo` metadata omits `crs` (see `geo_metadata_json`)
+    /// -- using it here too means the native Parquet `GEOGRAPHY`
+    /// logical type and the GeoParquet metadata agree without having to
+    /// spell out a PROJJSON object in the latter.
     fn new_geo_field(name: &str, nullable: bool) -> Field {
-        let metadata = WkbMetadata::new(Some("EPSG:4326"), Some(WkbEdges::Spherical));
+        let metadata = WkbMetadata::new(Some("OGC:CRS84"), Some(WkbEdges::Spherical));
         Field::new(name, DataType::Binary, nullable)
             .with_extension_type(WkbType::new(Some(metadata)))
     }

@@ -289,7 +289,10 @@ fn extract_conflated_row(batch: &RecordBatch, row: usize) -> Result<Option<Confl
         osm_tags: get_tags(osm, "tags", row)?,
         osm_changeset: get_u64(modified, "changeset", row)?,
         osm_version: get_u32(modified, "version", row)?,
-        osm_geometry_wkb: get_binary(osm, "geometry", row)?,
+        // Top-level, not nested inside `osm` -- GeoParquet 2.0 requires
+        // geometry columns to live at the schema root (see
+        // `pipeline::conflate::writer::GEO_METADATA_KEY`'s doc comment).
+        osm_geometry_wkb: get_batch_binary(batch, "osm_geometry", row)?,
     }))
 }
 
@@ -338,12 +341,18 @@ fn get_u32(s: &StructArray, name: &str, row: usize) -> Result<u32> {
         .value(row))
 }
 
-fn get_binary(s: &StructArray, name: &str, row: usize) -> Result<Vec<u8>> {
-    Ok(s.column_by_name(name)
-        .with_context(|| format!("missing field '{name}'"))?
+/// Reads a top-level `RecordBatch` column -- `osm_geometry`/`atp_geometry`
+/// live at the schema root, not nested inside the `osm`/`atp` structs
+/// (see `pipeline::conflate::writer::GEO_METADATA_KEY`'s doc comment),
+/// so this doesn't go through `StructArray` the way the `get_*` helpers
+/// above do.
+fn get_batch_binary(batch: &RecordBatch, name: &str, row: usize) -> Result<Vec<u8>> {
+    Ok(batch
+        .column_by_name(name)
+        .with_context(|| format!("missing column '{name}'"))?
         .as_any()
         .downcast_ref::<BinaryArray>()
-        .with_context(|| format!("field '{name}' is not binary"))?
+        .with_context(|| format!("column '{name}' is not binary"))?
         .value(row)
         .to_vec())
 }
