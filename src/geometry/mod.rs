@@ -46,11 +46,13 @@ mod grid_tests;
 mod line_stitcher;
 mod polygon_assembler;
 mod polygon_union;
+mod wkb_type;
 
 pub use geometry_builder::{GeometryBuilder, PolygonFill};
 pub use line_stitcher::LineStitcher;
 pub use polygon_assembler::PolygonAssembler;
 pub use polygon_union::PolygonUnion;
+pub use wkb_type::{WkbGeometryType, wkb_geometry_type};
 
 // =======================================================================
 // build_points

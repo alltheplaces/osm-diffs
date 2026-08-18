@@ -74,10 +74,11 @@ A few things worth calling out that aren’t obvious from the above:
 
 `atp_geometry`/`osm_geometry` are standard [OGC Simple
 Features](https://postgis.net/workshops/postgis-intro/geometries.html)
-geometries — the same model QGIS, PostGIS, and most other GIS tools
-already use. `atp_geometry` is whatever AllThePlaces’ own scrape
-provides for that feature — nearly always a point, though a handful of
-sources provide lines or polygons instead. `osm_geometry` is the
+geometries — the same model QGIS and PostGIS use, and that formats
+like GeoJSON and GeoPackage are built on too. `atp_geometry` is
+whatever AllThePlaces’ upstream source provides for that feature —
+nearly always a point, though a handful of sources provide lines or
+polygons instead. `osm_geometry` is the
 matched OpenStreetMap feature’s shape: a polygon for an area, a line
 for a way that isn’t an area, a point for a node. Both columns use
 [OGC:CRS84](https://en.wikipedia.org/wiki/World_Geodetic_System)
@@ -88,7 +89,10 @@ default CRS, so it isn’t spelled out explicitly in the file.
 though: we automatically repair certain geometry errors (like
 self-intersecting lines), and if a shape would otherwise end up with a
 very large number of coordinates, we simplify it — trading a small
-amount of positional accuracy for a smaller file, currently using a
+amount of positional accuracy so that you, the downstream client, get
+a geometry that’s directly usable for display without having to
+simplify it yourself first (say, before sending it to a mobile phone
+over a cellular connection). We currently do this using a
 topology-preserving variant of the
 [Visvalingam–Whyatt algorithm](https://en.wikipedia.org/wiki/Visvalingam%E2%80%93Whyatt_algorithm)
 (this may change in the future). Treat `osm_geometry` as good enough

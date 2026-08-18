@@ -19,7 +19,6 @@ use parquet::{
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::{
-    collections::BTreeSet,
     fs::File,
     num::{NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -27,7 +26,12 @@ use std::{
 };
 
 use super::ConflatedFeature;
-use crate::{matchers::OsmCandidate, tables::StringPool, utils::UtcTimestamp};
+use crate::{
+    geometry::{WkbGeometryType, wkb_geometry_type},
+    matchers::OsmCandidate,
+    tables::StringPool,
+    utils::UtcTimestamp,
+};
 
 pub struct ParquetWriter {
     path: PathBuf,
@@ -37,6 +41,9 @@ pub struct ParquetWriter {
     last_s2_cell_id: u64,
     rows_in_group: usize,
     max_rows_per_group: usize,
+    // Set aside in `create()`, written out (together with `geo`) only in
+    // `close()` -- see `close()`'s doc comment.
+    provenance_bom: String,
 
     atp_present: NullBufferBuilder,
     atp_tags: MapBuilder<StringBuilder, StringBuilder>,
@@ -45,12 +52,11 @@ pub struct ParquetWriter {
     atp_fetched_timestamps: TimestampMillisecondBuilder,
     atp_fetched_spiders: StringBuilder,
     atp_geometries: BinaryBuilder,
-    // Distinct WKB geometry types seen on this side so far (e.g.
-    // "Point", "Polygon") -- becomes this column's `geometry_types` in
-    // the GeoParquet `geo` metadata written in `close()`. A `BTreeSet`,
-    // not a `HashSet`, so the metadata's array is written in a
-    // deterministic order across runs.
-    atp_geometry_types: BTreeSet<&'static str>,
+    // Per-type counts and largest-geometry tracking for this column,
+    // across the whole file -- becomes this column's `geometry_types` in
+    // the GeoParquet `geo` metadata, and an INFO summary, both written
+    // in `close()`.
+    atp_geometry_tally: GeometryTally,
 
     osm_present: NullBufferBuilder,
     osm_types: StringBuilder,
@@ -62,8 +68,8 @@ pub struct ParquetWriter {
     osm_way_members: ListBuilder<UInt64Builder>,
     osm_relation_members: ListBuilder<StructBuilder>,
     osm_geometries: BinaryBuilder,
-    // See `atp_geometry_types` above.
-    osm_geometry_types: BTreeSet<&'static str>,
+    // See `atp_geometry_tally` above.
+    osm_geometry_tally: GeometryTally,
 }
 
 /// A single row in the conflated parquet file.
@@ -131,10 +137,72 @@ const PROVENANCE_KEY: &str = "org.cyclonedx.bom";
 /// geometries actually ended up in the file.
 const GEO_METADATA_KEY: &str = "geo";
 
+/// Per-column bookkeeping accumulated while writing one of the two
+/// geometry columns: how many of each [`WkbGeometryType`] were written
+/// (becomes the GeoParquet `geo` metadata's `geometry_types`, and an
+/// INFO log line), and the single largest geometry seen so far, by byte
+/// size (also logged, together with a caller-supplied label identifying
+/// which row it came from -- e.g. "way/608979139" for OSM, a spider name
+/// for ATP -- so an unusually large geometry can be tracked down without
+/// having to scan the whole file).
+#[derive(Default)]
+struct GeometryTally {
+    counts: [u64; WkbGeometryType::ALL.len()],
+    largest_bytes: usize,
+    largest_label: String,
+}
+
+impl GeometryTally {
+    fn record(&mut self, wkb: &[u8], label: impl FnOnce() -> String) {
+        let index = WkbGeometryType::ALL
+            .iter()
+            .position(|t| *t == wkb_geometry_type(wkb))
+            .expect("WkbGeometryType::ALL covers every type wkb_geometry_type can return");
+        self.counts[index] += 1;
+        if wkb.len() > self.largest_bytes {
+            self.largest_bytes = wkb.len();
+            self.largest_label = label();
+        }
+    }
+
+    /// Distinct types actually seen, as GeoParquet `geometry_types`
+    /// strings -- e.g. `["Point"]`, or `["LineString", "Polygon"]`.
+    fn geoparquet_types(&self) -> Vec<&'static str> {
+        WkbGeometryType::ALL
+            .iter()
+            .zip(self.counts.iter())
+            .filter(|&(_, &count)| count > 0)
+            .map(|(t, _)| t.geoparquet_name())
+            .collect()
+    }
+
+    /// Logs this tally's per-type counts and largest geometry seen, at
+    /// INFO, as one structured record. `log::info!`'s field list has to
+    /// be literal field names, so the indices below are hardcoded --
+    /// they line up with [`WkbGeometryType::ALL`]'s declaration order.
+    fn log(&self, message: &str) {
+        log::info!(
+            point = self.counts[0],
+            line_string = self.counts[1],
+            polygon = self.counts[2],
+            multi_point = self.counts[3],
+            multi_line_string = self.counts[4],
+            multi_polygon = self.counts[5],
+            geometry_collection = self.counts[6],
+            largest_bytes = self.largest_bytes,
+            largest = self.largest_label.as_str();
+            "{}", message
+        );
+    }
+}
+
 impl ParquetWriter {
     /// `provenance_bom` is the CycloneDX document from `crate::provenance`,
     /// already serialized to a JSON string -- embedded verbatim as this
-    /// file's `PROVENANCE_KEY` key-value metadata.
+    /// file's `PROVENANCE_KEY` key-value metadata once `close()` writes
+    /// it out (see `close()`'s own doc comment for why this is deferred
+    /// rather than passed to `WriterProperties` here, even though the
+    /// value itself is already known at this point).
     pub fn create(
         path: &Path,
         max_rows_per_group: usize,
@@ -146,10 +214,6 @@ impl ParquetWriter {
         let properties = WriterProperties::builder()
             .set_compression(Compression::ZSTD(ZstdLevel::try_new(22)?))
             .set_max_row_group_row_count(Some(max_rows_per_group))
-            .set_key_value_metadata(Some(vec![KeyValue::new(
-                PROVENANCE_KEY.to_string(),
-                provenance_bom.to_string(),
-            )]))
             .set_column_bloom_filter_enabled(Self::column_path("atp.fetched.spider"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.key"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.value"), true)
@@ -170,6 +234,7 @@ impl ParquetWriter {
             last_s2_cell_id: 0,
             rows_in_group: 0,
             max_rows_per_group,
+            provenance_bom: provenance_bom.to_string(),
 
             atp_present: NullBufferBuilder::new(max_rows_per_group),
             atp_tags: Self::new_key_value_map_builder(max_rows_per_group),
@@ -184,7 +249,7 @@ impl ParquetWriter {
                 /* item_capacity */ max_rows_per_group,
                 /* data_capacity */ max_rows_per_group * 21,
             ),
-            atp_geometry_types: BTreeSet::new(),
+            atp_geometry_tally: GeometryTally::default(),
 
             osm_present: NullBufferBuilder::new(max_rows_per_group),
             // TODO: Use dictionary instead of string for osm_types?
@@ -215,7 +280,7 @@ impl ParquetWriter {
                 /* item_capacity */ max_rows_per_group,
                 /* data_capacity */ max_rows_per_group * 21,
             ),
-            osm_geometry_types: BTreeSet::new(),
+            osm_geometry_tally: GeometryTally::default(),
         })
     }
 
@@ -286,10 +351,14 @@ impl ParquetWriter {
                     .expect("atp_fetched")
                     .unix_timestamp_millis(),
             );
-            self.atp_fetched_spiders.append_value(atp_spider);
             self.atp_geometries.append_value(&row.atp_shape_wkb);
-            self.atp_geometry_types
-                .insert(wkb_geometry_type_name(&row.atp_shape_wkb)?);
+            // ATP doesn't have stable feature IDs (unlike OSM), so the
+            // spider is the best clue we can log if this geometry turns
+            // out to be the largest one written -- borrow it for that
+            // before handing it to `append_value` below.
+            self.atp_geometry_tally
+                .record(&row.atp_shape_wkb, || atp_spider.clone());
+            self.atp_fetched_spiders.append_value(atp_spider);
         } else {
             self.atp_present.append_null();
             self.atp_tags.append(false)?;
@@ -300,13 +369,15 @@ impl ParquetWriter {
 
         if let Some(osm_id) = row.osm_id {
             self.osm_present.append_non_null();
-            self.osm_types.append_value(match osm_id.get() % 10 {
+            let osm_type_str = match osm_id.get() % 10 {
                 1 => "node",
                 2 => "way",
                 3 => "relation",
                 _ => panic!("osm_id {} with unexpected last digit", osm_id.get()),
-            });
-            self.osm_ids.append_value(osm_id.get() / 10);
+            };
+            let osm_plain_id = osm_id.get() / 10;
+            self.osm_types.append_value(osm_type_str);
+            self.osm_ids.append_value(osm_plain_id);
 
             for (key, value) in row.osm_tags.iter() {
                 self.osm_tags.keys().append_value(key);
@@ -372,8 +443,9 @@ impl ParquetWriter {
             }
 
             self.osm_geometries.append_value(&row.osm_shape_wkb);
-            self.osm_geometry_types
-                .insert(wkb_geometry_type_name(&row.osm_shape_wkb)?);
+            self.osm_geometry_tally.record(&row.osm_shape_wkb, || {
+                format!("{osm_type_str}/{osm_plain_id}")
+            });
         } else {
             self.osm_present.append_null();
             self.osm_types.append_value("");
@@ -395,10 +467,27 @@ impl ParquetWriter {
         if self.rows_in_group > 0 {
             self.write_row_group()?;
         }
-        // Only knowable now that every row has been written (see
-        // `GEO_METADATA_KEY`) -- `append_key_value_metadata` folds this
-        // into the footer `writer.close()` is about to flush, same as
-        // if it had been passed to `WriterProperties` up front.
+
+        self.atp_geometry_tally
+            .log("conflate.write: atp_geometry geometry types");
+        self.osm_geometry_tally
+            .log("conflate.write: osm_geometry geometry types");
+
+        // Both of this file's key-value metadata entries are set here,
+        // uniformly, via `append_key_value_metadata` -- rather than
+        // `provenance_bom` going through `WriterProperties` up front and
+        // only `geo` being added here -- even though `provenance_bom`
+        // itself is known before the first row is written. `geo` has to
+        // be added late regardless (see `GEO_METADATA_KEY`: its
+        // `geometry_types` isn't known until every row has been
+        // written), so setting both the same way keeps there from being
+        // two different places in this file where output metadata gets
+        // set, which would otherwise force a reader to know which one
+        // applies to which key.
+        self.writer.append_key_value_metadata(KeyValue::new(
+            PROVENANCE_KEY.to_string(),
+            self.provenance_bom.clone(),
+        ));
         self.writer.append_key_value_metadata(KeyValue::new(
             GEO_METADATA_KEY.to_string(),
             self.geo_metadata_json(),
@@ -418,21 +507,24 @@ impl ParquetWriter {
     /// `new_geo_field` requests for the columns' native Parquet
     /// `GEOGRAPHY` logical type -- so the two stay consistent (both
     /// resolving to OGC:CRS84) without having to spell out a PROJJSON
-    /// object here. (Empirically, `parquet`-rs 59.2 doesn't actually
-    /// carry that requested `crs` through to the native logical type's
-    /// own `crs` sub-field -- `parquet-tools meta`/DuckDB both show it
-    /// unset there, even though it does show up correctly in the
-    /// Arrow-extension `ARROW:schema` metadata. Doesn't affect
-    /// conformance here, since "unset" already means OGC:CRS84 on both
-    /// sides, but if a future `parquet`/`parquet-geospatial` upgrade
-    /// starts requesting a non-default CRS, this comment -- and
-    /// whether `gpio check spec`/`gpio check all` still pass -- is
-    /// worth revisiting.)
+    /// object here.
+    ///
+    /// (`parquet-tools meta`/DuckDB show the native logical type's own
+    /// `crs`/`algorithm` sub-fields as unset, which looked like a
+    /// `parquet`-rs bug at first glance -- but it isn't: per
+    /// `parquet::arrow::schema::extension::logical_type_for_binary`
+    /// (`parquet` 59.2), a lon/lat CRS and `Spherical` edges are each
+    /// canonicalized to `None` *because* those are themselves the
+    /// Parquet spec's own defaults for `GEOGRAPHY` -- the same
+    /// omit-if-default encoding GeoParquet's own `geo` metadata uses
+    /// for `crs`. Confirmed with an isolated repro against plain
+    /// `arrow`/`parquet`/`parquet-geospatial`, independent of this
+    /// pipeline, before concluding that -- no bug to report upstream.)
     fn geo_metadata_json(&self) -> String {
-        let column_metadata = |geometry_types: &BTreeSet<&'static str>| {
+        let column_metadata = |tally: &GeometryTally| {
             json!({
                 "encoding": "WKB",
-                "geometry_types": geometry_types.iter().collect::<Vec<_>>(),
+                "geometry_types": tally.geoparquet_types(),
                 "edges": "spherical",
             })
         };
@@ -440,8 +532,8 @@ impl ParquetWriter {
             "version": "2.0.0",
             "primary_column": "osm_geometry",
             "columns": {
-                "osm_geometry": column_metadata(&self.osm_geometry_types),
-                "atp_geometry": column_metadata(&self.atp_geometry_types),
+                "osm_geometry": column_metadata(&self.osm_geometry_tally),
+                "atp_geometry": column_metadata(&self.atp_geometry_tally),
             },
         })
         .to_string()
@@ -727,27 +819,6 @@ fn wkb(shape: &geo::Geometry<f64>) -> Vec<u8> {
     };
     wkb::writer::write_geometry(&mut buf, shape, &opts).expect("wkb encoding failed");
     buf
-}
-
-/// The GeoParquet `geometry_types` name for a WKB-encoded geometry
-/// (e.g. `"Point"`, `"Polygon"`, `"MultiPolygon"`) -- read straight off
-/// the WKB header (byte order + type code) via `wkb::reader`, without
-/// decoding any coordinates.
-fn wkb_geometry_type_name(wkb: &[u8]) -> Result<&'static str> {
-    use ::wkb::reader::GeometryType;
-    let geometry_type = ::wkb::reader::read_wkb(wkb)
-        .context("failed to read WKB header for geometry_types")?
-        .geometry_type();
-    Ok(match geometry_type {
-        GeometryType::Point => "Point",
-        GeometryType::LineString => "LineString",
-        GeometryType::Polygon => "Polygon",
-        GeometryType::MultiPoint => "MultiPoint",
-        GeometryType::MultiLineString => "MultiLineString",
-        GeometryType::MultiPolygon => "MultiPolygon",
-        GeometryType::GeometryCollection => "GeometryCollection",
-        other => anyhow::bail!("unsupported WKB geometry type {other:?}"),
-    })
 }
 
 mod schema {
