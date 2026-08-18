@@ -9,7 +9,7 @@
 //! file, is not that durable copy -- it's a spatially sorted,
 //! license-filtered (data whose license doesn't clear conflation with
 //! OpenStreetMap, per OSM Licensing Working Group advice, is dropped --
-//! see the BOM "evidence" link in `crate::provenance`) Parquet file
+//! see the BOM "evidence" link in `pipeline::provenance`) Parquet file
 //! that lives only in the pipeline's local working directory and is
 //! never uploaded anywhere. Written by `pipeline::atp`, read back by
 //! `pipeline::conflate`/`pipeline::atp::wikidata_ids`, and consumed

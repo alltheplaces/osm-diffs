@@ -33,13 +33,14 @@ mod atp;
 mod conflate;
 mod edits;
 mod osm;
+mod provenance;
 
-// Only these re-exported crate-wide (rather than making all of
-// `atp`/`osm` pub(crate)): crate::provenance needs them to assemble
-// this pipeline's provenance BOM, nothing outside `pipeline` needs the
-// rest of atp's/osm's API (import_atp, BlobReader, Node/Way/Relation,
-// import_osm, ...). atp's own `read_cached_metadata` is re-exported
-// under a different name here since osm already has one of its own.
+// Only these re-exported at the pipeline level (rather than making all
+// of `atp`/`osm` pub(crate)): `provenance` needs them to assemble this
+// pipeline's provenance BOM, nothing else needs the rest of atp's/osm's
+// API (import_atp, BlobReader, Node/Way/Relation, import_osm, ...).
+// atp's own `read_cached_metadata` is re-exported under a different
+// name here since osm already has one of its own.
 // decode_feature_id/osm_type_str are for pipeline::conflate::writer,
 // which decodes the same `Feature.id` encoding osm::assemble/prune
 // produce -- see decode_feature_id's own doc comment.
@@ -57,7 +58,7 @@ pub fn run_pipeline(
 ) -> Result<()> {
     // Captured before anything else runs, so it's a genuine start
     // time for this invocation -- embedded into the provenance BOM
-    // (crate::provenance) as formulation[].workflows[].timeStart, and
+    // (pipeline::provenance) as formulation[].workflows[].timeStart, and
     // reused below as pipeline.log's own upload key, so a run's log and
     // its data output can always be tied back together.
     let pipeline_start_time = UtcDateTime::now();

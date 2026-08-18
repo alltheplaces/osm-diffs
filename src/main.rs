@@ -27,7 +27,7 @@ enum Commands {
         /// Identifier for this invocation of the pipeline -- e.g. a
         /// Kubernetes Job run ID, or whatever identifier the system
         /// executing this container assigns to the run. Embedded into
-        /// the provenance BOM (`crate::provenance`) as
+        /// the provenance BOM (`pipeline::provenance`) as
         /// `formulation[].workflows[].uid`. Empty if not supplied, e.g.
         /// for a local/interactive run.
         #[arg(long = "run_id", default_value = "")]

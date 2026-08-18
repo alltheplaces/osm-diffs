@@ -114,7 +114,7 @@ pub struct ParquetRow {
     atp_shape_wkb: Vec<u8>,
 }
 
-/// Key under which the CycloneDX provenance BOM (see `crate::provenance`)
+/// Key under which the CycloneDX provenance BOM (see `pipeline::provenance`)
 /// is stored in this file's Parquet key-value metadata.
 ///
 /// Neither CycloneDX nor Parquet defines a convention for this: CycloneDX
@@ -140,7 +140,7 @@ const PROVENANCE_KEY: &str = "org.cyclonedx.bom";
 const GEO_METADATA_KEY: &str = "geo";
 
 impl ParquetWriter {
-    /// `provenance_bom` is the CycloneDX document from `crate::provenance`,
+    /// `provenance_bom` is the CycloneDX document from `pipeline::provenance`,
     /// already serialized to a JSON string -- embedded verbatim as this
     /// file's `PROVENANCE_KEY` key-value metadata once `close()` writes
     /// it out (see `close()`'s own doc comment for why this is deferred

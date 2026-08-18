@@ -98,7 +98,7 @@ pub fn import_osm<'a>(progress: &MultiProgress, workdir: &Path) -> Result<OsmFea
 }
 
 /// Filename, within `workdir`, that `fetch::fetch_planet` downloads the
-/// OSM planet PBF to. Shared with `crate::provenance`, which needs to
+/// OSM planet PBF to. Shared with `pipeline::provenance`, which needs to
 /// find it again (via `read_header`) without re-fetching. Matches
 /// upstream's own name for this file (see `OSM_TORRENT_URL` in
 /// `fetch.rs`), rather than inventing a local one.
