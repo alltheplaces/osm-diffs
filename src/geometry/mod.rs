@@ -56,7 +56,7 @@ pub use line_stitcher::LineStitcher;
 pub use polygon_assembler::PolygonAssembler;
 pub use polygon_union::PolygonUnion;
 pub use wkb_type::{WkbGeometryType, wkb_geometry_type};
-pub use wkb_writer::write_wkb;
+pub use wkb_writer::encode_wkb;
 
 // =======================================================================
 // build_points

@@ -71,7 +71,7 @@ mod tests {
     fn test_shape(s2_cell_id: u64) -> Vec<u8> {
         let cell = s2::cellid::CellID(s2_cell_id);
         let lat_lng = s2::latlng::LatLng::from(cell);
-        crate::geometry::write_wkb(&geo::Geometry::from(geo::Point::new(
+        crate::geometry::encode_wkb(&geo::Geometry::from(geo::Point::new(
             lat_lng.lng.deg(),
             lat_lng.lat.deg(),
         )))

@@ -57,7 +57,7 @@ impl Place {
             spider,
             mask,
             tags,
-            shape_wkb: crate::geometry::write_wkb(shape),
+            shape_wkb: crate::geometry::encode_wkb(shape),
             fetched,
         })
     }

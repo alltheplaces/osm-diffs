@@ -636,7 +636,7 @@ impl ParquetRow {
         let atp_shape_wkb;
         let atp_tags;
         if let Some(atp) = atp {
-            atp_shape_wkb = crate::geometry::write_wkb(&atp.shape());
+            atp_shape_wkb = crate::geometry::encode_wkb(&atp.shape());
             atp_spider = Some(atp.spider);
             atp_fetched = Some(atp.fetched);
             atp_tags = atp.tags;
