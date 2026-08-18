@@ -32,7 +32,6 @@ pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
 mod atp;
 mod conflate;
 mod edits;
-mod geostats; // TODO: Move into crate::geometry?
 mod osm;
 
 // Only these re-exported crate-wide (rather than making all of
@@ -100,7 +99,7 @@ fn run_pipeline_steps(
     pipeline_start_time: UtcDateTime,
     progress: &indicatif::MultiProgress,
 ) -> Result<()> {
-    geostats::init()?;
+    crate::geometry::init_geospatial_stats()?;
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
