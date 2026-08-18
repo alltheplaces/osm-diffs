@@ -28,7 +28,7 @@ themselves, as store locators and branch listings, because they want
 customers to find them.
 
 AllThePlaces exists to scrape that already-public data at scale, and
-OSM Foundation’s [Licensing Working
+the OSM Foundation’s [Licensing Working
 Group](https://osmfoundation.org/wiki/Licensing_Working_Group) has
 [confirmed first-party websites as an acceptable data source for
 OSM](https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources).
