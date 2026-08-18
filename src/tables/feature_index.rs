@@ -1,14 +1,22 @@
 //! Spatial index over OSM [Feature] protos, keyed by S2 cell coverage.
 //!
-//! Unlike `Place` (see `crate::places`) -- always a single point, so its
-//! one `s2_cell_id` doubles as both storage-locality key and query key,
-//! no distinction needed -- `OsmFeatureIndex` indexes real OSM geometry:
-//! points, lines, and polygons alike, so a single feature can cover more
-//! than one S2 cell. That means the field used to sort features
-//! physically on disk (`centroid_s2_cell_id`, for locality only) is
-//! *not* a valid query key: a query has to test a feature's full
-//! `coverage_s2_cell_id` list, not just its centroid. So this index is
-//! really two on-disk structures:
+//! `OsmFeatureIndex` indexes real OSM geometry -- points, lines, and
+//! polygons alike -- so a single feature can cover more than one S2
+//! cell. That means the field used to sort features physically on disk
+//! (`centroid_s2_cell_id`, for locality only) is *not* a valid query
+//! key: a query has to test a feature's full `coverage_s2_cell_id`
+//! list, not just its centroid. So this index is really two on-disk
+//! structures:
+//!
+//! `Place` (see `crate::places`) has no equivalent multi-cell coverage,
+//! even though it isn't always a point either -- not because it's
+//! assumed to be small, but because the `s2` crate this pipeline uses
+//! doesn't yet support computing S2 coverage for lines/polygons, only
+//! points. `pipeline::conflate` works around that with a point-plus-
+//! search-radius approximation instead (see
+//! `pipeline::atp::find_point`'s doc comment) -- see
+//! [alltheplaces/osm-diffs#700](https://github.com/alltheplaces/osm-diffs/issues/700)
+//! for the plan to fix this once the library gains that support.
 //!
 //! 1. **Feature storage**: features laid out in `centroid_s2_cell_id`
 //!    order (for locality -- never queried directly), each addressable by

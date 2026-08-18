@@ -367,7 +367,13 @@ fn parse_geometry(geojson: &GeoJson) -> Option<geo::Geometry<f64>> {
 /// `Place::s2_cell_id`, the spatial-index sort/query key. Not the same
 /// as `Place`'s actual stored shape (see `parse_geometry` above): a
 /// line/polygon's real shape is preserved as-is, this is just where its
-/// single point goes for spatial indexing purposes.
+/// single point goes for spatial indexing purposes. A workaround, not a
+/// design choice -- the `s2` crate this pipeline uses can't yet compute
+/// real S2 coverage for a line/polygon, only a point, so
+/// `pipeline::conflate` searches a radius around this point instead of
+/// querying by actual coverage the way it does for OSM features (see
+/// `tables::feature_index`'s module doc comment); see
+/// [alltheplaces/osm-diffs#700](https://github.com/alltheplaces/osm-diffs/issues/700).
 fn find_point(geom: &geo::Geometry<f64>) -> Option<Point> {
     match geom {
         geo::Geometry::LineString(line_string) => {

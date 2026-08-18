@@ -1,5 +1,17 @@
-//! `Place`, AllThePlaces' own durable on-disk representation --
-//! `alltheplaces.parquet` -- written by `pipeline::atp`, read back by
+//! `Place`, this pipeline's own working copy of AllThePlaces feature
+//! data.
+//!
+//! The actual durable representation is AllThePlaces' weekly-run ZIP
+//! file: one GeoJSON `FeatureCollection` per spider, one feature per
+//! line, with the `FeatureCollection`'s own first line carrying
+//! metadata like the collection timestamp and license (`pipeline::atp`
+//! fetches and parses it). `alltheplaces.parquet`, this module's own
+//! file, is not that durable copy -- it's a spatially sorted,
+//! license-filtered (data whose license doesn't clear conflation with
+//! OpenStreetMap, per OSM Licensing Working Group advice, is dropped --
+//! see the BOM "evidence" link in `crate::provenance`) Parquet file
+//! that lives only in the pipeline's local working directory and is
+//! never uploaded anywhere. Written by `pipeline::atp`, read back by
 //! `pipeline::conflate`/`pipeline::atp::wikidata_ids`, and consumed
 //! directly by `matchers` when scoring a candidate match.
 //!
