@@ -161,11 +161,11 @@ mv Cargo.toml.new Cargo.toml
 cargo check --quiet
 
 git add Cargo.toml Cargo.lock
-git commit -q -m "Bump version to ${VERSION}"
+git commit -q -m "chore(release): bump version to ${VERSION}"
 git push -q -u origin "$BUMP_BRANCH"
 
 PR_URL="$(gh pr create \
-  --title "Bump version to ${VERSION}" \
+  --title "chore(release): bump version to ${VERSION}" \
   --body "Version bump ahead of releasing ${TAG}. Opened by scripts/cut-release.sh." \
   --base main)"
 echo "Opened ${PR_URL}"

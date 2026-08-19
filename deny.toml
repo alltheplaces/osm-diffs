@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
+# SPDX-License-Identifier: MIT
+#
+# Config for `cargo deny` (https://github.com/EmbarkStudios/cargo-deny):
+# checks the dependency graph for known vulnerabilities, disallowed
+# licenses, banned/duplicated crates, and untrusted sources. Run locally
+# with `cargo deny check`; see docs/SUPPLY_CHAIN_SECURITY.md for how this
+# fits into our broader supply-chain story (SBOM, provenance, ...) -- this
+# is the part of that story that runs at dependency-resolution time, before
+# anything gets built.
+
+[graph]
+all-features = true
+
+# ── advisories: RUSTSEC/OSV vulnerabilities, unmaintained/yanked crates ─────
+[advisories]
+yanked = "deny"
+ignore = [
+  # quick-xml 0.40.1, pulled in transitively via the `s3` crate (our
+  # S3-compatible upload client), is affected by two DoS advisories in its
+  # XML attribute/namespace handling. Both only matter for untrusted input;
+  # `s3` uses quick-xml solely to parse XML *responses from the S3 endpoint
+  # we're uploading to*, not attacker-controlled input, so this isn't
+  # exploitable in how osm-diffs uses it. Fix is upstream in `s3`, not
+  # something we can patch here (no git/path deps -- see docs/CONTRIBUTING.md
+  # on why): https://github.com/lvillis/s3-rs/pull/15 bumps it to >=0.41.0.
+  # Re-run `cargo deny check advisories` after that merges and a new `s3`
+  # release picks it up, then drop these two lines.
+  "RUSTSEC-2026-0194", # quadratic run time checking duplicate attribute names
+  "RUSTSEC-2026-0195", # unbounded namespace-declaration allocation (OOM)
+]
+
+# ── licenses: only accept licenses we've reviewed as OK to redistribute ─────
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "0BSD",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MIT-0",
+  "MPL-2.0", # weak/file-level copyleft only (`option-ext`, via `dirs`); fine to redistribute as-is in a binary
+  "Unicode-3.0",
+  "Unlicense",
+  "Zlib",
+]
+confidence-threshold = 0.8
+
+# ── bans: banned crates, duplicate-version bloat, wildcard versions ─────────
+[bans]
+multiple-versions = "warn" # normal in a graph this size; don't fail CI over it
+wildcards = "deny"
+deny = []
+
+# ── sources: only allow crates.io, not arbitrary git/registries ─────────────
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
