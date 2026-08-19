@@ -42,7 +42,7 @@ async fn download_osm_planet(
     let session = Session::new_with_opts(
         PathBuf::from(workdir),
         SessionOptions {
-            disable_dht: true, // no distributed hash table
+            dht: None, // no distributed hash table
             ..Default::default()
         },
     )
