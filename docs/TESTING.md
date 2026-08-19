@@ -68,6 +68,8 @@ real hardware before a change lands, not automated gates:
 - [`scripts/test-branch-on-macos/`](../scripts/test-branch-on-macos) —
   full pipeline on your dev machine. Free, fast to iterate with.
 - [`scripts/test-branch-on-hetzner/`](../scripts/test-branch-on-hetzner)
-  — full pipeline on real cloud hardware, built from your feature
-  branch. Costs real money and needs Hetzner credentials — see its
-  README before reaching for it.
+  — full pipeline on real cloud hardware, either built from your
+  feature branch or pulled as an already-built image (e.g. a released
+  container), optionally run containerized under a real cgroup
+  memory/CPU limit. Costs real money and needs Hetzner credentials —
+  see its README before reaching for it.

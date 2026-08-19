@@ -12,9 +12,11 @@ easy to spot and fix.
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -104,11 +106,16 @@ def workdir_for(name):
     return f"/mnt/HC_Volume_{vol['id']}/workdir"
 
 
-def label_flags(name, branch=None):
+def label_flags(name, branch=None, image=None):
     labels = [f"{LABEL_KEY}=true", f"{LABEL_KEY}-owner={name}"]
     if branch:
         # Hetzner labels don't allow "/", which branch names often have.
         labels.append(f"{LABEL_KEY}-branch={branch.replace('/', '--')}")
+    if image:
+        # Same restriction as branch names, plus image refs also use ":"
+        # for the tag (e.g. ghcr.io/alltheplaces/osm-diffs:v1.2.3).
+        sanitized = image.replace("/", "--").replace(":", "--")
+        labels.append(f"{LABEL_KEY}-image={sanitized}")
     flags = []
     for label in labels:
         flags += ["--label", label]
@@ -132,7 +139,7 @@ def cmd_create(args):
             args.location,
             "--ssh-key",
             args.ssh_key,
-            *label_flags(args.name, args.branch),
+            *label_flags(args.name, args.branch, getattr(args, "image", None)),
         ]
     )
 
@@ -160,7 +167,7 @@ def cmd_create(args):
             "--format",
             "ext4",
             "--automount",
-            *label_flags(args.name, args.branch),
+            *label_flags(args.name, args.branch, getattr(args, "image", None)),
         ]
     )
     workdir = workdir_for(args.name)
@@ -227,19 +234,39 @@ def cmd_fio(args):
 def cmd_deploy(args):
     ip = server_ip(args.name)
     ssh_cmd(ip, f"mkdir -p {REMOTE_DIR}")
-    scp_to(ip, SCRIPT_DIR / "remote" / "build.sh", f"{REMOTE_DIR}/build.sh")
-    ssh_cmd(ip, f"chmod +x {REMOTE_DIR}/build.sh")
-    remote_checkout = f"{REMOTE_DIR}/osm-diffs-src"
-    ssh_cmd(
-        ip,
-        f"{REMOTE_DIR}/build.sh {shlex.quote(args.repo)} "
-        f"{shlex.quote(args.branch)} {shlex.quote(remote_checkout)}",
-    )
-    print(f"\nBuilt and installed on {args.name} ({ip}), branch {args.branch}.")
+    # Both the build and pull paths end by extracting binaries out of the
+    # locally tagged osm-diffs-test image, via the shared script.
+    scp_to(ip, SCRIPT_DIR / "remote" / "extract-binaries.sh", f"{REMOTE_DIR}/extract-binaries.sh")
+    ssh_cmd(ip, f"chmod +x {REMOTE_DIR}/extract-binaries.sh")
+
+    if args.image:
+        scp_to(ip, SCRIPT_DIR / "remote" / "pull.sh", f"{REMOTE_DIR}/pull.sh")
+        ssh_cmd(ip, f"chmod +x {REMOTE_DIR}/pull.sh")
+        ssh_cmd(ip, f"{REMOTE_DIR}/pull.sh {shlex.quote(args.image)}")
+        print(f"\nPulled and installed on {args.name} ({ip}), image {args.image}.")
+    else:
+        scp_to(ip, SCRIPT_DIR / "remote" / "build.sh", f"{REMOTE_DIR}/build.sh")
+        ssh_cmd(ip, f"chmod +x {REMOTE_DIR}/build.sh")
+        remote_checkout = f"{REMOTE_DIR}/osm-diffs-src"
+        ssh_cmd(
+            ip,
+            f"{REMOTE_DIR}/build.sh {shlex.quote(args.repo)} "
+            f"{shlex.quote(args.branch)} {shlex.quote(remote_checkout)}",
+        )
+        print(f"\nBuilt and installed on {args.name} ({ip}), branch {args.branch}.")
     print(f"Next: cloud_test.py start --name {args.name}")
 
 
 def cmd_start(args):
+    containerized = getattr(args, "containerized", False)
+    if containerized:
+        # Checked before any Hetzner API calls -- a missing flag
+        # shouldn't need working connectivity to report.
+        if not args.mem_limit or not args.cpu_limit:
+            sys.exit("--containerized requires --mem-limit and --cpu-limit")
+        if args.bucket_name and not args.bucket_region:
+            sys.exit("--bucket-name requires --bucket-region")
+
     ip = server_ip(args.name)
     workdir = workdir_for(args.name)
 
@@ -263,6 +290,12 @@ def cmd_start(args):
         f"--working-directory={REMOTE_DIR} --setenv=WORKDIR={workdir} -- "
         f"/bin/bash {REMOTE_DIR}/monitor.sh",
     )
+
+    if containerized:
+        run_command = containerized_run_command(args, ip, workdir)
+    else:
+        run_command = f"/usr/local/bin/osm-diffs run --workdir {shlex.quote(workdir)}"
+
     ssh_cmd(
         ip,
         "systemd-run --unit=osm-diffs-run --collect "
@@ -275,11 +308,80 @@ def cmd_start(args):
         # already bit us once.
         "--property=LimitNOFILE=65536:65536 "
         f"--working-directory={REMOTE_DIR} -- "
-        f"/usr/local/bin/osm-diffs run --workdir {shlex.quote(workdir)}",
+        f"{run_command}",
     )
-    print(f"\nRunning on {args.name} ({ip}).")
+    mode = " (containerized)" if containerized else ""
+    print(f"\nRunning on {args.name} ({ip}){mode}.")
     print(f"  workdir: {workdir}")
     print(f"\nCheck in with: cloud_test.py status --name {args.name}")
+
+
+def containerized_run_command(args, ip, workdir):
+    """Builds the `podman run ...` command line for containerized `start`,
+    doing whatever synchronous prep it needs first -- fetching a regional
+    extract, pushing an S3 credentials env file, fixing up ownership for
+    the container's non-root user -- before the detached systemd-run unit
+    that will actually execute it."""
+    if args.regional_extract:
+        print(f"Fetching regional extract {args.regional_extract} ...", file=sys.stderr)
+        scp_to(
+            ip,
+            SCRIPT_DIR / "remote" / "fetch_test_extract.sh",
+            f"{REMOTE_DIR}/fetch_test_extract.sh",
+        )
+        ssh_cmd(ip, f"chmod +x {REMOTE_DIR}/fetch_test_extract.sh")
+        ssh_cmd(
+            ip,
+            f"{REMOTE_DIR}/fetch_test_extract.sh "
+            f"{shlex.quote(args.regional_extract)} {shlex.quote(workdir)}",
+        )
+
+    env_flag = ""
+    if args.bucket_name:
+        access_key = os.environ.get("HETZNER_TEST_S3_ACCESS_KEY_ID")
+        secret_key = os.environ.get("HETZNER_TEST_S3_ACCESS_KEY_SECRET")
+        if not access_key or not secret_key:
+            sys.exit(
+                "--bucket-name given, but HETZNER_TEST_S3_ACCESS_KEY_ID / "
+                "HETZNER_TEST_S3_ACCESS_KEY_SECRET aren't set locally."
+            )
+        env_content = (
+            f"S3_ENDPOINT=https://{args.bucket_region}.your-objectstorage.com\n"
+            f"S3_BUCKET={args.bucket_name}\n"
+            f"S3_REGION={args.bucket_region}\n"
+            f"S3_ACCESS_KEY_ID={access_key}\n"
+            f"S3_ACCESS_KEY_SECRET={secret_key}\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+            f.write(env_content)
+            local_env_path = f.name
+        try:
+            # A file, not command-line flags: keeps the S3 secret out of
+            # `ps`/shell history on the remote host.
+            scp_to(ip, local_env_path, f"{REMOTE_DIR}/s3.env")
+        finally:
+            Path(local_env_path).unlink()
+        ssh_cmd(ip, f"chmod 600 {REMOTE_DIR}/s3.env")
+        env_flag = f"--env-file {REMOTE_DIR}/s3.env "
+
+    # The image runs as non-root (USER 1000 in the Containerfile); the
+    # workdir volume is root-owned on the host (created by `create`), so
+    # the container would otherwise hit EACCES writing into it.
+    ssh_cmd(ip, f"chown -R 1000:1000 {shlex.quote(workdir)}")
+
+    run_id_flag = f" --run_id {shlex.quote(args.run_id)}" if args.run_id else ""
+    return (
+        # --read-only: the pipeline should only ever write into /workdir
+        # (the mounted volume), never into the container's own
+        # filesystem -- an early bug wrote outside it and went unnoticed
+        # for a while (see #728). The mounted volume stays writable
+        # regardless of --read-only, since it's a separate mount point
+        # from the container's root filesystem.
+        "podman run --rm --read-only "
+        f"--memory={shlex.quote(args.mem_limit)} --cpus={shlex.quote(args.cpu_limit)} "
+        f"-v {shlex.quote(workdir)}:/workdir {env_flag}"
+        f"osm-diffs-test run --workdir /workdir{run_id_flag}"
+    )
 
 
 def cmd_status(args):
@@ -340,21 +442,52 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    def add_common(p, needs_ssh_key=False, needs_branch=False):
+    def add_common(p, needs_ssh_key=False):
         p.add_argument("--name", required=True, help="Server/volume name, e.g. pr665-m1")
         if needs_ssh_key:
             p.add_argument(
                 "--ssh-key", required=True, help="Name of an SSH key already in the Hetzner project"
             )
-        if needs_branch:
-            p.add_argument("--branch", required=True, help="git branch/ref to build")
+
+    def add_deploy_target(p):
+        """--branch (build from source) or --image (pull an existing
+        image), mutually exclusive, one required."""
+        group = p.add_mutually_exclusive_group(required=True)
+        group.add_argument("--branch", help="git branch/ref to build")
+        group.add_argument(
+            "--image",
+            help="pull this image instead of building (e.g. ghcr.io/alltheplaces/osm-diffs:v1.2.3)",
+        )
+        p.add_argument("--repo", default=DEFAULT_REPO, help="ignored with --image")
+
+    def add_containerized(p):
+        """--containerized and the flags that only make sense with it."""
+        p.add_argument(
+            "--containerized",
+            action="store_true",
+            help="run via `podman run --memory=/--cpus=` for real cgroup accounting, "
+            "instead of the bare extracted binary",
+        )
+        p.add_argument("--mem-limit", help="e.g. 4g -- required with --containerized")
+        p.add_argument("--cpu-limit", help="e.g. 2 -- required with --containerized")
+        p.add_argument(
+            "--regional-extract",
+            help="Geofabrik path fragment (e.g. europe/switzerland), instead of the "
+            "full planet -- --containerized only",
+        )
+        p.add_argument("--run-id", help="embedded into the provenance BOM -- --containerized only")
+        p.add_argument(
+            "--bucket-name", help="ephemeral S3 test bucket to upload to -- --containerized only"
+        )
+        p.add_argument("--bucket-region", help="required with --bucket-name")
 
     p_up = sub.add_parser("up", help="create + deploy + start, in one shot")
-    add_common(p_up, needs_ssh_key=True, needs_branch=True)
+    add_common(p_up, needs_ssh_key=True)
+    add_deploy_target(p_up)
     p_up.add_argument("--type", default=DEFAULT_TYPE)
     p_up.add_argument("--location", default=DEFAULT_LOCATION)
     p_up.add_argument("--volume-size", type=int, default=DEFAULT_VOLUME_SIZE)
-    p_up.add_argument("--repo", default=DEFAULT_REPO)
+    add_containerized(p_up)
     p_up.set_defaults(func=cmd_up)
 
     p_create = sub.add_parser("create", help="provision the server + volume only")
@@ -365,9 +498,11 @@ def main():
     p_create.add_argument("--volume-size", type=int, default=DEFAULT_VOLUME_SIZE)
     p_create.set_defaults(func=cmd_create)
 
-    p_deploy = sub.add_parser("deploy", help="build + install a branch on an existing server")
-    add_common(p_deploy, needs_branch=True)
-    p_deploy.add_argument("--repo", default=DEFAULT_REPO)
+    p_deploy = sub.add_parser(
+        "deploy", help="build from a branch, or pull an existing image, onto an existing server"
+    )
+    add_common(p_deploy)
+    add_deploy_target(p_deploy)
     p_deploy.set_defaults(func=cmd_deploy)
 
     p_start = sub.add_parser("start", help="run the pipeline + monitoring, detached")
@@ -377,6 +512,7 @@ def main():
         action="store_true",
         help="clear the workdir first, keeping the planet download",
     )
+    add_containerized(p_start)
     p_start.set_defaults(func=cmd_start)
 
     p_status = sub.add_parser("status", help="is it still running, how full is the disk")

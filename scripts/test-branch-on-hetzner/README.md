@@ -1,12 +1,20 @@
 # Testing a branch on cloud machines
 
-Two small tools: `cloud_test.py` runs the full `osm-diffs` pipeline
-against a development branch on real Hetzner Cloud hardware, without
-repeating the manual VM setup by hand each time -- create a VM, build
-the branch's `Containerfile` natively on it, run the pipeline detached,
-and pull back logs, all from one command. `analyze.py` then makes sense
-of what got pulled back, without re-writing the same throwaway parsing
-script every time.
+Two small tools: `cloud_test.py` runs the full `osm-diffs` pipeline on
+real Hetzner Cloud hardware, without repeating the manual VM setup by
+hand each time -- create a VM, either build a development branch's
+`Containerfile` natively on it or pull an already-built image (e.g. a
+released `ghcr.io` container), run the pipeline detached, and pull back
+logs, all from one command. `analyze.py` then makes sense of what got
+pulled back, without re-writing the same throwaway parsing script every
+time.
+
+Runs either bare (the pipeline binary extracted straight onto the VM)
+or, via `start --containerized`, inside `podman run --memory=/--cpus=`
+for real cgroup memory/CPU accounting -- see
+[#722](https://github.com/alltheplaces/osm-diffs/issues/722) for why
+that distinction matters (a bare VM run can never populate
+`pipeline.log`'s own `cgroup_*` fields; a containerized one can).
 
 This exists because staged rollouts of large pipeline changes (see e.g.
 [#655](https://github.com/alltheplaces/osm-diffs/issues/655)) call for
@@ -60,9 +68,13 @@ real disk, isn't something you can determine by reading the code.
 - An SSH key already uploaded to that Hetzner project (`hcloud ssh-key
   list`) -- its *name*, not the key file itself, is what you pass to
   this tool.
-- Nothing else: both scripts only use the Python standard library (no
-  `pip install` needed); `cloud_test.py` shells out to `hcloud`/`ssh`/
-  `scp` for everything it does beyond that.
+- Nothing else for a `--branch` deploy or a bare/`--containerized` run
+  without `--bucket-name`: both scripts only use the Python standard
+  library (no `pip install` needed); `cloud_test.py` shells out to
+  `hcloud`/`ssh`/`scp` for everything it does beyond that.
+- `HETZNER_TEST_S3_ACCESS_KEY_ID`/`HETZNER_TEST_S3_ACCESS_KEY_SECRET` in
+  your own environment, only if using `--bucket-name` (see
+  "Containerized runs, regional extracts" below).
 
 ## Quick start
 
@@ -91,10 +103,10 @@ restart a run with a clean workdir without tearing down the VM
 
 | Command | What it does |
 |---|---|
-| `up` | Create the server + volume, build the branch, start the pipeline. |
+| `up` | Create the server + volume, deploy, start the pipeline. |
 | `create` | Server + a formatted, attached, automounted data volume. Also collects `sysinfo` and runs `fio` once, automatically. |
-| `deploy` | Clone/update the given branch on an existing server and build it via the project's `Containerfile`, natively (see below for why that matters). |
-| `start` | Launch `osm-diffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-fetch the planet over BitTorrent. |
+| `deploy` | `--branch NAME`: clone/update the given branch on an existing server and build it via the project's `Containerfile`, natively (see below for why that matters). `--image REF`: pull an already-built image instead (e.g. `ghcr.io/alltheplaces/osm-diffs:v1.2.3`) -- either way, binaries get extracted the same way, so bare-mode `start` works unchanged regardless of which path was used. |
+| `start` | Launch `osm-diffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-fetch the planet over BitTorrent. `--containerized --mem-limit SIZE --cpu-limit N` runs `podman run` against the image `deploy` produced instead of the bare extracted binary, for real cgroup accounting -- see below. |
 | `status` | `systemctl status` for the run, plus `df` and the last few `pipeline.log` lines. |
 | `fio` | Random-read benchmark of the attached volume (the same command used by hand throughout the PR 665 experiment -- see `#667`). Re-runnable anytime, e.g. to check whether a result was a one-off blip. |
 | `sysinfo` | OS/kernel version, CPU model, memory, swap, disk layout, cgroup limits -- environment facts that turned out to matter for interpreting results but aren't anything this tool controls. |
@@ -105,6 +117,49 @@ restart a run with a clean workdir without tearing down the VM
 
 Run `./cloud_test.py <command> --help` for the full flag list; defaults
 are `cpx32` / `hel1` / a 400GB volume, all overridable.
+
+## Containerized runs, regional extracts
+
+```console
+$ ./cloud_test.py up --name reg1 --ssh-key my-key \
+    --image ghcr.io/alltheplaces/osm-diffs:v1.2.3 \
+    --containerized --mem-limit 4g --cpu-limit 2 \
+    --regional-extract europe/switzerland
+```
+
+- `--containerized --mem-limit SIZE --cpu-limit N` runs the pipeline via
+  `podman run --memory=<SIZE> --cpus=<N>` instead of the bare extracted
+  binary. This is the whole point for anything measuring memory/CPU
+  behavior: a bare-VM run never populates `pipeline.log`'s own
+  `cgroup_*` fields (there's no cgroup to report on), so it can't
+  validate a memory-pressure design under real container limits, only a
+  containerized run can. `--mem-limit`/`--cpu-limit` are required
+  together with `--containerized`.
+- `--regional-extract REGION` (a Geofabrik path fragment, e.g.
+  `europe/switzerland`) downloads that extract straight to
+  `planet-latest.osm.pbf` before starting the container, skipping the
+  ~5h BitTorrent download entirely -- cheap, fast iteration for
+  comparing many `--mem-limit`/`--cpu-limit`/`--type` combinations. Only
+  worth it for a region meaningfully bigger than CI's own tiny
+  `zugerland.osm.pbf` fixture (40 KB) -- a micro-extract creates no real
+  memory pressure to observe. Omit it to exercise the real, unmodified
+  BitTorrent path against the full planet, e.g. for a final check once a
+  promising configuration is narrowed down, or to get genuine
+  full-scale cost/duration numbers.
+- `--bucket-name NAME --bucket-region LOC` uploads output to an
+  ephemeral S3-compatible test bucket, reading credentials from
+  `HETZNER_TEST_S3_ACCESS_KEY_ID`/`HETZNER_TEST_S3_ACCESS_KEY_SECRET` in
+  your own environment (never passed as command-line arguments, to keep
+  them out of `ps`/shell history on the remote host). Omit it and the
+  container just doesn't upload anywhere, same as the pipeline's own
+  `S3_ENDPOINT`-unset behavior.
+- `--run-id ID` is passed straight through as `osm-diffs run --run_id
+  ID`, embedded into the output's provenance BOM.
+
+Recommended: keep all of this pointed at a Hetzner project (and S3
+credentials) dedicated to testing, separate from anything
+production-related -- testing shouldn't touch production, since
+something always goes wrong during testing.
 
 ## Making sense of the logs
 

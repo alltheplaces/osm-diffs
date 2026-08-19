@@ -29,18 +29,4 @@ podman build -t osm-diffs-test \
     --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
     -f Containerfile .
 
-# Remove any leftover "extract" container from a previous deploy first --
-# podman create fails with "name already in use" otherwise.
-podman rm -f extract >/dev/null 2>&1 || true
-podman create --name extract osm-diffs-test
-# Both go to /usr/local/bin, not somewhere repo-relative: osm-diffs
-# invokes tippecanoe via `Command::new("tippecanoe")`, a bare PATH
-# lookup with no hardcoded location (src/pipeline/tiles.rs), so
-# tippecanoe specifically must resolve on PATH for any branch that
-# reaches render_tiles.
-podman cp extract:/app/osm-diffs /usr/local/bin/osm-diffs
-podman cp extract:/usr/local/bin/tippecanoe /usr/local/bin/tippecanoe
-podman rm -f extract >/dev/null
-
-chmod +x /usr/local/bin/osm-diffs /usr/local/bin/tippecanoe
-/usr/local/bin/osm-diffs --version
+"$(dirname "$0")/extract-binaries.sh"
