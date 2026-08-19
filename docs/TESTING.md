@@ -21,7 +21,14 @@ Every PR and push to `main` runs
 tests, and a minimum coverage threshold) and
 [`codeql.yml`](../.github/workflows/codeql.yml) (static analysis).
 PRs that touch `Containerfile` or `scripts/sbom/` also run
-[`test-container.yml`](../.github/workflows/test-container.yml).
+[`test-container.yml`](../.github/workflows/test-container.yml). PRs and
+pushes that touch `Cargo.toml`, `Cargo.lock`, or `deny.toml` run
+[`cargo-deny.yml`](../.github/workflows/cargo-deny.yml) — dependency
+licenses, banned/duplicated crates, sources, and known RUSTSEC/OSV
+advisories, via [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny)
+against the rules in [`deny.toml`](../deny.toml); it also runs weekly on a
+schedule, since a new advisory can land against a dependency we already
+pinned with no PR of ours to trigger it.
 
 Test coverage is measured with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov)
 (`cargo llvm-cov test`, using `rustc`'s built-in LLVM source-based

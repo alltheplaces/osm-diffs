@@ -1,0 +1,58 @@
+name: cargo-deny
+
+# Checks the dependency graph against deny.toml: known RUSTSEC/OSV
+# vulnerabilities, disallowed licenses, banned/duplicated crates, and
+# untrusted (non-crates.io) sources. See deny.toml for the actual rules and
+# docs/SUPPLY_CHAIN_SECURITY.md for how this fits into our broader
+# supply-chain story (SBOM, provenance, ...).
+#
+# This is a hard gate for licenses/bans/sources; already-known,
+# already-tracked advisories can be allow-listed in deny.toml (with a
+# comment explaining why and a link to the upstream fix) rather than
+# failing every PR on something no PR here can fix -- see the [advisories]
+# section of deny.toml. That's a different job than the OSSF Scorecard
+# "Vulnerabilities" check mentioned in docs/SECURITY.md: Scorecard scores a
+# point-in-time snapshot for public visibility, this fails CI outright and
+# lets us explicitly track/dismiss individual advisories with a reason.
+
+on:
+  merge_group:
+  push:
+    branches: [ "main" ]
+    paths: [ "Cargo.lock", "Cargo.toml", "deny.toml" ]
+  pull_request:
+    branches: [ "main" ]
+    paths: [ "Cargo.lock", "Cargo.toml", "deny.toml" ]
+  schedule:
+    # New RUSTSEC advisories get published against dependencies we already
+    # pinned, with no Cargo.toml/Cargo.lock change on our end to trigger the
+    # path filters above -- so also catch those on a schedule, independent
+    # of any PR.
+    - cron: "17 4 * * 1"
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-deny:
+    name: Check licenses, advisories, bans, and sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions: {}
+    strategy:
+      fail-fast: false
+      matrix:
+        checks:
+          - advisories
+          - bans licenses sources
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - name: cargo deny check ${{ matrix.checks }}
+      uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25  # v2.1.1
+      with:
+        command: check
+        command-arguments: ${{ matrix.checks }}
