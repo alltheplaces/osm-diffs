@@ -10,10 +10,19 @@ updates:
       cargo:
         patterns:
           - "*"
+    # "chore" so these are valid Conventional Commits titles (see
+    # docs/CONTRIBUTING.md and .github/workflows/pr-title-lint.yml) but never
+    # trigger the auto-label job's breaking/enhancement/bug labels.
+    commit-message:
+      prefix: "chore"
+      include: "scope"
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "daily"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
@@ -22,3 +31,5 @@ updates:
       codeql:
         patterns:
           - "github/codeql-action/*"
+    commit-message:
+      prefix: "chore(ci)"

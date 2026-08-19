@@ -1,0 +1,89 @@
+name: Lint PR title
+
+# Enforces the Conventional Commits PR-title convention documented in
+# docs/CONTRIBUTING.md. Since PRs are squash-merged with the PR title as the
+# squash commit's title (see the "squash merge" note in docs/CONTRIBUTING.md),
+# this is what actually lands in main's history -- and what
+# scripts/cut-release.sh's breaking-change scan reads.
+#
+# pull_request_target (not pull_request) so this also runs for PRs from
+# forks: it only reads the PR title from the base repo's workflow config, it
+# doesn't need write access to or run any code from the fork.
+on:
+  pull_request_target:
+    types: [opened, edited, reopened]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint-pr-title:
+    name: Validate PR title
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+    - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50  # v6.1.1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Derives the enhancement/bug/breaking-change label from the PR title so it
+  # doesn't have to be kept in sync by hand -- these feed .github/release.yml's
+  # auto-generated release-note categories. Only ever adds a label, never
+  # removes one, so a title edit won't strip a label a human applied for an
+  # unrelated reason (e.g. good first issue).
+  #
+  # Note: "!" here means the PR breaks osm-diffs' OUTPUT SCHEMA
+  # (conflated.parquet), not that it breaks some public API -- see
+  # docs/CONTRIBUTING.md and docs/RELEASING.md's "Choosing the version
+  # number". It's a hint for scripts/cut-release.sh, not a substitute for the
+  # human judgment call that document asks for.
+  #
+  # No third-party action for this: the one commonly suggested for it
+  # (bcoe/conventional-release-labels) only detects breaking changes via a
+  # multi-line "BREAKING CHANGE:" footer, which a one-line PR title can't
+  # contain -- it would silently never fire for us.
+  auto-label:
+    name: Auto-label from PR title
+    runs-on: ubuntu-latest
+    needs: [lint-pr-title]
+    permissions:
+      pull-requests: write
+    steps:
+    - name: Derive and apply label from Conventional Commits type
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Passed via env, never interpolated into the script body: this
+        # title comes from pull_request_target, i.e. it can be attacker-
+        # controlled text from a fork. Templating it directly into `run:`
+        # would be a shell-injection hole; reading it as an env var is inert
+        # data instead.
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+        if [[ "$PR_TITLE" =~ ^([a-z]+)(\([a-zA-Z0-9_./-]+\))?(!)?:[[:space:]] ]]; then
+          type="${BASH_REMATCH[1]}"
+          breaking="${BASH_REMATCH[3]}"
+          if [[ -n "$breaking" ]]; then
+            label="breaking-change"
+          elif [[ "$type" == "feat" ]]; then
+            label="enhancement"
+          elif [[ "$type" == "fix" ]]; then
+            label="bug"
+          else
+            label=""
+          fi
+          if [[ -n "$label" ]]; then
+            echo "Applying label: $label"
+            gh pr edit "$PR_NUMBER" --repo "$REPO" --add-label "$label"
+          else
+            echo "Type '$type' has no auto-label mapping; leaving as-is."
+          fi
+        else
+          echo "Title doesn't parse as Conventional Commits; leaving as-is (lint-pr-title should already be failing this PR)."
+        fi

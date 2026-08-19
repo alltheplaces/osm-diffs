@@ -23,6 +23,37 @@ Running them locally first saves a round-trip through CI — see
 [`TESTING.md`](https://github.com/alltheplaces/osm-diffs/blob/main/docs/TESTING.md)
 for what else CI checks.
 
+## PR titles: Conventional Commits
+
+PRs are squash-merged, and the PR title becomes the commit message on
+`main` — so give it the shape of a
+[Conventional Commit](https://www.conventionalcommits.org/):
+
+```
+<type>[optional scope][!]: <description>
+```
+
+`type` is one of `feat`, `fix`, `docs`, `style`, `refactor`, `perf`,
+`test`, `build`, `ci`, or `chore`. A bot
+([`pr-title-lint.yml`](https://github.com/alltheplaces/osm-diffs/blob/main/.github/workflows/pr-title-lint.yml))
+checks this on every PR and applies an `enhancement`/`bug`/`breaking-change`
+label from it, which feeds
+[`.github/release.yml`](https://github.com/alltheplaces/osm-diffs/blob/main/.github/release.yml)'s
+categorized release notes — so getting the type right saves the
+maintainer a manual labeling step, it's not just a style nit.
+
+**The `!` marker is special here.** Normally it means "breaks the public
+API." `osm-diffs` doesn't have one client code links against — what it
+has is an **output schema** (`conflated.parquet`), and that's what
+matters to everyone downstream. So on this project, `!` means *this PR
+breaks the output schema*, per the rules in
+[`RELEASING.md`](https://github.com/alltheplaces/osm-diffs/blob/main/docs/RELEASING.md#choosing-the-version-number)
+— not that some function signature changed. A `refactor!:` or `chore!:`
+that happens to rename a Parquet column is exactly as `!` as a `feat!:`
+that removes one; a `feat:` CLI flag that doesn't touch the schema isn't
+`!` at all. `cut-release.sh` reads these markers to *suggest* a version
+floor, but the actual version is still your call, per `RELEASING.md`.
+
 ## Where to go next
 
 - [`docs/TESTING.md`](https://github.com/alltheplaces/osm-diffs/blob/main/docs/TESTING.md)
