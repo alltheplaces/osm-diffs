@@ -1,5 +1,6 @@
 *~
 /target
 /workdir
+__pycache__/
 
 
