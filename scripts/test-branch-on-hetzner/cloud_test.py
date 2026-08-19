@@ -371,7 +371,13 @@ def containerized_run_command(args, ip, workdir):
 
     run_id_flag = f" --run_id {shlex.quote(args.run_id)}" if args.run_id else ""
     return (
-        "podman run --rm "
+        # --read-only: the pipeline should only ever write into /workdir
+        # (the mounted volume), never into the container's own
+        # filesystem -- an early bug wrote outside it and went unnoticed
+        # for a while (see #728). The mounted volume stays writable
+        # regardless of --read-only, since it's a separate mount point
+        # from the container's root filesystem.
+        "podman run --rm --read-only "
         f"--memory={shlex.quote(args.mem_limit)} --cpus={shlex.quote(args.cpu_limit)} "
         f"-v {shlex.quote(workdir)}:/workdir {env_flag}"
         f"osm-diffs-test run --workdir /workdir{run_id_flag}"
