@@ -43,6 +43,16 @@ clients read is still a patch release. A release that changes the output
 schema in a breaking way is a major release even if the code diff is
 tiny.
 
+`cut-release.sh` gives you one piece of help with this call, not a
+replacement for it: it scans merged PR titles since the last tag for a
+Conventional Commits `!` marker (see
+[`CONTRIBUTING.md`](CONTRIBUTING.md#pr-titles-conventional-commits) — on
+this project `!` means *output-schema-breaking*, not API-breaking) and
+prints what it finds before asking you to confirm the version. Treat it
+as a “did you forget something” prompt: false positives and false
+negatives are both possible, since a PR’s type is chosen by whoever wrote
+the title, not by inspecting the schema diff.
+
 ## What happens automatically, step by step
 
 Once you run `cut-release.sh vX.Y.Z`:
