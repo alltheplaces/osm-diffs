@@ -16,9 +16,24 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
+If your PR touches `Cargo.toml` or `Cargo.lock` (e.g. adding or bumping a
+dependency), also run
+[`cargo deny`](https://github.com/EmbarkStudios/cargo-deny) (`cargo install
+cargo-deny` if you don't have it):
+
+```sh
+cargo deny check
+```
+
+This checks the new dependency graph against
+[`deny.toml`](https://github.com/alltheplaces/osm-diffs/blob/main/deny.toml)
+— disallowed licenses, banned/duplicated crates, untrusted sources, and
+known RUSTSEC/OSV advisories.
+
 After you've sent a Pull Request, our Continuous Integration (CI) runs a
-series of checks on it — the commands above are a subset of
-[what CI runs](https://github.com/alltheplaces/osm-diffs/blob/main/.github/workflows/test.yml).
+series of checks on it — the commands above are a subset of what CI runs
+([`test.yml`](https://github.com/alltheplaces/osm-diffs/blob/main/.github/workflows/test.yml),
+[`cargo-deny.yml`](https://github.com/alltheplaces/osm-diffs/blob/main/.github/workflows/cargo-deny.yml)).
 Running them locally first saves a round-trip through CI — see
 [`TESTING.md`](https://github.com/alltheplaces/osm-diffs/blob/main/docs/TESTING.md)
 for what else CI checks.

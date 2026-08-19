@@ -2,6 +2,7 @@
 name = "osm-diffs"
 version = "0.7.1"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0.102"
