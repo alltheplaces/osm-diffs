@@ -43,6 +43,23 @@ clients read is still a patch release. A release that changes the output
 schema in a breaking way is a major release even if the code diff is
 tiny.
 
+**Before 1.0.0, a schema-breaking release bumps *minor*, not *major*.**
+SemVer’s own spec is explicit that this is fine: [§4](https://semver.org/#spec-item-4)
+says a `0.y.z` major version is for initial development, where “anything
+MAY change at any time” and the public interface “SHOULD NOT be
+considered stable” — SemVer deliberately leaves how `0.y.z` itself
+increments up to the project. We use the common convention of treating
+`0.MINOR.PATCH` the way `MAJOR.MINOR.PATCH` works post-1.0: a
+schema-breaking release bumps `MINOR` (not `MAJOR`, which stays `0`),
+anything else bumps `PATCH`. This isn’t just a convention we picked —
+it’s the same rule `cargo`/crates.io itself uses for `0.x` dependency
+resolution (a `^0.2.0` requirement excludes `0.3.0`, treating that
+minor-version bump as the breaking one), so it’s already how our own
+build tooling reasons about pre-1.0 versions. We’ll move to `MAJOR`
+bumps for breaking changes once there’s an actual 1.0.0 to break
+compatibility with — i.e. once this pipeline has real downstream
+consumers depending on schema stability, not before.
+
 `cut-release.sh` gives you one piece of help with this call, not a
 replacement for it: it scans merged PR titles since the last tag for a
 Conventional Commits `!` marker (see
