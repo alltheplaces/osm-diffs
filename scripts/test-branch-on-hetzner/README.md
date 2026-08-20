@@ -110,7 +110,7 @@ restart a run with a clean workdir without tearing down the VM
 | Command | What it does |
 |---|---|
 | `up` | Create the server + volume, deploy, start the pipeline. |
-| `create` | Server + a formatted, attached, automounted data volume. Also collects `sysinfo` and runs `fio` once, automatically. |
+| `create` | Server + a formatted, attached, automounted data volume. Also collects `sysinfo` and runs `fio` once, automatically. Prints the exact `destroy` command needed to remove what it just created. |
 | `deploy` | `--branch NAME`: clone/update the given branch on an existing server and build it via the project's `Containerfile`, natively (see below for why that matters). `--image REF`: pull an already-built image instead (e.g. `ghcr.io/alltheplaces/osm-diffs:v1.2.3`) -- either way, binaries get extracted the same way, so bare-mode `start` works unchanged regardless of which path was used. |
 | `start` | Launch `osm-diffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-fetch the planet over BitTorrent. `--containerized --mem-limit SIZE --cpu-limit N` runs `podman run` against the image `deploy` produced instead of the bare extracted binary, for real cgroup accounting -- see below. |
 | `status` | `systemctl status` for the run, plus `df` and the last few `pipeline.log` lines. |
@@ -118,10 +118,10 @@ restart a run with a clean workdir without tearing down the VM
 | `sysinfo` | OS/kernel version, CPU model, memory, swap, disk layout, cgroup limits -- environment facts that turned out to matter for interpreting results but aren't anything this tool controls. |
 | `logs` | Downloads `pipeline.log`, `vmstat.log`, `disk.log`, `sysinfo.txt`, `dmesg.log` to `logs/<name>/`. |
 | `stop` | Stops the pipeline + monitor, leaves the VM (and its disk contents) alone. |
-| `destroy` | Deletes the server and volume. Asks for confirmation unless `--yes`. |
+| `destroy` | Deletes the server and volume. Asks for confirmation unless `--yes`. Prints a rough cost estimate for the run just torn down (unit price × actual lifetime, from Hetzner's own `/v1/pricing`) -- an estimate, not the invoiced figure; Object Storage/traffic aren't included. |
 | `bucket create`/`bucket destroy` | Ephemeral S3 test bucket lifecycle -- see "Containerized runs" below. |
 | `validate` | Hard pass/fail checks against a run's `conflated.parquet` + downloaded logs -- see "Validation checks" below. |
-| `list` | Lists every instance this tool created (via a Hetzner label), so nothing gets forgotten and left running. |
+| `list` | Lists every instance this tool created (via a Hetzner label), so nothing gets forgotten and left running. `--bucket-region LOC` also lists live test buckets in that Object Storage region. |
 
 Run `./cloud_test.py <command> --help` for the full flag list; defaults
 are `cpx32` / `hel1` / a 400GB volume, all overridable.

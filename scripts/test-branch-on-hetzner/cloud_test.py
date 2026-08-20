@@ -20,6 +20,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
@@ -36,6 +39,7 @@ LABEL_KEY = "osm-diffs-test"
 REMOTE_DIR = "/root/osm-diffs"
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOGS_DIR = SCRIPT_DIR / "logs"
+PRICING_URL = "https://api.hetzner.cloud/v1/pricing"
 
 PLANET_FILES = ("planet-latest.osm.pbf", "planet-latest.osm.pbf.meta.json")
 
@@ -238,6 +242,7 @@ def cmd_create(args):
     print(f"  IP:      {ip}")
     print(f"  workdir: {workdir}")
     print(f"\nNext: cloud_test.py deploy --name {args.name} --branch <branch>")
+    print(f"When done: cloud_test.py destroy --name {args.name}")
 
 
 def run_sysinfo(ip):
@@ -466,15 +471,84 @@ def cmd_stop(args):
     ssh_cmd(ip, "systemctl stop osm-diffs-run osm-diffs-monitor || true")
 
 
+def fetch_pricing():
+    """Hetzner Cloud's `GET /v1/pricing` -- unit prices (hourly per
+    server type + location, monthly per GB for volumes) in the
+    account's own currency. Not wrapped by the `hcloud` CLI (there's no
+    `hcloud pricing` subcommand, confirmed against the version this was
+    written against), so this is a plain authenticated HTTP call using
+    the same `HCLOUD_TOKEN` `hcloud` itself reads. Returns `None`
+    (never raises) on any failure -- a pricing hiccup must never block
+    `destroy`'s actual teardown, which is the part that matters."""
+    token = os.environ.get("HCLOUD_TOKEN")
+    if not token:
+        return None
+    try:
+        req = urllib.request.Request(PRICING_URL, headers={"Authorization": f"Bearer {token}"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.load(resp)["pricing"]
+    except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
+        print(f"(pricing lookup failed: {e})", file=sys.stderr)
+        return None
+
+
+def compute_run_cost(pricing, server_type, location, volume_gb, hours):
+    """Unit price x duration, from figures the caller already has on
+    hand (exact server-type/location/volume-size, and the server's own
+    `created` timestamp through now) -- no metering integration needed.
+    An estimate, not Hetzner's actual invoiced figure (billing rounds/
+    aggregates differently); Object Storage/traffic aren't included.
+    Returns `None` if `pricing` doesn't have the shape this expects --
+    see `fetch_pricing()`'s docstring for why this never raises."""
+    try:
+        server_prices = next(t["prices"] for t in pricing["server_types"] if t["name"] == server_type)
+        hourly = float(next(p for p in server_prices if p["location"] == location)["price_hourly"]["gross"])
+        volume_gb_month = float(pricing["volume"]["price_per_gb_month"]["gross"])
+        return hourly * hours + volume_gb_month * volume_gb * (hours / (24 * 30))
+    except (KeyError, StopIteration, TypeError, ValueError):
+        return None
+
+
+def teardown_cost_note(name):
+    """A best-effort '~€X.YZ' summary line for `destroy`, gathered
+    *before* deleting anything (the `describe` calls need the resources
+    to still exist) -- or `None` if any part of this didn't work out.
+    Deleting the resources always proceeds either way; see
+    `fetch_pricing()`'s docstring for why."""
+    try:
+        server = hcloud_json(["server", "describe", name])
+        volume = hcloud_json(["volume", "describe", f"{name}-data"])
+    except subprocess.CalledProcessError:
+        return None
+    pricing = fetch_pricing()
+    if pricing is None:
+        return None
+    created = datetime.fromisoformat(server["created"])
+    hours = (datetime.now(UTC) - created).total_seconds() / 3600
+    server_type = server["server_type"]["name"]
+    location = server["datacenter"]["location"]["name"]
+    cost = compute_run_cost(pricing, server_type, location, volume["size"], hours)
+    if cost is None:
+        return None
+    return (
+        f"Estimated cost: ~€{cost:.2f} for ~{hours:.1f}h ({server_type}, "
+        f"{volume['size']}GB volume) -- rough estimate, not Hetzner's actual "
+        "invoiced figure; Object Storage/traffic not included."
+    )
+
+
 def cmd_destroy(args):
     if not args.yes:
         reply = input(f"Delete server and volume for {args.name!r}? [y/N] ")
         if reply.strip().lower() != "y":
             print("Aborted.", file=sys.stderr)
             return
-    subprocess.run(["hcloud", "volume", "detach", f"{args.name}-data"])
-    subprocess.run(["hcloud", "volume", "delete", f"{args.name}-data"])
-    subprocess.run(["hcloud", "server", "delete", args.name])
+    cost_note = teardown_cost_note(args.name)
+    subprocess.run(["hcloud", "volume", "detach", f"{args.name}-data"], check=False)
+    subprocess.run(["hcloud", "volume", "delete", f"{args.name}-data"], check=False)
+    subprocess.run(["hcloud", "server", "delete", args.name], check=False)
+    if cost_note:
+        print(cost_note)
 
 
 def cmd_bucket_create(args):
@@ -563,16 +637,26 @@ def cmd_validate(args):
     print("\nAll hard checks passed.")
 
 
-def cmd_list(_args):
+def cmd_list(args):
     servers = hcloud_json(["server", "list", "-l", f"{LABEL_KEY}=true"])
     if not servers:
         print("No osm-diffs-test instances running.")
-        return
     for s in servers:
         labels = s.get("labels", {})
         branch = labels.get(f"{LABEL_KEY}-branch", "?").replace("--", "/")
         ip = s["public_net"]["ipv4"]["ip"]
         print(f"{s['name']:20} {ip:16} branch={branch}")
+
+    # Buckets aren't Hetzner-labeled the way servers/volumes are (the S3
+    # API has no such concept), and aren't scoped to a location the way
+    # `hcloud server list` is either -- so this only runs when asked,
+    # rather than guessing at every Object Storage region there is.
+    if args.bucket_region:
+        buckets = s3_client(args.bucket_region).list_buckets().get("Buckets", [])
+        if not buckets:
+            print(f"No test buckets in {args.bucket_region}.")
+        for b in buckets:
+            print(f"  bucket: {b['Name']:30} created={b['CreationDate']:%Y-%m-%d}")
 
 
 def cmd_up(args):
@@ -746,6 +830,9 @@ def main():
     p_validate.set_defaults(func=cmd_validate)
 
     p_list = sub.add_parser("list", help="list all osm-diffs-test instances")
+    p_list.add_argument(
+        "--bucket-region", help="also list S3 test buckets in this Hetzner Object Storage region"
+    )
     p_list.set_defaults(func=cmd_list)
 
     args = parser.parse_args()
