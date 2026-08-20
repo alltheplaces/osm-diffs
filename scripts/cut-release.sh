@@ -113,9 +113,27 @@ if [ -n "$LAST_TAG" ]; then
     echo "$BREAKING_COMMITS" | sed 's/^/  - /'
     CUR_MAJOR="${CURRENT_VERSION%%.*}"
     NEW_MAJOR="${VERSION%%.*}"
-    if [ "$NEW_MAJOR" -le "$CUR_MAJOR" ]; then
+    # Before 1.0.0, a breaking release bumps MINOR instead of MAJOR (see
+    # "Choosing the version number" in docs/RELEASING.md) -- MAJOR stays
+    # 0 throughout initial development (SemVer #4), so requiring a MAJOR
+    # bump here would never be satisfiable pre-1.0.
+    if [ "$CUR_MAJOR" -ge 1 ]; then
+      BREAKING_SLOT_BUMPED=$([ "$NEW_MAJOR" -gt "$CUR_MAJOR" ] && echo yes || echo no)
+    else
+      CUR_MINOR="${CURRENT_VERSION#*.}"
+      CUR_MINOR="${CUR_MINOR%%.*}"
+      NEW_MINOR="${VERSION#*.}"
+      NEW_MINOR="${NEW_MINOR%%.*}"
+      if [ "$NEW_MAJOR" -gt "$CUR_MAJOR" ] || [ "$NEW_MINOR" -gt "$CUR_MINOR" ]; then
+        BREAKING_SLOT_BUMPED=yes
+      else
+        BREAKING_SLOT_BUMPED=no
+      fi
+    fi
+    if [ "$BREAKING_SLOT_BUMPED" = "no" ]; then
       echo
-      echo "WARNING: the above suggests a major bump, but ${TAG} isn't one."
+      echo "WARNING: the above suggests a breaking-version bump (major once"
+      echo "  past 1.0.0, minor for now), but ${TAG} isn't one."
       echo "  This is only a suggestion from PR titles, not a schema diff --"
       echo "  double-check against 'Choosing the version number' in"
       echo "  docs/RELEASING.md before continuing."
