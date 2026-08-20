@@ -13,6 +13,8 @@ two copies going stale independently.
 - **Integration tests**: [`tests/`](../tests) — a full pipeline run
   against a real OSM extract (a Swiss shopping mall) plus minimal
   AllThePlaces data. Fast enough to run on every `cargo test`.
+- **Script tests**: [`scripts/test-branch-on-hetzner/tests/`](../scripts/test-branch-on-hetzner/tests) —
+  run `uv run pytest` from `scripts/`.
 
 ## CI
 
@@ -22,7 +24,13 @@ tests, and a minimum coverage threshold) and
 [`codeql.yml`](../.github/workflows/codeql.yml) (static analysis).
 PRs that touch `Containerfile` or `scripts/sbom/` also run
 [`test-container.yml`](../.github/workflows/test-container.yml). PRs and
-pushes that touch `Cargo.toml`, `Cargo.lock`, or `deny.toml` run
+pushes touching `scripts/**/*.sh` run
+[`shellcheck.yml`](../.github/workflows/shellcheck.yml); those touching
+`scripts/**` run
+[`test-scripts.yml`](../.github/workflows/test-scripts.yml) (`pytest`
+for the scripts that have real test coverage — currently just
+`scripts/test-branch-on-hetzner/`). PRs and pushes that touch
+`Cargo.toml`, `Cargo.lock`, or `deny.toml` run
 [`cargo-deny.yml`](../.github/workflows/cargo-deny.yml) — dependency
 licenses, banned/duplicated crates, sources, and known RUSTSEC/OSV
 advisories, via [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny)

@@ -30,6 +30,8 @@ This checks the new dependency graph against
 — disallowed licenses, banned/duplicated crates, untrusted sources, and
 known RUSTSEC/OSV advisories.
 
+If you changed a Python script, run `uv run pytest` from `scripts/`.
+
 After you've sent a Pull Request, our Continuous Integration (CI) runs a
 series of checks on it — the commands above are a subset of what CI runs
 ([`test.yml`](https://github.com/alltheplaces/osm-diffs/blob/main/.github/workflows/test.yml),
