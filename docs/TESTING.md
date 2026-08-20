@@ -79,5 +79,10 @@ real hardware before a change lands, not automated gates:
   — full pipeline on real cloud hardware, either built from your
   feature branch or pulled as an already-built image (e.g. a released
   container), optionally run containerized under a real cgroup
-  memory/CPU limit. Costs real money and needs Hetzner credentials —
-  see its README before reaching for it.
+  memory/CPU limit, against a
+  [Geofabrik](https://download.geofabrik.de/) regional extract instead
+  of the full planet for a faster smoke test. Its `validate` subcommand
+  then checks the result (schema, provenance, cgroup behavior, and
+  more) against `docs/outputs/CONFLATED_PARQUET.md`'s own contract.
+  Costs real money and needs Hetzner credentials — see its README
+  before reaching for it.
