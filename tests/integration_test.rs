@@ -59,7 +59,6 @@ struct ConflatedOsmSide {
     r#type: String,
     shop: Option<String>,
     is_polygon: bool,
-    changeset: u64,
     version: u32,
     modified_timestamp_millis: i64,
     way_members_count: usize,
@@ -159,13 +158,6 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
                 .map(|i| values.value(i).to_string());
 
             let modified = get_child_struct(osm, "modified")?;
-            let changeset = modified
-                .column_by_name("changeset")
-                .context("modified has no 'changeset' field")?
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .context("'changeset' is not UInt64")?
-                .value(row);
             let version = modified
                 .column_by_name("version")
                 .context("modified has no 'version' field")?
@@ -212,7 +204,6 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
                 r#type,
                 shop,
                 is_polygon,
-                changeset,
                 version,
                 modified_timestamp_millis,
                 way_members_count,
@@ -232,21 +223,19 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
         "expected 3 ATP features matched to an OSM feature"
     );
 
-    // (osm_id, shop, changeset, version, modified timestamp (Unix
-    // seconds -- OSM's own edit timestamps never carry sub-second
-    // precision), way_members count, atp spider, atp fetched (Unix
-    // *milliseconds* -- unlike modified, AllThePlaces' own
-    // spider:collection_time does carry sub-second precision, e.g.
-    // Denner's below is really ...952.804399 in the source GeoJSON, so
-    // this pins genuine sub-second digits, not just a round number))
-    // -- pinned via a real run's output, cross-checked with DuckDB
-    // against the fixture data directly, not just re-derived from this
-    // same code.
-    for (osm_id, expected_shop, changeset, version, ts_secs, way_members, spider, fetched_millis) in [
+    // (osm_id, shop, version, modified timestamp (Unix seconds -- OSM's
+    // own edit timestamps never carry sub-second precision), way_members
+    // count, atp spider, atp fetched (Unix *milliseconds* -- unlike
+    // modified, AllThePlaces' own spider:collection_time does carry
+    // sub-second precision, e.g. Denner's below is really
+    // ...952.804399 in the source GeoJSON, so this pins genuine
+    // sub-second digits, not just a round number)) -- pinned via a real
+    // run's output, cross-checked with DuckDB against the fixture data
+    // directly, not just re-derived from this same code.
+    for (osm_id, expected_shop, version, ts_secs, way_members, spider, fetched_millis) in [
         (
             608979139,
             "coffee",
-            131777778,
             3,
             1674832913,
             5,
@@ -256,7 +245,6 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
         (
             737021556,
             "electronics",
-            163100695,
             10,
             1740858960,
             7,
@@ -266,7 +254,6 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
         (
             737021557,
             "supermarket",
-            163100695,
             5,
             1740858960,
             5,
@@ -283,10 +270,6 @@ fn assert_conflated_parquet(path: &Path) -> Result<()> {
         assert!(
             row.is_polygon,
             "expected way/{osm_id} to carry real polygon geometry, not a synthetic point"
-        );
-        assert_eq!(
-            row.changeset, changeset,
-            "way/{osm_id} osm.modified.changeset"
         );
         assert_eq!(row.version, version, "way/{osm_id} osm.modified.version");
         assert_eq!(
@@ -329,20 +312,21 @@ fn assert_shops_jsonl(path: &Path) -> Result<()> {
         .collect::<Result<_>>()?;
 
     // Every row is a well-formed GeoJSON Point feature, carrying the
-    // OSM base changeset/version it was suggested against -- needed to
-    // detect edit conflicts later, even though nothing uploads edits
-    // yet.
+    // OSM base version it was suggested against -- needed to detect
+    // edit conflicts later (OSM's own edit API uses the version number,
+    // not the changeset, for this), even though nothing uploads edits
+    // yet. Deliberately no changeset here -- see alltheplaces/osm-diffs#730.
     for feature in &features {
         assert_eq!(feature["type"], "Feature");
         assert_eq!(feature["geometry"]["type"], "Point");
         assert!(feature["id"].is_number(), "feature has no id: {feature}");
         assert!(
-            feature["properties"]["@osm_changeset"].is_number(),
-            "feature has no @osm_changeset: {feature}"
-        );
-        assert!(
             feature["properties"]["@osm_version"].is_number(),
             "feature has no @osm_version: {feature}"
+        );
+        assert!(
+            feature["properties"].get("@osm_changeset").is_none(),
+            "feature should not carry @osm_changeset: {feature}"
         );
     }
 

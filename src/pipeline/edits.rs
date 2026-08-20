@@ -48,7 +48,6 @@ use wkb::reader::read_wkb;
 pub struct SuggestedEdit {
     pub osm_id: u64,
     pub osm_type: String, // "node" | "way" | "relation"
-    pub osm_changeset: u64,
     pub osm_version: u32,
     pub tags: Vec<(String, String)>,
     /// (longitude, latitude). Just the OSM feature's centroid for now,
@@ -88,10 +87,6 @@ impl SuggestedEdit {
             .iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect();
-        properties.insert(
-            String::from("@osm_changeset"),
-            serde_json::Value::from(self.osm_changeset),
-        );
         properties.insert(
             String::from("@osm_version"),
             serde_json::Value::from(self.osm_version),
@@ -186,7 +181,6 @@ struct ConflatedRow {
     osm_type: String,
     osm_id: u64,
     osm_tags: Vec<(String, String)>,
-    osm_changeset: u64,
     osm_version: u32,
     osm_geometry_wkb: Vec<u8>,
 }
@@ -215,7 +209,6 @@ fn produce_edits(
             let edit = SuggestedEdit {
                 osm_id: row.osm_id,
                 osm_type: row.osm_type.clone(),
-                osm_changeset: row.osm_changeset,
                 osm_version: row.osm_version,
                 tags,
                 centroid: decode_centroid(&row.osm_geometry_wkb)?,
@@ -286,7 +279,6 @@ fn extract_conflated_row(batch: &RecordBatch, row: usize) -> Result<Option<Confl
         osm_type: get_string(osm, "type", row)?,
         osm_id: get_u64(osm, "id", row)?,
         osm_tags: get_tags(osm, "tags", row)?,
-        osm_changeset: get_u64(modified, "changeset", row)?,
         osm_version: get_u32(modified, "version", row)?,
         // Top-level, not nested inside `osm` -- GeoParquet 2.0 requires
         // geometry columns to live at the schema root (see

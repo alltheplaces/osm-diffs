@@ -678,9 +678,6 @@ fn assemble_feature(id: u64, info: &Option<osm_pbf_iter::info::Info<'_>>) -> Fea
         if let Some(version) = info.version {
             feature.version = version;
         }
-        if let Some(changeset) = info.changeset {
-            feature.changeset = changeset;
-        }
         if let Some(timestamp) = info.timestamp {
             feature.timestamp = timestamp;
         }
