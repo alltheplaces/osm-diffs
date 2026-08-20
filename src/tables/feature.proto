@@ -22,10 +22,6 @@ message Feature {
     // unknown.
     uint32 version = 2;
 
-    // ID of the OpenStreetMap changeset that last modified this element.
-    // 0 if unknown.
-    uint64 changeset = 3;
-
     // Unix timestamp (seconds since 1970-01-01 UTC) of the last edit.
     // 0 if unknown.
     uint64 timestamp = 4;

@@ -65,7 +65,6 @@ pub struct ParquetWriter {
     osm_ids: UInt64Builder,
     osm_tags: MapBuilder<StringBuilder, StringBuilder>,
     osm_modified_timestamps: TimestampMillisecondBuilder,
-    osm_modified_changesets: UInt64Builder,
     osm_modified_versions: UInt32Builder,
     osm_way_members: ListBuilder<UInt64Builder>,
     osm_relation_members: ListBuilder<StructBuilder>,
@@ -91,7 +90,6 @@ pub struct ParquetRow {
 
     pub osm_id: Option<NonZeroU64>,
     osm_modified_timestamp: Option<UtcTimestamp>,
-    osm_modified_changeset: Option<NonZeroU64>,
     osm_modified_version: Option<NonZeroU32>,
     osm_tags: Vec<(String, String)>,
     /// `Some` only when `osm_id` is a way -- a way's node references, in
@@ -160,7 +158,6 @@ impl ParquetWriter {
             .set_column_bloom_filter_enabled(Self::column_path("atp.fetched.spider"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.key"), true)
             .set_column_bloom_filter_enabled(Self::column_path("atp.tags.key_value.value"), true)
-            .set_column_bloom_filter_enabled(Self::column_path("osm.modified.changeset"), true)
             .set_column_bloom_filter_enabled(Self::column_path("osm.id"), true)
             .set_column_bloom_filter_enabled(Self::column_path("osm.tags.key_value.key"), true)
             .set_column_bloom_filter_enabled(Self::column_path("osm.tags.key_value.value"), true)
@@ -204,7 +201,6 @@ impl ParquetWriter {
             osm_ids: UInt64Builder::with_capacity(max_rows_per_group),
             osm_tags: Self::new_key_value_map_builder(max_rows_per_group),
             osm_modified_timestamps: Self::new_timestamp_builder(max_rows_per_group),
-            osm_modified_changesets: UInt64Builder::with_capacity(max_rows_per_group),
             osm_modified_versions: UInt32Builder::with_capacity(max_rows_per_group),
             osm_way_members: ListBuilder::new(UInt64Builder::new()).with_field(Field::new(
                 "item",
@@ -329,11 +325,6 @@ impl ParquetWriter {
                     .expect("osm_modified_timestamp")
                     .unix_timestamp_millis(),
             );
-            self.osm_modified_changesets.append_value(
-                row.osm_modified_changeset
-                    .expect("osm_modified_changeset")
-                    .get(),
-            );
             self.osm_modified_versions.append_value(
                 row.osm_modified_version
                     .expect("osm_modified_version")
@@ -390,7 +381,6 @@ impl ParquetWriter {
             self.osm_ids.append_value(0);
             self.osm_tags.append(false)?;
             self.osm_modified_timestamps.append_value(0);
-            self.osm_modified_changesets.append_value(0);
             self.osm_modified_versions.append_value(0);
             self.osm_way_members.append(false);
             self.osm_relation_members.append(false);
@@ -540,7 +530,6 @@ impl ParquetWriter {
             modified_fields,
             vec![
                 Arc::new(self.osm_modified_timestamps.finish()) as ArrayRef,
-                Arc::new(self.osm_modified_changesets.finish()) as ArrayRef,
                 Arc::new(self.osm_modified_versions.finish()) as ArrayRef,
             ],
             None, // osm.modified is never null when osm itself is present
@@ -651,7 +640,6 @@ impl ParquetRow {
 
         let osm_id;
         let osm_modified_timestamp;
-        let osm_modified_changeset;
         let osm_modified_version;
         let osm_way_members;
         let osm_relation_members;
@@ -668,7 +656,6 @@ impl ParquetRow {
                         )
                     })?,
             ));
-            osm_modified_changeset = NonZeroU64::new(feature.changeset);
             osm_modified_version = NonZeroU32::new(feature.version);
             osm_tags = feature
                 .tags
@@ -703,7 +690,6 @@ impl ParquetRow {
         } else {
             osm_id = None;
             osm_modified_timestamp = None;
-            osm_modified_changeset = None;
             osm_modified_version = None;
             osm_way_members = None;
             osm_relation_members = None;
@@ -719,7 +705,6 @@ impl ParquetRow {
             atp_shape_wkb,
             osm_id,
             osm_modified_timestamp,
-            osm_modified_changeset,
             osm_modified_version,
             osm_tags,
             osm_way_members,
@@ -785,7 +770,6 @@ mod schema {
             "modified",
             vec![
                 new_timestamp_field("timestamp", NOT_NULLABLE),
-                Field::new("changeset", DataType::UInt64, NOT_NULLABLE),
                 Field::new("version", DataType::UInt32, NOT_NULLABLE),
             ],
             NOT_NULLABLE,

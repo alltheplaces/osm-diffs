@@ -30,7 +30,6 @@ osm                                          STRUCT, nullable
   tags        MAP<UTF8, UTF8>                non-null map, non-null keys and values
   modified                                   STRUCT, non-null
     timestamp TIMESTAMP(ms, UTC)             non-null
-    changeset UINT64                         non-null
     version   UINT32                         non-null
   way_members LIST<UINT64>                   nullable — present only when type = "way"
   relation_members LIST<STRUCT>              nullable — present only when type = "relation"
@@ -57,10 +56,16 @@ A few things worth calling out that aren’t obvious from the above:
 - **`atp.fetched` and `osm.modified` mirror each other on purpose**:
   both answer “who produced this side of the row, and when” —
   `atp.fetched` for AllThePlaces’ own scrape, `osm.modified` for
-  OpenStreetMap’s own edit metadata (the timestamp, changeset, and
-  version number of that feature’s most recent edit). We don’t
-  preserve OpenStreetMap’s full edit history here, only its current
-  state as of the database snapshot this file was built from.
+  OpenStreetMap’s own edit metadata (the timestamp and version number
+  of that feature’s most recent edit). We don’t preserve OpenStreetMap’s
+  full edit history here, only its current state as of the database
+  snapshot this file was built from.
+- **We deliberately don’t carry OpenStreetMap’s changeset ID.** A
+  changeset number resolves, via OSM’s own public API, to the account
+  that made the edit — unlike a node/way/relation ID, which only
+  identifies a place. See
+  [#730](https://github.com/alltheplaces/osm-diffs/issues/730) for the
+  full reasoning and trade-offs.
 - **`osm.way_members`/`osm.relation_members` are `null`, not an empty
   list, when they don’t apply** — a `null` `way_members` means “this
   isn’t a way”, not “this way has no members”. Only one of the two is
