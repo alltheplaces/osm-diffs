@@ -68,13 +68,19 @@ real disk, isn't something you can determine by reading the code.
 - An SSH key already uploaded to that Hetzner project (`hcloud ssh-key
   list`) -- its *name*, not the key file itself, is what you pass to
   this tool.
-- Nothing else for a `--branch` deploy or a bare/`--containerized` run
-  without `--bucket-name`: both scripts only use the Python standard
-  library (no `pip install` needed); `cloud_test.py` shells out to
-  `hcloud`/`ssh`/`scp` for everything it does beyond that.
+- [`uv`](https://docs.astral.sh/uv/) -- run `uv sync` once from
+  `scripts/` to install `cloud_test.py`'s real dependencies (`boto3`
+  for the S3 test-bucket lifecycle, `duckdb` for `validate`). `hcloud`/
+  `ssh`/`scp`/`podman` are still shelled out to directly, not wrapped
+  in a library -- what you see echoed to stderr is exactly what runs.
 - `HETZNER_TEST_S3_ACCESS_KEY_ID`/`HETZNER_TEST_S3_ACCESS_KEY_SECRET` in
   your own environment, only if using `--bucket-name` (see
   "Containerized runs, regional extracts" below).
+
+Changing `cloud_test.py`? Run `uv run pytest` from `scripts/` first --
+`tests/test_cloud_test.py` covers the pure logic (label sanitization,
+S3/bucket calls, command construction) without touching real
+Hetzner/S3, and is also enforced in CI (`test-scripts.yml`).
 
 ## Quick start
 
