@@ -30,11 +30,11 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Derives the enhancement/bug/breaking-change label from the PR title so it
-  # doesn't have to be kept in sync by hand -- these feed .github/release.yml's
-  # auto-generated release-note categories. Only ever adds a label, never
-  # removes one, so a title edit won't strip a label a human applied for an
-  # unrelated reason (e.g. good first issue).
+  # Derives the enhancement/bug/breaking-change/documentation label from the
+  # PR title so it doesn't have to be kept in sync by hand -- these feed
+  # .github/release.yml's auto-generated release-note categories. Only ever
+  # adds a label, never removes one, so a title edit won't strip a label a
+  # human applied for an unrelated reason (e.g. good first issue).
   #
   # Note: "!" here means the PR breaks osm-diffs' OUTPUT SCHEMA
   # (conflated.parquet), not that it breaks some public API -- see
@@ -75,6 +75,8 @@ jobs:
             label="enhancement"
           elif [[ "$type" == "fix" ]]; then
             label="bug"
+          elif [[ "$type" == "docs" ]]; then
+            label="documentation"
           else
             label=""
           fi
