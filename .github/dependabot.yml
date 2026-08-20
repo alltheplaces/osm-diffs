@@ -16,6 +16,17 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+  - package-ecosystem: "uv"
+    directory: "/scripts"
+    schedule:
+      interval: "monthly"
+    groups:
+      uv:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
