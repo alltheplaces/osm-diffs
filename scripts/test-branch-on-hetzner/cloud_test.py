@@ -7,7 +7,9 @@ including prerequisites and a worked example.
 
 Every `hcloud`/`ssh`/`scp` command this runs is echoed to stderr first,
 so a flag mismatch against your installed `hcloud` version should be
-easy to spot and fix.
+easy to spot and fix. S3 (test bucket) operations go through boto3
+instead of a shelled-out CLI -- see s3_client()'s docstring for why --
+so those are logged as a one-line summary instead of an echoed command.
 """
 
 import argparse
@@ -19,6 +21,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+import boto3
+from botocore.client import Config as BotoConfig
+from botocore.exceptions import ClientError
 
 DEFAULT_IMAGE = "debian-13"
 DEFAULT_LOCATION = "hel1"
@@ -116,22 +122,27 @@ def s3_credentials():
     return access_key, secret_key
 
 
-# `mc`'s own alias name for the Hetzner Object Storage account -- arbitrary,
-# just needs to match between `mc alias set` and every later `mc` call.
-MC_ALIAS = "containertest"
-
-
-def mc_alias_set(region):
-    """Not sh(): that echoes the full command line, which for `mc alias
-    set` would print the secret key in plain text to stderr (terminal
-    scrollback, a copy-pasted debugging session, ...). Echoes a redacted
-    form instead, same audit-trail intent as sh() without the leak."""
+def s3_client(region):
+    """A boto3 client against Hetzner Object Storage's S3-compatible
+    endpoint -- not `mc`: credentials become Python function arguments
+    here, never a subprocess command-line string, so there's no
+    equivalent of `sh()`'s command-echoing accidentally printing a
+    secret to stderr to guard against in the first place. boto3 is
+    AWS's own SDK, but works against any S3-compatible endpoint via
+    `endpoint_url` -- standard practice for non-AWS providers.
+    `addressing_style="path"` because Hetzner's endpoint needs
+    path-style bucket addressing, not the AWS-default virtual-hosted
+    style."""
     access_key, secret_key = s3_credentials()
-    endpoint = s3_endpoint(region)
-    cmd = ["mc", "alias", "set", MC_ALIAS, endpoint, access_key, secret_key]
-    redacted = ["mc", "alias", "set", MC_ALIAS, endpoint, access_key, "***"]
-    print(f"+ {' '.join(shlex.quote(c) for c in redacted)}", file=sys.stderr)
-    subprocess.run(cmd, check=True)
+    print(f"+ boto3 s3 client, endpoint={s3_endpoint(region)}", file=sys.stderr)
+    return boto3.client(
+        "s3",
+        endpoint_url=s3_endpoint(region),
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+        config=BotoConfig(s3={"addressing_style": "path"}),
+    )
 
 
 def server_ip(name):
@@ -456,8 +467,8 @@ def cmd_destroy(args):
 
 
 def cmd_bucket_create(args):
-    mc_alias_set(args.region)
-    sh(["mc", "mb", f"{MC_ALIAS}/{args.name}"])
+    client = s3_client(args.region)
+    client.create_bucket(Bucket=args.name)
     print(f"\nBucket {args.name} created in {args.region}.")
     print(f"  S3_ENDPOINT: {s3_endpoint(args.region)}")
     print(f"  S3_BUCKET:   {args.name}")
@@ -474,9 +485,18 @@ def cmd_bucket_destroy(args):
         if reply.strip().lower() != "y":
             print("Aborted.", file=sys.stderr)
             return
-    mc_alias_set(args.region)
-    subprocess.run(["mc", "rm", "--recursive", "--force", f"{MC_ALIAS}/{args.name}"])
-    subprocess.run(["mc", "rb", f"{MC_ALIAS}/{args.name}"])
+    client = s3_client(args.region)
+    # Same "don't let a partial failure block teardown" resilience
+    # cmd_destroy already has for the VM/volume -- e.g. the bucket
+    # might already be empty, or already gone from an earlier retry.
+    try:
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=args.name):
+            for obj in page.get("Contents", []):
+                client.delete_object(Bucket=args.name, Key=obj["Key"])
+        client.delete_bucket(Bucket=args.name)
+    except ClientError as e:
+        print(f"Warning: {e}", file=sys.stderr)
 
 
 def cmd_list(_args):

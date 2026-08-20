@@ -1,0 +1,40 @@
+# SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
+# SPDX-License-Identifier: MIT
+
+name: Test scripts
+
+# Runs pytest over scripts/ -- currently just
+# scripts/test-branch-on-hetzner/tests/, see #737. Path-filtered and not
+# added to the branch protection required-checks list, same reasoning as
+# shellcheck.yml: a plain context-name-matched required check expects a
+# status on every PR, which a path-filtered workflow can't guarantee for
+# PRs that don't touch scripts/ -- the job still fails hard on a real
+# test failure, it's just not formally required the way test.yml is.
+
+on:
+  merge_group:
+  push:
+    branches: [ "main" ]
+    paths: [ "scripts/**" ]
+  pull_request:
+    branches: [ "main" ]
+    paths: [ "scripts/**" ]
+
+permissions: {}
+
+jobs:
+  test-scripts:
+    name: Run scripts/ tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+    - name: Install uv
+      uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+      with:
+        working-directory: scripts
+        enable-cache: true
+    - name: Run pytest
+      working-directory: scripts
+      run: uv run pytest
