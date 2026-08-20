@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import boto3
+import validate
 from botocore.client import Config as BotoConfig
 from botocore.exceptions import ClientError
 
@@ -447,6 +448,16 @@ def cmd_logs(args):
     scp_from(ip, f"{REMOTE_DIR}/vmstat.log", dest / "vmstat.log")
     scp_from(ip, f"{REMOTE_DIR}/disk.log", dest / "disk.log")
     scp_from(ip, f"{REMOTE_DIR}/sysinfo.txt", dest / "sysinfo.txt")
+    # `validate`'s no-OOM check needs this from a local copy, since an
+    # OOM-killed step's own pipeline.log record is simply missing, not
+    # an error entry -- dmesg first, journalctl -k as a fallback (some
+    # images/kernels restrict unprivileged `dmesg` access), either way
+    # never failing the whole `logs` run if both come up empty.
+    ssh_cmd(
+        ip,
+        f"(dmesg 2>&1 || journalctl -k --no-pager 2>&1 || true) > {REMOTE_DIR}/dmesg.log",
+    )
+    scp_from(ip, f"{REMOTE_DIR}/dmesg.log", dest / "dmesg.log")
     print(f"\nLogs saved to {dest}")
 
 
@@ -497,6 +508,48 @@ def cmd_bucket_destroy(args):
         client.delete_bucket(Bucket=args.name)
     except ClientError as e:
         print(f"Warning: {e}", file=sys.stderr)
+
+
+def cmd_validate(args):
+    """Runs `validate.py`'s hard checks against a completed run's
+    `conflated.parquet` (read straight from the S3 test bucket) and a
+    locally downloaded `pipeline.log`/`dmesg.log` (see `logs`).
+    Standalone -- doesn't touch the VM at all, so it works just as well
+    against a run whose server has already been `destroy`ed."""
+    dmesg_path = Path(args.dmesg_log) if args.dmesg_log else Path(args.pipeline_log).with_name("dmesg.log")
+    if not dmesg_path.exists():
+        print(
+            f"Warning: {dmesg_path} not found -- run `logs` first if you haven't; "
+            "the no-OOM check will have nothing to flag either way.",
+            file=sys.stderr,
+        )
+    dmesg_text = dmesg_path.read_text() if dmesg_path.exists() else ""
+    records = validate.read_pipeline_log(args.pipeline_log)
+
+    access_key, secret_key = s3_credentials()
+    con = validate.connect(args.bucket_region, access_key, secret_key)
+    url = validate.parquet_url(args.bucket_name)
+
+    results = validate.run_hard_checks(
+        con,
+        url,
+        records,
+        dmesg_text,
+        args.mem_limit,
+        args.expect_pipeline_version,
+        args.min_atp_features,
+    )
+
+    print("\nHard checks:")
+    failed = False
+    for r in results:
+        status = "SKIP" if r.passed is None else ("PASS" if r.passed else "FAIL")
+        failed = failed or r.passed is False
+        print(f"  [{status}] {r.name}: {r.message}")
+
+    if failed:
+        sys.exit("\nvalidate: one or more hard checks failed")
+    print("\nAll hard checks passed.")
 
 
 def cmd_list(_args):
@@ -645,6 +698,35 @@ def main():
     )
     p_bucket_destroy.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     p_bucket_destroy.set_defaults(func=cmd_bucket_destroy)
+
+    p_validate = sub.add_parser(
+        "validate", help="hard checks against a run's conflated.parquet + pipeline.log"
+    )
+    p_validate.add_argument("--bucket-name", required=True, help="S3 test bucket the run uploaded to")
+    p_validate.add_argument(
+        "--bucket-region", required=True, help="Hetzner Object Storage region, e.g. fsn1"
+    )
+    p_validate.add_argument(
+        "--pipeline-log", required=True, help="local path to a downloaded pipeline.log (see `logs`)"
+    )
+    p_validate.add_argument(
+        "--dmesg-log", help="local path to a downloaded dmesg.log (default: alongside --pipeline-log)"
+    )
+    p_validate.add_argument(
+        "--mem-limit",
+        help="the --mem-limit the run was started with, e.g. 4g -- checked against "
+        "cgroup_max_bytes if given",
+    )
+    p_validate.add_argument(
+        "--expect-pipeline-version",
+        help="fail unless the embedded provenance BOM's pipeline_version matches, e.g. 0.8.0",
+    )
+    p_validate.add_argument(
+        "--min-atp-features",
+        type=int,
+        help="fail unless import_atp's geometry tally totals at least this many features",
+    )
+    p_validate.set_defaults(func=cmd_validate)
 
     p_list = sub.add_parser("list", help="list all osm-diffs-test instances")
     p_list.set_defaults(func=cmd_list)

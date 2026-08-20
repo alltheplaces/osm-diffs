@@ -116,9 +116,11 @@ restart a run with a clean workdir without tearing down the VM
 | `status` | `systemctl status` for the run, plus `df` and the last few `pipeline.log` lines. |
 | `fio` | Random-read benchmark of the attached volume (the same command used by hand throughout the PR 665 experiment -- see `#667`). Re-runnable anytime, e.g. to check whether a result was a one-off blip. |
 | `sysinfo` | OS/kernel version, CPU model, memory, swap, disk layout, cgroup limits -- environment facts that turned out to matter for interpreting results but aren't anything this tool controls. |
-| `logs` | Downloads `pipeline.log`, `vmstat.log`, `disk.log`, `sysinfo.txt` to `logs/<name>/`. |
+| `logs` | Downloads `pipeline.log`, `vmstat.log`, `disk.log`, `sysinfo.txt`, `dmesg.log` to `logs/<name>/`. |
 | `stop` | Stops the pipeline + monitor, leaves the VM (and its disk contents) alone. |
 | `destroy` | Deletes the server and volume. Asks for confirmation unless `--yes`. |
+| `bucket create`/`bucket destroy` | Ephemeral S3 test bucket lifecycle -- see "Containerized runs" below. |
+| `validate` | Hard pass/fail checks against a run's `conflated.parquet` + downloaded logs -- see "Validation checks" below. |
 | `list` | Lists every instance this tool created (via a Hetzner label), so nothing gets forgotten and left running. |
 
 Run `./cloud_test.py <command> --help` for the full flag list; defaults
@@ -166,6 +168,53 @@ Recommended: keep all of this pointed at a Hetzner project (and S3
 credentials) dedicated to testing, separate from anything
 production-related -- testing shouldn't touch production, since
 something always goes wrong during testing.
+
+## Validation checks
+
+```console
+$ ./cloud_test.py validate \
+    --bucket-name osm-diffs-container-test-1 --bucket-region fsn1 \
+    --pipeline-log logs/reg1/pipeline.log \
+    --mem-limit 4g --expect-pipeline-version 0.8.0 --min-atp-features 100000
+```
+
+`validate` runs a fixed set of **hard** checks -- invariants that can't
+legitimately vary run-to-run, so a failure means something's actually
+broken, not just that today's data looks different from yesterday's:
+
+- Output is non-empty, and its schema matches
+  [`docs/outputs/CONFLATED_PARQUET.md`](../../docs/outputs/CONFLATED_PARQUET.md)
+  (struct field names, not full types -- e.g. this is what would have
+  caught `changeset` if #731 had only updated one of the writer/doc).
+- `atp`/`atp_geometry` and `osm`/`osm_geometry` are null exactly
+  together, and every `osm_geometry` is a valid geometry.
+- The embedded provenance BOM is present, passes
+  [`cyclonedx-cli validate`](https://github.com/CycloneDX/cyclonedx-cli)
+  (the same tool `test-container.yml` already uses), and -- if
+  `--expect-pipeline-version` is given -- its `pipeline_version` matches.
+- The `conflate` step reached its `phase="end"` log record with no
+  `ERROR` records logged after `phase="start"`.
+- `pipeline.log`'s `cgroup_current_bytes`/`cgroup_max_bytes` are
+  populated on that record (proof the run was actually containerized
+  under a real cgroup, impossible for a bare-VM run) -- and, if
+  `--mem-limit` is given, that `cgroup_max_bytes` matches it.
+- No OOM-kill signature in the downloaded `dmesg.log` (an OOM-killed
+  step's own log record is simply missing, not an error entry -- this
+  is the check that actually catches that case).
+- AllThePlaces' geometry count (`import_atp`'s tally) is at least
+  `--min-atp-features`, if given -- skipped (not silently passed)
+  without it, since there's no universal floor that makes sense across
+  every run.
+
+`--bucket-name`/`--bucket-region` point `validate` at the same test
+bucket `start --containerized --bucket-name ...` uploaded to;
+`--pipeline-log` (and, if not alongside it, `--dmesg-log`) point at a
+local directory `logs` already downloaded to. Standalone-runnable
+against any past run this way, even after its VM has been `destroy`ed.
+Exits non-zero if any hard check fails. **Content-shaped** signals
+(match rate, memory distribution -- expected to drift as real data and
+matching logic evolve) aren't part of this yet; see issue #722's plan
+for the deferred advisory-check tier.
 
 ## Making sense of the logs
 
