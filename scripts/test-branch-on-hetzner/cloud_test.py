@@ -94,6 +94,8 @@ def wait_for_ssh(ip, timeout=180):
 
 
 def s3_endpoint(region):
+    # Not a placeholder -- "your-objectstorage.com" is Hetzner's real,
+    # literal domain for Object Storage.
     return f"https://{region}.your-objectstorage.com"
 
 
