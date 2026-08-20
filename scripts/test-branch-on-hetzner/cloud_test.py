@@ -93,6 +93,47 @@ def wait_for_ssh(ip, timeout=180):
     raise TimeoutError(f"SSH on {ip} did not come up within {timeout}s")
 
 
+def s3_endpoint(region):
+    # Not a placeholder -- "your-objectstorage.com" is Hetzner's real,
+    # literal domain for Object Storage.
+    return f"https://{region}.your-objectstorage.com"
+
+
+def s3_credentials():
+    """Reads the test-bucket S3 credentials from the local environment --
+    never passed as command-line arguments, so they never show up in
+    `ps`/shell history on this machine either. Shared by `bucket
+    create`/`bucket destroy` and containerized `start`'s S3 env-file
+    construction, so all three fail with the same clear message rather
+    than three slightly different ones."""
+    access_key = os.environ.get("HETZNER_TEST_S3_ACCESS_KEY_ID")
+    secret_key = os.environ.get("HETZNER_TEST_S3_ACCESS_KEY_SECRET")
+    if not access_key or not secret_key:
+        sys.exit(
+            "HETZNER_TEST_S3_ACCESS_KEY_ID / HETZNER_TEST_S3_ACCESS_KEY_SECRET "
+            "aren't set locally."
+        )
+    return access_key, secret_key
+
+
+# `mc`'s own alias name for the Hetzner Object Storage account -- arbitrary,
+# just needs to match between `mc alias set` and every later `mc` call.
+MC_ALIAS = "containertest"
+
+
+def mc_alias_set(region):
+    """Not sh(): that echoes the full command line, which for `mc alias
+    set` would print the secret key in plain text to stderr (terminal
+    scrollback, a copy-pasted debugging session, ...). Echoes a redacted
+    form instead, same audit-trail intent as sh() without the leak."""
+    access_key, secret_key = s3_credentials()
+    endpoint = s3_endpoint(region)
+    cmd = ["mc", "alias", "set", MC_ALIAS, endpoint, access_key, secret_key]
+    redacted = ["mc", "alias", "set", MC_ALIAS, endpoint, access_key, "***"]
+    print(f"+ {' '.join(shlex.quote(c) for c in redacted)}", file=sys.stderr)
+    subprocess.run(cmd, check=True)
+
+
 def server_ip(name):
     info = hcloud_json(["server", "describe", name])
     return info["public_net"]["ipv4"]["ip"]
@@ -338,15 +379,9 @@ def containerized_run_command(args, ip, workdir):
 
     env_flag = ""
     if args.bucket_name:
-        access_key = os.environ.get("HETZNER_TEST_S3_ACCESS_KEY_ID")
-        secret_key = os.environ.get("HETZNER_TEST_S3_ACCESS_KEY_SECRET")
-        if not access_key or not secret_key:
-            sys.exit(
-                "--bucket-name given, but HETZNER_TEST_S3_ACCESS_KEY_ID / "
-                "HETZNER_TEST_S3_ACCESS_KEY_SECRET aren't set locally."
-            )
+        access_key, secret_key = s3_credentials()
         env_content = (
-            f"S3_ENDPOINT=https://{args.bucket_region}.your-objectstorage.com\n"
+            f"S3_ENDPOINT={s3_endpoint(args.bucket_region)}\n"
             f"S3_BUCKET={args.bucket_name}\n"
             f"S3_REGION={args.bucket_region}\n"
             f"S3_ACCESS_KEY_ID={access_key}\n"
@@ -418,6 +453,30 @@ def cmd_destroy(args):
     subprocess.run(["hcloud", "volume", "detach", f"{args.name}-data"])
     subprocess.run(["hcloud", "volume", "delete", f"{args.name}-data"])
     subprocess.run(["hcloud", "server", "delete", args.name])
+
+
+def cmd_bucket_create(args):
+    mc_alias_set(args.region)
+    sh(["mc", "mb", f"{MC_ALIAS}/{args.name}"])
+    print(f"\nBucket {args.name} created in {args.region}.")
+    print(f"  S3_ENDPOINT: {s3_endpoint(args.region)}")
+    print(f"  S3_BUCKET:   {args.name}")
+    print(
+        f"\nNext: cloud_test.py start --name <server> --containerized ... "
+        f"--bucket-name {args.name} --bucket-region {args.region}"
+    )
+    print(f"When done: cloud_test.py bucket destroy --name {args.name} --region {args.region}")
+
+
+def cmd_bucket_destroy(args):
+    if not args.yes:
+        reply = input(f"Delete bucket {args.name!r} in {args.region!r} (and everything in it)? [y/N] ")
+        if reply.strip().lower() != "y":
+            print("Aborted.", file=sys.stderr)
+            return
+    mc_alias_set(args.region)
+    subprocess.run(["mc", "rm", "--recursive", "--force", f"{MC_ALIAS}/{args.name}"])
+    subprocess.run(["mc", "rb", f"{MC_ALIAS}/{args.name}"])
 
 
 def cmd_list(_args):
@@ -546,6 +605,26 @@ def main():
     add_common(p_destroy)
     p_destroy.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     p_destroy.set_defaults(func=cmd_destroy)
+
+    p_bucket = sub.add_parser("bucket", help="ephemeral S3 test bucket lifecycle")
+    bucket_sub = p_bucket.add_subparsers(dest="bucket_command", required=True)
+
+    p_bucket_create = bucket_sub.add_parser("create", help="create a test bucket")
+    p_bucket_create.add_argument("--name", required=True, help="Bucket name")
+    p_bucket_create.add_argument(
+        "--region", required=True, help="Hetzner Object Storage region, e.g. fsn1"
+    )
+    p_bucket_create.set_defaults(func=cmd_bucket_create)
+
+    p_bucket_destroy = bucket_sub.add_parser(
+        "destroy", help="delete a test bucket and everything in it"
+    )
+    p_bucket_destroy.add_argument("--name", required=True, help="Bucket name")
+    p_bucket_destroy.add_argument(
+        "--region", required=True, help="Hetzner Object Storage region, e.g. fsn1"
+    )
+    p_bucket_destroy.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
+    p_bucket_destroy.set_defaults(func=cmd_bucket_destroy)
 
     p_list = sub.add_parser("list", help="list all osm-diffs-test instances")
     p_list.set_defaults(func=cmd_list)
