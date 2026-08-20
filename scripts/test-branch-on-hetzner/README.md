@@ -215,9 +215,10 @@ for a human to eyeball:
   `--regional-extract` is given, since AllThePlaces is worldwide and a
   regional OSM extract will show ~0% match outside its region by
   design, not by defect.
-- `rss_file_bytes` vs `rss_anon_bytes`/`rss_shmem_bytes` on the
-  `conflate` step -- the mmap/page-cache design's own signal (#711);
-  large `rss_shmem_bytes` is flagged as a likely tmpfs-workdir
+- `rss_file_bytes` vs `rss_anon_bytes`/`rss_shmem_bytes` at peak, from
+  the periodic `conflate.match: progress` snapshots logged during
+  matching -- the mmap/page-cache design's own signal (#711); large
+  `rss_shmem_bytes` is flagged as a likely tmpfs-workdir
   misconfiguration worth a look.
 - Any 85%-of-cgroup-limit `WARN` the pipeline already self-logs.
 - Disk headroom, from the downloaded `disk.log`.

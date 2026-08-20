@@ -405,6 +405,26 @@ def test_check_memory_distribution_no_note_when_shmem_below_file():
     assert "tmpfs" not in result.message
 
 
+def _match_progress(**fields):
+    return {"message": "conflate.match: progress", "fields": fields}
+
+
+def test_check_memory_distribution_prefers_peak_progress_record_over_conflate_end():
+    records = [
+        _match_progress(rss_bytes=100, rss_file_bytes=50, rss_anon_bytes=50, rss_shmem_bytes=0),
+        _match_progress(rss_bytes=900, rss_file_bytes=800, rss_anon_bytes=100, rss_shmem_bytes=0),
+        _conflate_end(rss_file_bytes=1, rss_anon_bytes=1, rss_shmem_bytes=1),
+    ]
+    result = v.check_memory_distribution(records)
+    assert "rss_file_bytes=800" in result.message
+
+
+def test_check_memory_distribution_falls_back_to_conflate_end_without_progress_records():
+    records = [_conflate_end(rss_file_bytes=800, rss_anon_bytes=200, rss_shmem_bytes=0)]
+    result = v.check_memory_distribution(records)
+    assert "rss_file_bytes=800" in result.message
+
+
 def test_check_cgroup_warnings_lists_hits():
     records = [
         {"level": "WARN", "fields": {"step": "conflate", "phase": "end", "cgroup_usage_fraction": 0.9}},

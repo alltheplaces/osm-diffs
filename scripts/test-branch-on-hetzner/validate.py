@@ -352,13 +352,24 @@ def check_match_rate(con, url, regional_extract):
 
 
 def check_memory_distribution(records):
-    # The mmap/page-cache design's own signal (#711): the "conflate" step
-    # is the only one with fine-grained enough logging to read this from
-    # -- there's no separate "conflate.match" log_snapshot record, just a
-    # progress-bar label (src/pipeline/conflate/mod.rs), so the step's
-    # own end-of-step snapshot is the closest available granularity.
-    end = find_step_record(records, "conflate", "end")
-    fields = end.get("fields", {}) if end else {}
+    # The mmap/page-cache design's own signal (#711): maybe_log_progress
+    # (src/pipeline/conflate/mod.rs) logs a "conflate.match: progress"
+    # snapshot every 30s *during* matching -- exactly the granularity the
+    # plan asks for, not just the "conflate" step's overall start/end
+    # pair (which would dilute the signal with the write phase too).
+    # Picks the highest-rss_bytes sample rather than the last one, since
+    # page-cache eviction under a tight --mem-limit can make a later
+    # sample read *lower* than an earlier peak. Falls back to the
+    # "conflate" step's own end-of-step snapshot for a run that finishes
+    # matching before the first 30s tick (e.g. a small
+    # --regional-extract smoke test never logs a progress record at
+    # all) -- diluted by the write phase, but better than nothing.
+    progress_records = [r for r in records if r.get("message") == "conflate.match: progress"]
+    if progress_records:
+        record = max(progress_records, key=lambda r: r.get("fields", {}).get("rss_bytes") or 0)
+    else:
+        record = find_step_record(records, "conflate", "end")
+    fields = record.get("fields", {}) if record else {}
     file_bytes = fields.get("rss_file_bytes")
     anon_bytes = fields.get("rss_anon_bytes")
     shmem_bytes = fields.get("rss_shmem_bytes")
