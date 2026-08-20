@@ -365,3 +365,91 @@ def test_run_hard_checks_returns_all_checks_in_order(tmp_path, monkeypatch):
         "ATP geometry floor",
     ]
     assert all(r.passed for r in results)
+
+
+# ── advisory checks ─────────────────────────────────────────────────
+#
+# Leaner than the hard-check tests above: one test per piece of actual
+# logic (rate/ratio math, last-sample parsing, summing), not one per
+# trivial branch -- these checks never fail validate, so a wrong
+# CheckResult.passed value isn't the risk here; a wrong *number* is.
+
+
+def test_check_match_rate_skips_for_regional_extract(tmp_path):
+    con, url = make_parquet(tmp_path, VALID_ROW_SQL)
+    result = v.check_match_rate(con, url, regional_extract="europe/switzerland")
+    assert result.passed is None
+    assert "skipped" in result.message
+
+
+def test_check_match_rate_computes_ratio(tmp_path):
+    # One matched row (VALID_ROW_SQL) plus one ATP-only (unmatched) row,
+    # built by nulling out osm/osm_geometry on a second copy of it.
+    sql = f"{VALID_ROW_SQL} UNION ALL SELECT atp, atp_geometry, NULL, NULL FROM ({VALID_ROW_SQL})"
+    con, url = make_parquet(tmp_path, sql)
+    result = v.check_match_rate(con, url, regional_extract=None)
+    assert result.passed is True
+    assert "1/2 rows matched (50.0%)" in result.message
+
+
+def test_check_memory_distribution_reports_ratio_and_flags_shmem():
+    records = [_conflate_end(rss_file_bytes=800, rss_anon_bytes=200, rss_shmem_bytes=900)]
+    result = v.check_memory_distribution(records)
+    assert "ratio=4.00" in result.message
+    assert "tmpfs" in result.message
+
+
+def test_check_memory_distribution_no_note_when_shmem_below_file():
+    records = [_conflate_end(rss_file_bytes=800, rss_anon_bytes=200, rss_shmem_bytes=10)]
+    result = v.check_memory_distribution(records)
+    assert "tmpfs" not in result.message
+
+
+def test_check_cgroup_warnings_lists_hits():
+    records = [
+        {"level": "WARN", "fields": {"step": "conflate", "phase": "end", "cgroup_usage_fraction": 0.9}},
+        {"level": "INFO", "fields": {"step": "conflate", "phase": "end"}},
+    ]
+    result = v.check_cgroup_warnings(records)
+    assert "1 logged" in result.message
+    assert "conflate/end=90%" in result.message
+
+
+def test_check_cgroup_warnings_reports_none_when_absent():
+    result = v.check_cgroup_warnings([{"level": "INFO", "fields": {}}])
+    assert result.message == "none logged"
+
+
+def test_check_disk_headroom_parses_last_sample():
+    text = "2026-01-01 00:00:00 100 900\n2026-01-01 00:00:05 200 800\n"
+    result = v.check_disk_headroom(text)
+    assert "used=200 avail=800 (20.0% full)" in result.message
+
+
+def test_check_timings_sums_elapsed():
+    records = [
+        {"fields": {"step": "import_atp", "phase": "end", "elapsed_seconds": 10.0}},
+        {"fields": {"step": "conflate", "phase": "end", "elapsed_seconds": 20.5}},
+        {"fields": {"step": "conflate", "phase": "start", "elapsed_seconds": None}},
+    ]
+    result = v.check_timings(records)
+    assert "total=30.5s" in result.message
+
+
+def test_check_osm_geometry_count_sums_tally():
+    records = [{"message": "conflate.write: osm_geometry geometry types", "fields": {"point": 5, "polygon": 3}}]
+    result = v.check_osm_geometry_count(records)
+    assert "8 matched OSM geometries" in result.message
+
+
+def test_run_advisory_checks_returns_all_in_order(tmp_path):
+    con, url = make_parquet(tmp_path, VALID_ROW_SQL)
+    results = v.run_advisory_checks(con, url, records=[], disk_log_text="", regional_extract=None)
+    assert [r.name for r in results] == [
+        "match rate",
+        "memory distribution",
+        "cgroup 85% warnings",
+        "disk headroom",
+        "timings",
+        "OSM geometry count",
+    ]
