@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: 2026 Sascha Brawer <sascha@brawer.ch>
 # SPDX-License-Identifier: MIT
 
-"""Tests for validate.py's hard checks. Runs real DuckDB queries against
-small Parquet fixtures built on the fly (rather than mocking the query
-engine itself, which would just be re-asserting the SQL string instead
-of actually exercising it) -- no S3/network/podman calls: fixtures are
-plain local files, and the one check that does shell out
-(check_provenance_bom's cyclonedx-cli call) has `subprocess.run` mocked.
+"""Tests for validate.py. Runs real DuckDB queries against small Parquet
+fixtures built on the fly (rather than mocking the query engine itself,
+which would just be re-asserting the SQL string instead of actually
+exercising it) -- no S3/network/podman calls: fixtures are plain local
+files, and the one check that does shell out (check_provenance_bom's
+cyclonedx-cli call) has `subprocess.run` mocked.
+
+One test (or one `parametrize`d test) per piece of actual logic, not one
+per trivial branch -- a wrong `CheckResult.passed` on a check with
+nothing to get wrong isn't the risk worth guarding against here.
 """
 
 import json
@@ -54,7 +58,33 @@ def make_parquet(tmp_path, select_sql, name="conflated.parquet", kv_metadata=Non
     return con, str(path)
 
 
-# ── parse_byte_size ──────────────────────────────────────────────────
+def fake_run(returncode=0, stdout="", stderr=""):
+    """A `subprocess.run` stand-in for `check_provenance_bom`'s
+    `cyclonedx-cli` call -- just the `.returncode`/`.stdout`/`.stderr`
+    attributes that call site reads."""
+    return lambda *a, **k: type("R", (), {"returncode": returncode, "stdout": stdout, "stderr": stderr})()
+
+
+def _conflate_end(**fields):
+    return {"level": "INFO", "message": "conflate: end", "fields": {"step": "conflate", "phase": "end", **fields}}
+
+
+def _atp_tally_record(**counts):
+    fields = dict.fromkeys(
+        ("point", "line_string", "polygon", "multi_point", "multi_line_string", "multi_polygon", "geometry_collection"),
+        0,
+    )
+    fields.update(counts)
+    return {"message": "import_atp: alltheplaces.parquet geometry types", "fields": fields}
+
+
+def _bom(pipeline_version="0.8.0", spec_version="1.7"):
+    return json.dumps(
+        {"specVersion": spec_version, "metadata": {"tools": {"components": [{"version": pipeline_version}]}}}
+    )
+
+
+# ── parse_byte_size / read_pipeline_log ──────────────────────────────
 
 
 @pytest.mark.parametrize(
@@ -72,47 +102,53 @@ def test_parse_byte_size(text, expected):
     assert v.parse_byte_size(text) == expected
 
 
-# ── read_pipeline_log / find_step_record ────────────────────────────
-
-
-def test_read_pipeline_log_parses_jsonl(tmp_path):
-    log = tmp_path / "pipeline.log"
-    log.write_text('{"level": "INFO", "message": "a"}\n{"level": "ERROR", "message": "b"}\n')
-    records = v.read_pipeline_log(log)
-    assert [r["message"] for r in records] == ["a", "b"]
-
-
-def test_read_pipeline_log_skips_blank_lines(tmp_path):
+def test_read_pipeline_log_parses_jsonl_and_skips_blank_lines(tmp_path):
     log = tmp_path / "pipeline.log"
     log.write_text('{"message": "a"}\n\n{"message": "b"}\n')
-    assert len(v.read_pipeline_log(log)) == 2
+    assert [r["message"] for r in v.read_pipeline_log(log)] == ["a", "b"]
 
 
-def test_find_step_record_matches_step_and_phase():
-    records = [
-        {"fields": {"step": "conflate", "phase": "start"}},
-        {"fields": {"step": "conflate", "phase": "end"}, "marker": "found"},
-    ]
-    assert v.find_step_record(records, "conflate", "end") == records[1]
+# ── check_nonempty / check_null_consistency / check_geometry_validity ─
 
 
-def test_find_step_record_returns_none_when_missing():
-    assert v.find_step_record([{"fields": {"step": "conflate", "phase": "start"}}], "conflate", "end") is None
+@pytest.mark.parametrize("select_suffix,expected", [("", True), (" WHERE false", False)])
+def test_check_nonempty(tmp_path, select_suffix, expected):
+    con, url = make_parquet(tmp_path, VALID_ROW_SQL + select_suffix)
+    assert v.check_nonempty(con, url).passed is expected
 
 
-# ── check_nonempty ───────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    "sql,expected",
+    [
+        (VALID_ROW_SQL, True),
+        (
+            VALID_ROW_SQL.replace(
+                "ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS atp_geometry,", "NULL::BLOB AS atp_geometry,"
+            ),
+            False,
+        ),
+    ],
+    ids=["consistent", "mismatched"],
+)
+def test_check_null_consistency(tmp_path, sql, expected):
+    con, url = make_parquet(tmp_path, sql)
+    assert v.check_null_consistency(con, url, "atp", "atp_geometry").passed is expected
 
 
-def test_check_nonempty_passes_with_rows(tmp_path):
-    con, url = make_parquet(tmp_path, VALID_ROW_SQL)
-    result = v.check_nonempty(con, url)
-    assert result.passed is True
-
-
-def test_check_nonempty_fails_when_empty(tmp_path):
-    con, url = make_parquet(tmp_path, VALID_ROW_SQL + " WHERE false")
-    result = v.check_nonempty(con, url)
-    assert result.passed is False
+@pytest.mark.parametrize(
+    "geometry_sql,expected",
+    [
+        ("ST_AsWKB(ST_Point(8.5, 47.4))::BLOB", True),
+        # A self-intersecting ("bowtie") polygon -- the textbook invalid geometry.
+        ("ST_AsWKB(ST_GeomFromText('POLYGON((0 0, 2 2, 2 0, 0 2, 0 0))'))::BLOB", False),
+    ],
+)
+def test_check_geometry_validity(tmp_path, geometry_sql, expected):
+    sql = VALID_ROW_SQL.replace(
+        "ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS osm_geometry", f"{geometry_sql} AS osm_geometry"
+    )
+    con, url = make_parquet(tmp_path, sql)
+    assert v.check_geometry_validity(con, url).passed is expected
 
 
 # ── check_schema ─────────────────────────────────────────────────────
@@ -120,86 +156,40 @@ def test_check_nonempty_fails_when_empty(tmp_path):
 
 def test_check_schema_passes_for_documented_schema(tmp_path):
     con, url = make_parquet(tmp_path, VALID_ROW_SQL)
-    result = v.check_schema(con, url)
-    assert result.passed is True
+    assert v.check_schema(con, url).passed is True
 
 
-def test_check_schema_fails_if_changeset_reappears(tmp_path):
-    """The regression this check exists for: #731 removed `changeset`
-    from osm.modified -- if it ever came back, this must fail."""
-    sql = VALID_ROW_SQL.replace(
-        "'modified': {'timestamp': TIMESTAMP '2026-01-01 00:00:00', 'version': 3::UINTEGER},",
-        "'modified': {'timestamp': TIMESTAMP '2026-01-01 00:00:00', 'version': 3::UINTEGER, "
-        "'changeset': 99::UBIGINT},",
-    )
+# The regression this check exists for: #731 removed `changeset` from
+# osm.modified -- if it ever came back, this must fail.
+_SCHEMA_WITH_CHANGESET = VALID_ROW_SQL.replace(
+    "'modified': {'timestamp': TIMESTAMP '2026-01-01 00:00:00', 'version': 3::UINTEGER},",
+    "'modified': {'timestamp': TIMESTAMP '2026-01-01 00:00:00', 'version': 3::UINTEGER, "
+    "'changeset': 99::UBIGINT},",
+)
+
+
+@pytest.mark.parametrize(
+    "sql,expected_snippet",
+    [
+        (_SCHEMA_WITH_CHANGESET, "changeset"),
+        ("SELECT NULL::STRUCT(tags MAP(VARCHAR, VARCHAR)) AS atp", "top-level"),
+    ],
+    ids=["changeset-reappears", "missing-top-level-column"],
+)
+def test_check_schema_fails(tmp_path, sql, expected_snippet):
     con, url = make_parquet(tmp_path, sql)
     result = v.check_schema(con, url)
     assert result.passed is False
-    assert "changeset" in result.message
-
-
-def test_check_schema_fails_on_missing_top_level_column(tmp_path):
-    sql = "SELECT NULL::STRUCT(tags MAP(VARCHAR, VARCHAR)) AS atp"
-    con, url = make_parquet(tmp_path, sql)
-    result = v.check_schema(con, url)
-    assert result.passed is False
-
-
-# ── check_null_consistency ───────────────────────────────────────────
-
-
-def test_check_null_consistency_passes_when_consistent(tmp_path):
-    con, url = make_parquet(tmp_path, VALID_ROW_SQL)
-    result = v.check_null_consistency(con, url, "atp", "atp_geometry")
-    assert result.passed is True
-
-
-def test_check_null_consistency_fails_when_mismatched(tmp_path):
-    sql = VALID_ROW_SQL.replace("ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS atp_geometry,", "NULL::BLOB AS atp_geometry,")
-    con, url = make_parquet(tmp_path, sql)
-    result = v.check_null_consistency(con, url, "atp", "atp_geometry")
-    assert result.passed is False
-
-
-# ── check_geometry_validity ──────────────────────────────────────────
-
-
-def test_check_geometry_validity_passes_for_valid_geometry(tmp_path):
-    con, url = make_parquet(tmp_path, VALID_ROW_SQL)
-    result = v.check_geometry_validity(con, url)
-    assert result.passed is True
-
-
-def test_check_geometry_validity_fails_for_invalid_polygon(tmp_path):
-    # A self-intersecting ("bowtie") polygon -- the textbook invalid
-    # geometry.
-    sql = VALID_ROW_SQL.replace(
-        "ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS osm_geometry",
-        "ST_AsWKB(ST_GeomFromText("
-        "'POLYGON((0 0, 2 2, 2 0, 0 2, 0 0))')) ::BLOB AS osm_geometry",
-    )
-    con, url = make_parquet(tmp_path, sql)
-    result = v.check_geometry_validity(con, url)
-    assert result.passed is False
+    assert expected_snippet in result.message
 
 
 # ── check_provenance_bom ─────────────────────────────────────────────
 
 
-def _bom(pipeline_version="0.8.0", spec_version="1.7"):
-    return json.dumps(
-        {
-            "specVersion": spec_version,
-            "metadata": {"tools": {"components": [{"version": pipeline_version}]}},
-        }
-    )
-
-
 def test_check_provenance_bom_passes(tmp_path, monkeypatch):
-    monkeypatch.setattr(v.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(v.subprocess, "run", fake_run())
     con, url = make_parquet(tmp_path, VALID_ROW_SQL, kv_metadata={"org.cyclonedx.bom": _bom()})
-    result = v.check_provenance_bom(con, url, expect_pipeline_version=None)
-    assert result.passed is True
+    assert v.check_provenance_bom(con, url, expect_pipeline_version=None).passed is True
 
 
 def test_check_provenance_bom_fails_when_key_missing(tmp_path):
@@ -210,18 +200,13 @@ def test_check_provenance_bom_fails_when_key_missing(tmp_path):
 
 
 def test_check_provenance_bom_fails_when_cyclonedx_cli_rejects_it(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        v.subprocess,
-        "run",
-        lambda *a, **k: type("R", (), {"returncode": 1, "stdout": "invalid", "stderr": ""})(),
-    )
+    monkeypatch.setattr(v.subprocess, "run", fake_run(returncode=1, stdout="invalid"))
     con, url = make_parquet(tmp_path, VALID_ROW_SQL, kv_metadata={"org.cyclonedx.bom": _bom()})
-    result = v.check_provenance_bom(con, url, expect_pipeline_version=None)
-    assert result.passed is False
+    assert v.check_provenance_bom(con, url, expect_pipeline_version=None).passed is False
 
 
 def test_check_provenance_bom_fails_on_pipeline_version_mismatch(tmp_path, monkeypatch):
-    monkeypatch.setattr(v.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(v.subprocess, "run", fake_run())
     con, url = make_parquet(tmp_path, VALID_ROW_SQL, kv_metadata={"org.cyclonedx.bom": _bom(pipeline_version="0.7.0")})
     result = v.check_provenance_bom(con, url, expect_pipeline_version="0.8.0")
     assert result.passed is False
@@ -258,36 +243,18 @@ def test_check_run_completed_fails_on_error_after_start():
 # ── check_cgroup_signal ───────────────────────────────────────────────
 
 
-def _conflate_end(**fields):
-    return {
-        "level": "INFO",
-        "message": "conflate: end",
-        "fields": {"step": "conflate", "phase": "end", **fields},
-    }
-
-
-def test_check_cgroup_signal_passes_when_fields_present_and_matching():
-    records = [_conflate_end(cgroup_current_bytes=1000, cgroup_max_bytes=4 * 1024**3)]
-    result = v.check_cgroup_signal(records, mem_limit="4g")
-    assert result.passed is True
-
-
-def test_check_cgroup_signal_fails_when_fields_null():
-    records = [_conflate_end()]
-    result = v.check_cgroup_signal(records, mem_limit="4g")
-    assert result.passed is False
-
-
-def test_check_cgroup_signal_fails_when_mem_limit_mismatched():
-    records = [_conflate_end(cgroup_current_bytes=1000, cgroup_max_bytes=2 * 1024**3)]
-    result = v.check_cgroup_signal(records, mem_limit="4g")
-    assert result.passed is False
-
-
-def test_check_cgroup_signal_skips_mem_limit_comparison_when_not_given():
-    records = [_conflate_end(cgroup_current_bytes=1000, cgroup_max_bytes=2 * 1024**3)]
-    result = v.check_cgroup_signal(records, mem_limit=None)
-    assert result.passed is True
+@pytest.mark.parametrize(
+    "fields,mem_limit,expected",
+    [
+        ({"cgroup_current_bytes": 1000, "cgroup_max_bytes": 4 * 1024**3}, "4g", True),
+        ({}, "4g", False),  # cgroup fields null -- not really containerized
+        ({"cgroup_current_bytes": 1000, "cgroup_max_bytes": 2 * 1024**3}, "4g", False),  # != --mem-limit
+        ({"cgroup_current_bytes": 1000, "cgroup_max_bytes": 2 * 1024**3}, None, True),  # no --mem-limit: skip compare
+    ],
+    ids=["matching", "fields-null", "mem-limit-mismatch", "no-mem-limit-given"],
+)
+def test_check_cgroup_signal(fields, mem_limit, expected):
+    assert v.check_cgroup_signal([_conflate_end(**fields)], mem_limit).passed is expected
 
 
 def test_check_cgroup_signal_fails_when_conflate_end_missing():
@@ -297,52 +264,39 @@ def test_check_cgroup_signal_fails_when_conflate_end_missing():
 # ── check_no_oom ──────────────────────────────────────────────────────
 
 
-def test_check_no_oom_passes_on_clean_log():
-    assert v.check_no_oom("kernel: some unrelated line\n").passed is True
+@pytest.mark.parametrize(
+    "dmesg_text,expected",
+    [
+        ("kernel: some unrelated line\n", True),
+        ("kernel: Out of memory: Killed process 123 (osm-diffs)\n", False),
+    ],
+)
+def test_check_no_oom(dmesg_text, expected):
+    assert v.check_no_oom(dmesg_text).passed is expected
 
 
-def test_check_no_oom_fails_on_oom_kill_signature():
-    result = v.check_no_oom("kernel: Out of memory: Killed process 123 (osm-diffs)\n")
-    assert result.passed is False
+# ── check_atp_geometry_floor ─────────────────────────────────────────
 
 
-# ── check_atp_geometry_floor ───────────────────────────────────────────
-
-
-def _atp_tally_record(**counts):
-    fields = {"point": 0, "line_string": 0, "polygon": 0, "multi_point": 0, "multi_line_string": 0, "multi_polygon": 0, "geometry_collection": 0}
-    fields.update(counts)
-    return {"message": "import_atp: alltheplaces.parquet geometry types", "fields": fields}
-
-
-def test_check_atp_geometry_floor_passes_above_floor():
-    records = [_atp_tally_record(point=1000)]
-    result = v.check_atp_geometry_floor(records, min_features=500)
-    assert result.passed is True
-
-
-def test_check_atp_geometry_floor_fails_below_floor():
-    records = [_atp_tally_record(point=10)]
-    result = v.check_atp_geometry_floor(records, min_features=500)
-    assert result.passed is False
-
-
-def test_check_atp_geometry_floor_skips_when_no_floor_given():
-    records = [_atp_tally_record(point=10)]
-    result = v.check_atp_geometry_floor(records, min_features=None)
-    assert result.passed is None
-
-
-def test_check_atp_geometry_floor_fails_when_record_missing():
-    result = v.check_atp_geometry_floor([], min_features=500)
-    assert result.passed is False
+@pytest.mark.parametrize(
+    "records,min_features,expected",
+    [
+        ([_atp_tally_record(point=1000)], 500, True),
+        ([_atp_tally_record(point=10)], 500, False),
+        ([_atp_tally_record(point=10)], None, None),  # no floor given: skipped, not silently passed
+        ([], 500, False),  # no tally record at all
+    ],
+    ids=["above-floor", "below-floor", "no-floor-given", "no-tally-record"],
+)
+def test_check_atp_geometry_floor(records, min_features, expected):
+    assert v.check_atp_geometry_floor(records, min_features).passed is expected
 
 
 # ── run_hard_checks (integration) ─────────────────────────────────────
 
 
 def test_run_hard_checks_returns_all_checks_in_order(tmp_path, monkeypatch):
-    monkeypatch.setattr(v.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})())
+    monkeypatch.setattr(v.subprocess, "run", fake_run())
     con, url = make_parquet(tmp_path, VALID_ROW_SQL, kv_metadata={"org.cyclonedx.bom": _bom()})
     records = [
         {"level": "INFO", "message": "conflate: start", "fields": {"step": "conflate", "phase": "start"}},
