@@ -9,6 +9,7 @@ mocked, so this suite runs the same everywhere, no credentials needed.
 """
 
 import argparse
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, call
 
@@ -288,3 +289,110 @@ def test_cmd_deploy_branch_path(monkeypatch):
     assert any("build.sh" in s for s in scp_names)
     assert not any("pull.sh" in s for s in scp_names)
     assert any("build.sh" in c and "my/feature" in c for c in ssh_cmds)
+
+
+# ── compute_run_cost / teardown_cost_note ──────────────────────────
+
+
+PRICING_FIXTURE = {
+    "server_types": [
+        {"name": "cpx32", "prices": [{"location": "hel1", "price_hourly": {"gross": "0.10"}}]},
+    ],
+    "volume": {"price_per_gb_month": {"gross": "0.05"}},
+}
+
+
+def test_compute_run_cost():
+    # 10h @ 0.10/h server + 100GB @ 0.05/GB-month, prorated for 10h.
+    cost = ct.compute_run_cost(PRICING_FIXTURE, "cpx32", "hel1", volume_gb=100, hours=10)
+    assert cost == pytest.approx(0.10 * 10 + 0.05 * 100 * (10 / (24 * 30)))
+
+
+@pytest.mark.parametrize(
+    "pricing,server_type,location",
+    [
+        (PRICING_FIXTURE, "unknown-type", "hel1"),  # server type not in pricing
+        (PRICING_FIXTURE, "cpx32", "unknown-location"),  # location not in that type's prices
+        ({"server_types": []}, "cpx32", "hel1"),  # no volume pricing at all
+    ],
+)
+def test_compute_run_cost_returns_none_on_unexpected_shape(pricing, server_type, location):
+    assert ct.compute_run_cost(pricing, server_type, location, volume_gb=100, hours=10) is None
+
+
+def test_teardown_cost_note_reports_estimate(monkeypatch):
+    def fake_hcloud_json(args):
+        if args[0] == "server":
+            return {
+                "created": "2026-01-01T00:00:00+00:00",
+                "server_type": {"name": "cpx32"},
+                "datacenter": {"location": {"name": "hel1"}},
+            }
+        return {"size": 100}
+
+    monkeypatch.setattr(ct, "hcloud_json", fake_hcloud_json)
+    monkeypatch.setattr(ct, "fetch_pricing", lambda: PRICING_FIXTURE)
+
+    note = ct.teardown_cost_note("t")
+    assert note is not None
+    assert "Estimated cost: ~€" in note
+
+
+def test_teardown_cost_note_is_none_when_pricing_unavailable(monkeypatch):
+    monkeypatch.setattr(ct, "hcloud_json", lambda args: {"created": "2026-01-01T00:00:00+00:00", "server_type": {"name": "cpx32"}, "datacenter": {"location": {"name": "hel1"}}, "size": 1})
+    monkeypatch.setattr(ct, "fetch_pricing", lambda: None)
+    assert ct.teardown_cost_note("t") is None
+
+
+def test_cmd_destroy_deletes_everything_even_when_cost_note_fails(monkeypatch):
+    calls = []
+    monkeypatch.setattr(ct, "teardown_cost_note", lambda name: None)
+    monkeypatch.setattr(ct.subprocess, "run", lambda cmd, **kw: calls.append(cmd))
+
+    ct.cmd_destroy(Args(name="t", yes=True))
+
+    assert len(calls) == 3  # volume detach, volume delete, server delete
+
+
+# ── cmd_list: --bucket-region ────────────────────────────────────────
+
+
+def test_cmd_list_skips_buckets_without_bucket_region(monkeypatch, capsys):
+    monkeypatch.setattr(ct, "hcloud_json", lambda args: [])
+    monkeypatch.setattr(ct, "s3_client", lambda region: (_ for _ in ()).throw(AssertionError("should not be called")))
+
+    ct.cmd_list(Args(bucket_region=None))
+
+    assert "bucket:" not in capsys.readouterr().out
+
+
+def test_cmd_list_lists_buckets_with_bucket_region(monkeypatch, capsys):
+    mock_client = MagicMock()
+    mock_client.list_buckets.return_value = {
+        "Buckets": [{"Name": "osm-diffs-container-test-1", "CreationDate": datetime(2026, 1, 1, tzinfo=UTC)}]
+    }
+    monkeypatch.setattr(ct, "hcloud_json", lambda args: [])
+    monkeypatch.setattr(ct, "s3_client", lambda region: mock_client)
+
+    ct.cmd_list(Args(bucket_region="fsn1"))
+
+    assert "osm-diffs-container-test-1" in capsys.readouterr().out
+
+
+# ── cmd_create prints the teardown command ────────────────────────────
+
+
+def test_cmd_create_prints_destroy_command(monkeypatch, capsys):
+    monkeypatch.setattr(ct, "sh", lambda cmd, **kw: None)
+    monkeypatch.setattr(ct, "hcloud_json", lambda args: {"id": "123"})
+    monkeypatch.setattr(ct, "server_ip", lambda name: "1.2.3.4")
+    monkeypatch.setattr(ct, "wait_for_ssh", lambda ip: None)
+    monkeypatch.setattr(ct, "ssh_cmd", lambda ip, cmd, **kw: None)
+    monkeypatch.setattr(ct, "run_sysinfo", lambda ip: None)
+    monkeypatch.setattr(ct, "run_fio", lambda ip, workdir: None)
+
+    ct.cmd_create(
+        Args(name="t", type="cpx32", location="hel1", ssh_key="k", branch=None, volume_size=400)
+    )
+
+    assert "cloud_test.py destroy --name t" in capsys.readouterr().out
