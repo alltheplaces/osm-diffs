@@ -511,12 +511,13 @@ def cmd_bucket_destroy(args):
 
 
 def cmd_validate(args):
-    """Runs `validate.py`'s hard checks against a completed run's
-    `conflated.parquet` (read straight from the S3 test bucket) and a
-    locally downloaded `pipeline.log`/`dmesg.log` (see `logs`).
-    Standalone -- doesn't touch the VM at all, so it works just as well
-    against a run whose server has already been `destroy`ed."""
-    dmesg_path = Path(args.dmesg_log) if args.dmesg_log else Path(args.pipeline_log).with_name("dmesg.log")
+    """Runs `validate.py`'s hard + advisory checks against a completed
+    run's `conflated.parquet` (read straight from the S3 test bucket)
+    and a locally downloaded `pipeline.log`/`dmesg.log`/`disk.log` (see
+    `logs`). Standalone -- doesn't touch the VM at all, so it works just
+    as well against a run whose server has already been `destroy`ed."""
+    pipeline_log = Path(args.pipeline_log)
+    dmesg_path = Path(args.dmesg_log) if args.dmesg_log else pipeline_log.with_name("dmesg.log")
     if not dmesg_path.exists():
         print(
             f"Warning: {dmesg_path} not found -- run `logs` first if you haven't; "
@@ -524,13 +525,15 @@ def cmd_validate(args):
             file=sys.stderr,
         )
     dmesg_text = dmesg_path.read_text() if dmesg_path.exists() else ""
-    records = validate.read_pipeline_log(args.pipeline_log)
+    disk_log_path = pipeline_log.with_name("disk.log")
+    disk_log_text = disk_log_path.read_text() if disk_log_path.exists() else ""
+    records = validate.read_pipeline_log(pipeline_log)
 
     access_key, secret_key = s3_credentials()
     con = validate.connect(args.bucket_region, access_key, secret_key)
     url = validate.parquet_url(args.bucket_name)
 
-    results = validate.run_hard_checks(
+    hard_results = validate.run_hard_checks(
         con,
         url,
         records,
@@ -539,12 +542,20 @@ def cmd_validate(args):
         args.expect_pipeline_version,
         args.min_atp_features,
     )
+    advisory_results = validate.run_advisory_checks(
+        con, url, records, disk_log_text, args.regional_extract
+    )
 
     print("\nHard checks:")
     failed = False
-    for r in results:
+    for r in hard_results:
         status = "SKIP" if r.passed is None else ("PASS" if r.passed else "FAIL")
         failed = failed or r.passed is False
+        print(f"  [{status}] {r.name}: {r.message}")
+
+    print("\nAdvisory (informational, never fails validate):")
+    for r in advisory_results:
+        status = "SKIP" if r.passed is None else "INFO"
         print(f"  [{status}] {r.name}: {r.message}")
 
     if failed:
@@ -711,6 +722,12 @@ def main():
     )
     p_validate.add_argument(
         "--dmesg-log", help="local path to a downloaded dmesg.log (default: alongside --pipeline-log)"
+    )
+    p_validate.add_argument(
+        "--regional-extract",
+        help="the --regional-extract the run was started with, if any -- skips the advisory "
+        "match-rate check (a regional OSM extract won't match ATP's worldwide data outside "
+        "its region, by design)",
     )
     p_validate.add_argument(
         "--mem-limit",

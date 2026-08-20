@@ -5,13 +5,19 @@ against the invariants `docs/outputs/CONFLATED_PARQUET.md` and
 `src/pipeline/logging.rs`/`src/pipeline/mod.rs` document. Implements the
 "Validation checks (`validate`)" section of issue #722's plan.
 
-Two tiers, per that plan -- this module is the **hard** tier only:
-checks that can't legitimately vary run-to-run (a schema break is a
-schema break, regardless of what today's real-world data looks like), so
-`cmd_validate` in `cloud_test.py` exits non-zero if any of them fail. The
-**advisory** tier (match rate, memory distribution -- content-shaped
-signals expected to drift as real data and matching logic evolve) is a
-separate, later addition; see the plan's "Advisory checks" section.
+Two tiers, per that plan:
+
+- **Hard** checks (`run_hard_checks`) can't legitimately vary run-to-run
+  (a schema break is a schema break, regardless of what today's
+  real-world data looks like) -- `cmd_validate` in `cloud_test.py` exits
+  non-zero if any of them fail.
+- **Advisory** checks (`run_advisory_checks`) are content-shaped signals
+  (match rate, memory distribution) expected to drift as real data and
+  matching logic evolve -- reported prominently, never fail the run.
+  `CheckResult.passed` is always `True` for these except when a check is
+  genuinely inapplicable (`None`, e.g. match rate on a
+  `--regional-extract` run) -- there's no "fail" outcome to report by
+  design.
 
 Kept a separate module rather than folded into `cloud_test.py` itself --
 that file is already sizeable, and this logic (DuckDB queries, JSONL log
@@ -329,6 +335,115 @@ def check_atp_geometry_floor(records, min_features):
     if total < min_features:
         return CheckResult("ATP geometry floor", False, f"only {total} ATP geometries imported, expected >= {min_features}")
     return CheckResult("ATP geometry floor", True, f"{total} ATP geometries imported")
+
+
+def check_match_rate(con, url, regional_extract):
+    if regional_extract:
+        # AllThePlaces is always worldwide -- a regional OSM extract
+        # shows ~0% match outside its region by design, not by defect.
+        return CheckResult("match rate", None, "skipped (regional extract)")
+    total, matched = con.execute(
+        "SELECT count(*), count(*) FILTER (WHERE atp IS NOT NULL AND osm IS NOT NULL) "
+        "FROM read_parquet(?)",
+        [url],
+    ).fetchone()
+    rate = matched / total if total else 0.0
+    return CheckResult("match rate", True, f"{matched}/{total} rows matched ({rate:.1%})")
+
+
+def check_memory_distribution(records):
+    # The mmap/page-cache design's own signal (#711): maybe_log_progress
+    # (src/pipeline/conflate/mod.rs) logs a "conflate.match: progress"
+    # snapshot every 30s *during* matching -- exactly the granularity the
+    # plan asks for, not just the "conflate" step's overall start/end
+    # pair (which would dilute the signal with the write phase too).
+    # Picks the highest-rss_bytes sample rather than the last one, since
+    # page-cache eviction under a tight --mem-limit can make a later
+    # sample read *lower* than an earlier peak. Falls back to the
+    # "conflate" step's own end-of-step snapshot for a run that finishes
+    # matching before the first 30s tick (e.g. a small
+    # --regional-extract smoke test never logs a progress record at
+    # all) -- diluted by the write phase, but better than nothing.
+    progress_records = [r for r in records if r.get("message") == "conflate.match: progress"]
+    if progress_records:
+        record = max(progress_records, key=lambda r: r.get("fields", {}).get("rss_bytes") or 0)
+    else:
+        record = find_step_record(records, "conflate", "end")
+    fields = record.get("fields", {}) if record else {}
+    file_bytes = fields.get("rss_file_bytes")
+    anon_bytes = fields.get("rss_anon_bytes")
+    shmem_bytes = fields.get("rss_shmem_bytes")
+    if file_bytes is None or anon_bytes is None:
+        return CheckResult("memory distribution", True, "rss_file_bytes/rss_anon_bytes unavailable")
+    ratio = file_bytes / anon_bytes if anon_bytes else float("inf")
+    note = ""
+    if shmem_bytes and shmem_bytes > file_bytes:
+        note = " -- rss_shmem_bytes exceeds rss_file_bytes, worth a look for a tmpfs workdir misconfiguration"
+    return CheckResult(
+        "memory distribution",
+        True,
+        f"rss_file_bytes={file_bytes} rss_anon_bytes={anon_bytes} rss_shmem_bytes={shmem_bytes} "
+        f"(file/anon ratio={ratio:.2f}){note}",
+    )
+
+
+def check_cgroup_warnings(records):
+    # The 85%-of-limit WARN log_snapshot self-logs (CGROUP_WARN_THRESHOLD
+    # in src/pipeline/mod.rs) -- an early signal ahead of an actual
+    # OOM-kill, worth surfacing even on a run that never hit one.
+    hits = [r for r in records if r.get("level") == "WARN" and "cgroup_usage_fraction" in r.get("fields", {})]
+    if not hits:
+        return CheckResult("cgroup 85% warnings", True, "none logged")
+    lines = [
+        f"{r['fields'].get('step')}/{r['fields'].get('phase')}={r['fields']['cgroup_usage_fraction']:.0%}"
+        for r in hits
+    ]
+    return CheckResult("cgroup 85% warnings", True, f"{len(hits)} logged: {', '.join(lines)}")
+
+
+def check_disk_headroom(disk_log_text):
+    # disk.log lines: "YYYY-MM-DD HH:MM:SS <used_bytes> <avail_bytes>"
+    # (remote/monitor.sh's df -B1 --output=used,avail sampling loop).
+    lines = [line for line in disk_log_text.splitlines() if line.strip()]
+    if not lines:
+        return CheckResult("disk headroom", True, "no disk.log samples available")
+    used, avail = (int(x) for x in lines[-1].split()[-2:])
+    total = used + avail
+    fraction = used / total if total else 0.0
+    return CheckResult("disk headroom", True, f"used={used} avail={avail} ({fraction:.1%} full)")
+
+
+def check_timings(records):
+    ends = [r for r in records if r.get("fields", {}).get("phase") == "end" and r["fields"].get("elapsed_seconds") is not None]
+    if not ends:
+        return CheckResult("timings", True, "no step timings available")
+    total = sum(r["fields"]["elapsed_seconds"] for r in ends)
+    per_step = ", ".join(f"{r['fields']['step']}={r['fields']['elapsed_seconds']:.1f}s" for r in ends)
+    return CheckResult("timings", True, f"total={total:.1f}s ({per_step})")
+
+
+def check_osm_geometry_count(records):
+    record = next((r for r in records if r.get("message") == "conflate.write: osm_geometry geometry types"), None)
+    if record is None:
+        return CheckResult("OSM geometry count", True, "no conflate.write osm_geometry tally in pipeline.log")
+    fields = record.get("fields", {})
+    types = ("point", "line_string", "polygon", "multi_point", "multi_line_string", "multi_polygon", "geometry_collection")
+    total = sum(fields.get(t, 0) for t in types)
+    return CheckResult("OSM geometry count", True, f"{total} matched OSM geometries")
+
+
+def run_advisory_checks(con, url, records, disk_log_text, regional_extract):
+    """Runs every advisory check and returns the list of `CheckResult`s,
+    in the order printed. Never fails `validate` by itself -- see the
+    module docstring for why."""
+    return [
+        check_match_rate(con, url, regional_extract),
+        check_memory_distribution(records),
+        check_cgroup_warnings(records),
+        check_disk_headroom(disk_log_text),
+        check_timings(records),
+        check_osm_geometry_count(records),
+    ]
 
 
 def run_hard_checks(con, url, records, dmesg_text, mem_limit, expect_pipeline_version, min_atp_features):

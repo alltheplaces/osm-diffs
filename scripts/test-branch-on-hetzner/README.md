@@ -206,15 +206,35 @@ broken, not just that today's data looks different from yesterday's:
   without it, since there's no universal floor that makes sense across
   every run.
 
+`validate` also prints a set of **advisory** checks -- content-shaped
+signals that are expected to drift as real data and matching logic
+evolve, so they're never grounds for a fixed pass/fail, only reported
+for a human to eyeball:
+
+- Conflation match rate -- skipped (not silently passed) if
+  `--regional-extract` is given, since AllThePlaces is worldwide and a
+  regional OSM extract will show ~0% match outside its region by
+  design, not by defect.
+- `rss_file_bytes` vs `rss_anon_bytes`/`rss_shmem_bytes` at peak, from
+  the periodic `conflate.match: progress` snapshots logged during
+  matching -- the mmap/page-cache design's own signal (#711); large
+  `rss_shmem_bytes` is flagged as a likely tmpfs-workdir
+  misconfiguration worth a look.
+- Any 85%-of-cgroup-limit `WARN` the pipeline already self-logs.
+- Disk headroom, from the downloaded `disk.log`.
+- Wall-clock timings per step, from `pipeline.log`'s own
+  `elapsed_seconds` fields.
+- OSM geometry count (matched features only) from `conflate.write`'s
+  tally.
+
 `--bucket-name`/`--bucket-region` point `validate` at the same test
 bucket `start --containerized --bucket-name ...` uploaded to;
 `--pipeline-log` (and, if not alongside it, `--dmesg-log`) point at a
-local directory `logs` already downloaded to. Standalone-runnable
+local directory `logs` already downloaded to; `--regional-extract`
+should match whatever `start` was given, if anything. Standalone-runnable
 against any past run this way, even after its VM has been `destroy`ed.
-Exits non-zero if any hard check fails. **Content-shaped** signals
-(match rate, memory distribution -- expected to drift as real data and
-matching logic evolve) aren't part of this yet; see issue #722's plan
-for the deferred advisory-check tier.
+Exits non-zero if any hard check fails -- advisory checks never affect
+the exit code.
 
 ## Making sense of the logs
 
