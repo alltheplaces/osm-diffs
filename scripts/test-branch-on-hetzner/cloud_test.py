@@ -513,21 +513,27 @@ def teardown_cost_note(name):
     """A best-effort '~€X.YZ' summary line for `destroy`, gathered
     *before* deleting anything (the `describe` calls need the resources
     to still exist) -- or `None` if any part of this didn't work out.
-    Deleting the resources always proceeds either way; see
-    `fetch_pricing()`'s docstring for why."""
+    Deleting the resources always proceeds either way -- the whole body
+    is one try/except on purpose, not just the two `describe` calls:
+    the first version of this function only wrapped those, and a wrong
+    field-name assumption while parsing their *result* (`datacenter` ->
+    `location`, caught live against a real account) raised straight out
+    of `cmd_destroy` and skipped deletion entirely. That must never
+    happen again regardless of what turns out to be wrong next time --
+    see `fetch_pricing()`'s docstring for the same rule applied there."""
     try:
         server = hcloud_json(["server", "describe", name])
         volume = hcloud_json(["volume", "describe", f"{name}-data"])
-    except subprocess.CalledProcessError:
+        pricing = fetch_pricing()
+        if pricing is None:
+            return None
+        created = datetime.fromisoformat(server["created"])
+        hours = (datetime.now(UTC) - created).total_seconds() / 3600
+        server_type = server["server_type"]["name"]
+        location = server["location"]["name"]
+        cost = compute_run_cost(pricing, server_type, location, volume["size"], hours)
+    except (subprocess.CalledProcessError, KeyError, TypeError, ValueError):
         return None
-    pricing = fetch_pricing()
-    if pricing is None:
-        return None
-    created = datetime.fromisoformat(server["created"])
-    hours = (datetime.now(UTC) - created).total_seconds() / 3600
-    server_type = server["server_type"]["name"]
-    location = server["datacenter"]["location"]["name"]
-    cost = compute_run_cost(pricing, server_type, location, volume["size"], hours)
     if cost is None:
         return None
     return (
