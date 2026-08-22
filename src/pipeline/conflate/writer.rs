@@ -609,10 +609,10 @@ impl ParquetRow {
                 feature,
                 strings: osm_strings,
             };
-            let centroid = candidate
-                .geometry()?
-                .centroid()
-                .with_context(|| format!("OSM feature {} geometry has no centroid", feature.id))?;
+            let centroid = candidate.geometry()?.centroid().with_context(|| {
+                let (osm_type, osm_id) = decode_member_id(feature.id);
+                format!("OSM feature {osm_type}/{osm_id} geometry has no centroid")
+            })?;
             let ll = s2::latlng::LatLng::from_degrees(centroid.y(), centroid.x());
             s2::cellid::CellID::from(ll).0
         } else {
@@ -647,15 +647,22 @@ impl ParquetRow {
         let osm_tags;
         if let Some(feature) = osm {
             osm_id = NonZeroU64::new(feature.id);
-            osm_modified_timestamp = Some(UtcTimestamp(
-                time::UtcDateTime::from_unix_timestamp(i64::try_from(feature.timestamp)?)
+            osm_modified_timestamp = Some(
+                UtcTimestamp::from_unix_timestamp_millis(i64::try_from(feature.timestamp)?)
                     .with_context(|| {
+                        // feature.id is Feature.id-encoded (see
+                        // encode_feature_id) -- printing it raw is
+                        // useless for tracking an anomaly down by hand
+                        // (see #749, where this cost real time). Decode
+                        // it back to what actually shows up on
+                        // openstreetmap.org.
+                        let (osm_type, osm_id) = decode_member_id(feature.id);
                         format!(
-                            "OSM feature {} has an out-of-range timestamp {}",
-                            feature.id, feature.timestamp
+                            "OSM feature {osm_type}/{osm_id} has an out-of-range timestamp {}",
+                            feature.timestamp
                         )
                     })?,
-            ));
+            );
             osm_modified_version = NonZeroU32::new(feature.version);
             osm_tags = feature
                 .tags
@@ -859,5 +866,85 @@ mod schema {
             DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             nullable,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{matchers::MatchMask, places::Place, tables::Feature, utils::UtcTimestamp};
+    use tempfile::TempDir;
+
+    /// A `ConflatedFeature` pairing an arbitrary `atp` placeholder (only
+    /// `from_conflated`'s OSM-side handling is under test here) with one
+    /// OSM feature, id-encoded as `node/687015806` (see
+    /// `encode_feature_id`) with the given raw `timestamp`.
+    fn conflated_node_687015806(timestamp: u64) -> ConflatedFeature {
+        let atp = Place {
+            s2_cell_id: 1,
+            spider: String::new(),
+            mask: MatchMask(0),
+            tags: Vec::new(),
+            shape_wkb: crate::geometry::encode_wkb(&geo::Geometry::from(geo::Point::new(0.0, 0.0))),
+            fetched: UtcTimestamp(time::UtcDateTime::from_unix_timestamp(0).expect("epoch")),
+        };
+        let osm = Feature {
+            id: 6_870_158_061, // node/687015806, Feature.id-encoded
+            timestamp,
+            ..Default::default()
+        };
+        ConflatedFeature {
+            atp: Some(atp),
+            osm: Some(osm),
+        }
+    }
+
+    fn new_string_pool(dir: &TempDir) -> StringPool<'static> {
+        StringPool::create(std::iter::empty(), dir.path(), &dir.path().join("strings"))
+            .expect("StringPool::create")
+    }
+
+    /// Regression test for #749: a real OSM node (a Volg supermarket in
+    /// Müstair, `node/687015806`) whose edit timestamp, 2025-03-19
+    /// 11:09:02 UTC, crashed the pipeline outright. `Feature.timestamp`
+    /// is milliseconds since the epoch (`1_742_382_542_000`) -- not
+    /// seconds, as `from_unix_timestamp` used to assume -- because
+    /// `osm_pbf_iter`'s `Info.timestamp` is already `date_granularity`
+    /// -scaled to milliseconds for a `DenseNodes`-encoded node (nearly
+    /// every node in a real extract), per the OSM PBF format spec. This
+    /// asserts the real incident's exact value now parses to the exact
+    /// real edit time, rather than erroring.
+    #[test]
+    fn from_conflated_parses_millisecond_osm_timestamp() {
+        let dir = TempDir::new().expect("tempdir");
+        let pool = new_string_pool(&dir);
+        let cf = conflated_node_687015806(1_742_382_542_000);
+
+        let row = ParquetRow::from_conflated(cf, &pool).expect("valid timestamp");
+        assert_eq!(
+            row.osm_modified_timestamp,
+            Some(UtcTimestamp(
+                time::UtcDateTime::from_unix_timestamp(1_742_382_542).unwrap()
+            ))
+        );
+    }
+
+    /// A genuinely out-of-range value (not just off by a factor of
+    /// 1000 -- `i64::MAX` milliseconds is far beyond any representable
+    /// year either way) still needs to fail, with a useful error
+    /// message: the raw `Feature.id`-encoded value (`6870158061`)
+    /// doesn't resolve to anything on openstreetmap.org, which cost
+    /// real time to untangle while investigating #749 -- checks the
+    /// decoded `node/687015806` form shows up instead.
+    #[test]
+    fn from_conflated_reports_decoded_osm_id_on_bad_timestamp() {
+        let dir = TempDir::new().expect("tempdir");
+        let pool = new_string_pool(&dir);
+        let cf = conflated_node_687015806(i64::MAX as u64);
+
+        let err = ParquetRow::from_conflated(cf, &pool).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("node/687015806"), "{message}");
+        assert!(!message.contains("6870158061"), "{message}");
     }
 }
