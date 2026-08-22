@@ -199,9 +199,17 @@ def check_null_consistency(con, url, struct_col, geom_col):
 
 
 def check_geometry_validity(con, url):
+    # osm_geometry is documented (docs/outputs/CONFLATED_PARQUET.md) as
+    # plain WKB bytes, but DuckDB's spatial extension auto-decodes it to
+    # a native GEOMETRY value on read -- the column carries the native
+    # Parquet GEOGRAPHY logical type annotation (see
+    # pipeline::conflate::writer's own doc comment for why), which
+    # `read_parquet` recognizes once `spatial` is loaded. No
+    # ST_GeomFromWKB() needed (or accepted -- it only takes BLOB, and
+    # this is already GEOMETRY).
     n = con.execute(
         "SELECT count(*) FROM read_parquet(?) "
-        "WHERE osm_geometry IS NOT NULL AND NOT ST_IsValid(ST_GeomFromWKB(osm_geometry))",
+        "WHERE osm_geometry IS NOT NULL AND NOT ST_IsValid(osm_geometry)",
         [url],
     ).fetchone()[0]
     return CheckResult("osm_geometry validity", n == 0, f"{n} invalid geometries")

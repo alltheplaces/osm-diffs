@@ -28,7 +28,7 @@ SELECT
         'tags': MAP(['shop'], ['bakery']),
         'fetched': {'timestamp': TIMESTAMP '2026-01-01 00:00:00', 'spider': 'example_spider'}
     } AS atp,
-    ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS atp_geometry,
+    ST_Point(8.5, 47.4) AS atp_geometry,
     {
         'type': 'node',
         'id': 12345::UBIGINT,
@@ -37,14 +37,20 @@ SELECT
         'way_members': NULL::UBIGINT[],
         'relation_members': NULL::STRUCT("type" VARCHAR, id UBIGINT, "role" VARCHAR)[]
     } AS osm,
-    ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS osm_geometry
+    ST_Point(8.5, 47.4) AS osm_geometry
 """
+# Native GEOMETRY, not WKB bytes cast to BLOB: docs/outputs/CONFLATED_PARQUET.md
+# documents atp_geometry/osm_geometry as WKB, but DuckDB's spatial extension
+# auto-decodes the real column (which carries the native Parquet GEOGRAPHY
+# logical type) straight to GEOMETRY on read -- matching that here, not the
+# documented on-disk representation, is what makes these fixtures behave the
+# same way validate.py's checks see the real file behave.
 
 
 def make_parquet(tmp_path, select_sql, name="conflated.parquet", kv_metadata=None):
     """Writes `select_sql`'s result to a real local Parquet file (loading
-    the `spatial` extension first, since the fixture rows use ST_Point/
-    ST_AsWKB) and returns its path as a `str`, usable directly with
+    the `spatial` extension first, since the fixture rows use ST_Point)
+    and returns its path as a `str`, usable directly with
     `read_parquet()`."""
     con = duckdb.connect()
     con.execute("INSTALL spatial")
@@ -122,9 +128,7 @@ def test_check_nonempty(tmp_path, select_suffix, expected):
     [
         (VALID_ROW_SQL, True),
         (
-            VALID_ROW_SQL.replace(
-                "ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS atp_geometry,", "NULL::BLOB AS atp_geometry,"
-            ),
+            VALID_ROW_SQL.replace("ST_Point(8.5, 47.4) AS atp_geometry,", "NULL::GEOMETRY AS atp_geometry,"),
             False,
         ),
     ],
@@ -138,15 +142,13 @@ def test_check_null_consistency(tmp_path, sql, expected):
 @pytest.mark.parametrize(
     "geometry_sql,expected",
     [
-        ("ST_AsWKB(ST_Point(8.5, 47.4))::BLOB", True),
+        ("ST_Point(8.5, 47.4)", True),
         # A self-intersecting ("bowtie") polygon -- the textbook invalid geometry.
-        ("ST_AsWKB(ST_GeomFromText('POLYGON((0 0, 2 2, 2 0, 0 2, 0 0))'))::BLOB", False),
+        ("ST_GeomFromText('POLYGON((0 0, 2 2, 2 0, 0 2, 0 0))')", False),
     ],
 )
 def test_check_geometry_validity(tmp_path, geometry_sql, expected):
-    sql = VALID_ROW_SQL.replace(
-        "ST_AsWKB(ST_Point(8.5, 47.4))::BLOB AS osm_geometry", f"{geometry_sql} AS osm_geometry"
-    )
+    sql = VALID_ROW_SQL.replace("ST_Point(8.5, 47.4) AS osm_geometry", f"{geometry_sql} AS osm_geometry")
     con, url = make_parquet(tmp_path, sql)
     assert v.check_geometry_validity(con, url).passed is expected
 
