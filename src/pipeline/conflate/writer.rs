@@ -609,10 +609,10 @@ impl ParquetRow {
                 feature,
                 strings: osm_strings,
             };
-            let centroid = candidate
-                .geometry()?
-                .centroid()
-                .with_context(|| format!("OSM feature {} geometry has no centroid", feature.id))?;
+            let centroid = candidate.geometry()?.centroid().with_context(|| {
+                let (osm_type, osm_id) = decode_member_id(feature.id);
+                format!("OSM feature {osm_type}/{osm_id} geometry has no centroid")
+            })?;
             let ll = s2::latlng::LatLng::from_degrees(centroid.y(), centroid.x());
             s2::cellid::CellID::from(ll).0
         } else {
@@ -650,9 +650,16 @@ impl ParquetRow {
             osm_modified_timestamp = Some(UtcTimestamp(
                 time::UtcDateTime::from_unix_timestamp(i64::try_from(feature.timestamp)?)
                     .with_context(|| {
+                        // feature.id is Feature.id-encoded (see
+                        // encode_feature_id) -- printing it raw is
+                        // useless for tracking an anomaly down by hand
+                        // (see #749, where this cost real time). Decode
+                        // it back to what actually shows up on
+                        // openstreetmap.org.
+                        let (osm_type, osm_id) = decode_member_id(feature.id);
                         format!(
-                            "OSM feature {} has an out-of-range timestamp {}",
-                            feature.id, feature.timestamp
+                            "OSM feature {osm_type}/{osm_id} has an out-of-range timestamp {}",
+                            feature.timestamp
                         )
                     })?,
             ));
@@ -859,5 +866,51 @@ mod schema {
             DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
             nullable,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{matchers::MatchMask, places::Place, tables::Feature, utils::UtcTimestamp};
+    use tempfile::TempDir;
+
+    /// Regression test for #749: a real OSM node (a Volg supermarket in
+    /// Müstair, `node/687015806`) whose `Feature.timestamp` ended up
+    /// holding milliseconds instead of seconds, tripping
+    /// `from_unix_timestamp`'s range check. The error used to print the
+    /// raw `Feature.id`-encoded value (`6870158061`) rather than the
+    /// decoded OSM id -- that number doesn't resolve to anything on
+    /// openstreetmap.org, which cost real time to untangle. Checks the
+    /// decoded `node/687015806` form shows up instead, and the raw
+    /// encoded value doesn't.
+    #[test]
+    fn from_conflated_reports_decoded_osm_id_on_bad_timestamp() {
+        let dir = TempDir::new().expect("tempdir");
+        let pool = StringPool::create(std::iter::empty(), dir.path(), &dir.path().join("strings"))
+            .expect("StringPool::create");
+
+        let atp = Place {
+            s2_cell_id: 1,
+            spider: String::new(),
+            mask: MatchMask(0),
+            tags: Vec::new(),
+            shape_wkb: crate::geometry::encode_wkb(&geo::Geometry::from(geo::Point::new(0.0, 0.0))),
+            fetched: UtcTimestamp(time::UtcDateTime::from_unix_timestamp(0).expect("epoch")),
+        };
+        let osm = Feature {
+            id: 6_870_158_061,            // node/687015806, Feature.id-encoded
+            timestamp: 1_742_382_542_000, // milliseconds, not seconds -- out of range
+            ..Default::default()
+        };
+        let cf = ConflatedFeature {
+            atp: Some(atp),
+            osm: Some(osm),
+        };
+
+        let err = ParquetRow::from_conflated(cf, &pool).unwrap_err();
+        let message = format!("{err:#}");
+        assert!(message.contains("node/687015806"), "{message}");
+        assert!(!message.contains("6870158061"), "{message}");
     }
 }
