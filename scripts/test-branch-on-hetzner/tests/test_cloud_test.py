@@ -320,14 +320,26 @@ def test_compute_run_cost_returns_none_on_unexpected_shape(pricing, server_type,
     assert ct.compute_run_cost(pricing, server_type, location, volume_gb=100, hours=10) is None
 
 
+def _fake_server_describe(**overrides):
+    # Field shapes taken from hcloud-go's schema/server.go, not guessed
+    # -- see the 2026-08-21 incident this fixture exists to prevent a
+    # repeat of: `location` sits directly on the server object, *not*
+    # nested under a `datacenter` key (that assumption shipped once,
+    # untested against a real account, and crashed `cmd_destroy` before
+    # it deleted anything).
+    fields = {
+        "created": "2026-01-01T00:00:00+00:00",
+        "server_type": {"name": "cpx32"},
+        "location": {"name": "hel1"},
+    }
+    fields.update(overrides)
+    return fields
+
+
 def test_teardown_cost_note_reports_estimate(monkeypatch):
     def fake_hcloud_json(args):
         if args[0] == "server":
-            return {
-                "created": "2026-01-01T00:00:00+00:00",
-                "server_type": {"name": "cpx32"},
-                "datacenter": {"location": {"name": "hel1"}},
-            }
+            return _fake_server_describe()
         return {"size": 100}
 
     monkeypatch.setattr(ct, "hcloud_json", fake_hcloud_json)
@@ -339,8 +351,25 @@ def test_teardown_cost_note_reports_estimate(monkeypatch):
 
 
 def test_teardown_cost_note_is_none_when_pricing_unavailable(monkeypatch):
-    monkeypatch.setattr(ct, "hcloud_json", lambda args: {"created": "2026-01-01T00:00:00+00:00", "server_type": {"name": "cpx32"}, "datacenter": {"location": {"name": "hel1"}}, "size": 1})
+    monkeypatch.setattr(ct, "hcloud_json", lambda args: _fake_server_describe(size=1))
     monkeypatch.setattr(ct, "fetch_pricing", lambda: None)
+    assert ct.teardown_cost_note("t") is None
+
+
+def test_teardown_cost_note_is_none_on_unexpected_response_shape(monkeypatch):
+    """The actual 2026-08-21 incident, reproduced: `hcloud_json`/
+    `fetch_pricing` both return *something*, but not the shape the
+    parsing code expects (any KeyError/TypeError while reading it) --
+    must degrade to None, not raise out of `cmd_destroy` before it
+    deletes anything."""
+
+    def fake_hcloud_json(args):
+        if args[0] == "server":
+            return _fake_server_describe(location={"unexpected_key": "hel1"})
+        return {"size": 100}
+
+    monkeypatch.setattr(ct, "hcloud_json", fake_hcloud_json)
+    monkeypatch.setattr(ct, "fetch_pricing", lambda: PRICING_FIXTURE)
     assert ct.teardown_cost_note("t") is None
 
 
