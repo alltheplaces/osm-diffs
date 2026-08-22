@@ -22,8 +22,14 @@ message Feature {
     // unknown.
     uint32 version = 2;
 
-    // Unix timestamp (seconds since 1970-01-01 UTC) of the last edit.
-    // 0 if unknown.
+    // Unix timestamp in MILLISECONDS (not seconds -- see #749) since
+    // 1970-01-01 UTC of the last edit. 0 if unknown. Milliseconds
+    // because that's what osm_pbf_iter::Info::timestamp already is for
+    // a DenseNodes-encoded node (nearly every node in a real extract):
+    // that crate applies PrimitiveBlock's date_granularity scaling
+    // itself, per the OSM PBF format spec's own description of
+    // date_granularity ("normally... milliseconds since the 1970
+    // epoch") -- there's no whole-seconds form to store here instead.
     uint64 timestamp = 4;
 
     // OSM tags, flattened into (key, value) pairs of indices into the

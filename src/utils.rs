@@ -83,6 +83,20 @@ impl UtcTimestamp {
         i64::try_from(self.0.unix_timestamp_nanos() / 1_000_000)
             .expect("timestamp out of i64 millisecond range")
     }
+
+    /// Inverse of [`unix_timestamp_millis`](Self::unix_timestamp_millis).
+    /// Also what `osm::Feature.timestamp` needs (see
+    /// `pipeline::conflate::writer`): `osm_pbf_iter`'s `Info.timestamp`
+    /// (for a `DenseNodes`-encoded node, which is nearly every node in a
+    /// real-world extract) is already `date_granularity`-scaled to
+    /// milliseconds by that crate itself, per the OSM PBF format spec's
+    /// own description of `date_granularity` -- there is no
+    /// whole-seconds form to call `from_unix_timestamp` on directly (see
+    /// #749: that mismatch is exactly what crashed the first real
+    /// containerized smoke test in issue #722).
+    pub fn from_unix_timestamp_millis(millis: i64) -> Result<Self, time::error::ComponentRange> {
+        time::UtcDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000).map(Self)
+    }
 }
 
 impl deepsize::DeepSizeOf for UtcTimestamp {
@@ -100,9 +114,7 @@ impl serde::Serialize for UtcTimestamp {
 impl<'de> serde::Deserialize<'de> for UtcTimestamp {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         let millis = <i64 as serde::Deserialize>::deserialize(d)?;
-        time::UtcDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
-            .map(UtcTimestamp)
-            .map_err(serde::de::Error::custom)
+        UtcTimestamp::from_unix_timestamp_millis(millis).map_err(serde::de::Error::custom)
     }
 }
 

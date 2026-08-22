@@ -2999,9 +2999,9 @@ dependencies = [
 
 [[package]]
 name = "osm_pbf_iter"
-version = "0.2.2"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d21f788886b32f1e13c3672bb8dad137b2ef295bbd352105362cdb322081ee51"
+checksum = "1998ded392212fad69f25e7510fc34d095f585fc5e67282b99f2a4f993cbcfe6"
 dependencies = [
  "libdeflater",
  "protobuf_iter",
