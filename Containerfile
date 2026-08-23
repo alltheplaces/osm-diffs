@@ -37,6 +37,7 @@ RUN echo "@edge https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/ap
     apk add \
       bash \
       build-base \
+      ca-certificates \
       cargo-cyclonedx@edge \
       cmake \
       git \
@@ -107,7 +108,17 @@ ARG VCS_REF
 ARG VCS_URL
 
 COPY --from=builder /usr/local/bin/tippecanoe /usr/local/bin/tippecanoe
-    
+
+# rustls-platform-verifier (pulled in transitively via reqwest's "rustls"
+# feature) falls back to rustls-native-certs on generic Linux, which reads
+# this exact path -- needed for anything that builds its own reqwest
+# client without our explicit webpki-roots config (see main.rs's
+# build_client()), e.g. librqbit's internal HTTP(S) client for fetching
+# the planet .torrent file and its https:// webseed mirrors. Without
+# this, any such client fails outright: "No CA certificates were loaded
+# from the system" -- there's no /etc/ssl in a scratch image at all.
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+
 COPY --from=builder --chown=1000:1000  \
     /usr/osm-diffs/target/release/osm-diffs  \
     /app/osm-diffs
