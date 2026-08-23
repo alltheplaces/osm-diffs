@@ -3,8 +3,7 @@
 
 name: ShellCheck
 
-# Lints every shell script in the repo (scripts/, including
-# scripts/test-branch-on-hetzner/remote/) with shellcheck -- a hard gate,
+# Lints every shell script in the repo with shellcheck -- a hard gate,
 # same style as cargo-deny.yml: the job fails outright on any finding,
 # not just an informational annotation.
 

@@ -3,7 +3,7 @@
 against a workdir, and monitor vm_stat/RSS alongside it -- so testing a
 change doesn't mean re-typing the same vm_stat loop by hand each time.
 
-See scripts/test-branch-on-hetzner/ for the equivalent against real
+See scripts/test-on-hetzner/ for the equivalent against real
 cloud hardware; this is deliberately much smaller -- no VM lifecycle to
 manage, no branch to clone, since the whole point is fast iteration on
 whatever's currently checked out on this machine. It also doesn't build

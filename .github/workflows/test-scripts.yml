@@ -4,7 +4,7 @@
 name: Test scripts
 
 # Runs pytest over scripts/ -- currently just
-# scripts/test-branch-on-hetzner/tests/, see #737. Path-filtered and not
+# scripts/test-on-hetzner/tests/, see #737. Path-filtered and not
 # added to the branch protection required-checks list, same reasoning as
 # shellcheck.yml: a plain context-name-matched required check expects a
 # status on every PR, which a path-filtered workflow can't guarantee for
