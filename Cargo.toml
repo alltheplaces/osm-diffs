@@ -20,7 +20,6 @@ geo = "0.33.1"
 geo-traits = { version = "0.3.0", default-features = false }
 geojson = "1.0.0"
 indicatif = { version = "0.18.4", default-features = false }
-librqbit = { version = "9.0.0", default-features = false, features = ["disable-upload", "rust-tls"] }
 log = { version = "0.4.32", default-features = false, features = ["kv"] }
 lru = { version = "0.18.0", default-features = false }
 lz4_flex = "0.14.0"

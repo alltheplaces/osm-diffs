@@ -62,7 +62,11 @@ pub(crate) fn osm_type_str(member_type: RelationMemberType) -> &'static str {
     }
 }
 
-pub fn import_osm<'a>(progress: &MultiProgress, workdir: &Path) -> Result<OsmFeatures<'a>> {
+pub fn import_osm<'a>(
+    http_client: &reqwest::Client,
+    progress: &MultiProgress,
+    workdir: &Path,
+) -> Result<OsmFeatures<'a>> {
     assert!(workdir.exists());
 
     let osm_index_path = workdir.join("osm-features.index");
@@ -71,7 +75,7 @@ pub fn import_osm<'a>(progress: &MultiProgress, workdir: &Path) -> Result<OsmFea
         return OsmFeatures::open(&osm_index_path, &strings_path);
     }
 
-    let (pbf, fetch_metadata) = fetch::fetch_planet(progress, workdir)?;
+    let (pbf, fetch_metadata) = fetch::fetch_planet(http_client, progress, workdir)?;
     let pbf_error = || format!("could not open file `{:?}`", pbf);
     let mut file = File::open(&pbf).with_context(pbf_error)?;
     let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
