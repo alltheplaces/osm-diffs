@@ -4,14 +4,14 @@ Build the current checkout, run the pipeline against a workdir, and
 monitor `vm_stat`/RSS alongside it -- so testing a change doesn't mean
 re-typing the same monitoring loop by hand each time.
 
-Much smaller than [`../test-branch-on-hetzner/`](../test-branch-on-hetzner)
+Much smaller than [`../test-on-hetzner/`](../test-on-hetzner)
 on purpose: no VM lifecycle to manage, no branch to clone -- everything
 runs on the machine you're already on, against whatever's currently
 checked out. It also doesn't build via the project's `Containerfile`
 the way that tool does: plain `cargo build --release` here, not
 matching production's exact toolchain, because the point is fast
 turnaround on a local edit-run loop, not comparable-to-production
-numbers. Use `test-branch-on-hetzner` when the toolchain match or real
+numbers. Use `test-on-hetzner` when the toolchain match or real
 hardware actually matters.
 
 ## Usage
@@ -50,6 +50,6 @@ during the run -- every subsequent `ps -p` call just failed with
 useless log. `monitor.sh` re-resolves it via `pgrep` on every 5-second
 tick instead.
 
-`scripts/test-branch-on-hetzner/analyze.py` can be pointed at
+`scripts/test-on-hetzner/analyze.py` can be pointed at
 `pipeline.log` from a local run here too -- the log format is identical
 either way.

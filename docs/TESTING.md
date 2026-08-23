@@ -13,8 +13,12 @@ two copies going stale independently.
 - **Integration tests**: [`tests/`](../tests) — a full pipeline run
   against a real OSM extract (a Swiss shopping mall) plus minimal
   AllThePlaces data. Fast enough to run on every `cargo test`.
-- **Script tests**: [`scripts/test-branch-on-hetzner/tests/`](../scripts/test-branch-on-hetzner/tests) —
-  run `uv run pytest` from `scripts/`.
+- **Script tests**: [`scripts/test-on-hetzner/tests/`](../scripts/test-on-hetzner/tests) —
+  run `uv run pytest` from `scripts/`. Writing tests for a script whose
+  own job is testing things sounds like a step too far at first, but
+  it’s paid for itself every time that script itself needed a change:
+  the alternative feedback loop is a real Hetzner VM, minutes per
+  iteration and real money, versus a sub-second local test run.
 
 ## CI
 
@@ -29,7 +33,7 @@ pushes touching `scripts/**/*.sh` run
 `scripts/**` run
 [`test-scripts.yml`](../.github/workflows/test-scripts.yml) (`pytest`
 for the scripts that have real test coverage — currently just
-`scripts/test-branch-on-hetzner/`). PRs and pushes that touch
+`scripts/test-on-hetzner/`). PRs and pushes that touch
 `Cargo.toml`, `Cargo.lock`, or `deny.toml` run
 [`cargo-deny.yml`](../.github/workflows/cargo-deny.yml) — dependency
 licenses, banned/duplicated crates, sources, and known RUSTSEC/OSV
@@ -39,13 +43,13 @@ schedule, since a new advisory can land against a dependency we already
 pinned with no PR of ours to trigger it.
 
 Test coverage is measured with [`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov)
-(`cargo llvm-cov test`, using `rustc`'s built-in LLVM source-based
+(`cargo llvm-cov test`, using `rustc`’s built-in LLVM source-based
 coverage instrumentation), exported as
 [Cobertura XML](https://www.baeldung.com/cobertura) — originally a
-Java coverage tool's report format, now emitted by plenty of non-Java
+Java coverage tool’s report format, now emitted by plenty of non-Java
 tools too, `cargo-llvm-cov` among them — and uploaded to
 [Coveralls](https://coveralls.io/github/alltheplaces/osm-diffs?branch=main)
-— that's the little coverage badge at the top of the main
+— that’s the little coverage badge at the top of the main
 [`README.md`](../README.md). CI fails if line coverage drops below the
 threshold set in `test.yml`.
 
@@ -56,17 +60,17 @@ it for known vulnerability patterns — unsafe deserialization, command
 injection, that kind of thing — rather than just linting for style.
 On a PR, findings post directly on the review thread.
 `codeql.yml` also runs on a weekly schedule against `main`, independent
-of any PR or push; *those* findings don't have a PR to comment on, so
-they show up instead as code scanning alerts on the repository's
+of any PR or push; *those* findings don’t have a PR to comment on, so
+they show up instead as code scanning alerts on the repository’s
 [Security tab](https://github.com/alltheplaces/osm-diffs/security).
 
 `main` is protected by a
 [ruleset](https://github.com/alltheplaces/osm-diffs/rules/11597145)
-requiring `test.yml`'s tests and a clean CodeQL scan before merging —
-so a red check there isn't optional. `test-container.yml` isn't part
-of that ruleset (it only triggers on the paths above, and GitHub can't
-gate merges on a check that doesn't always run) — treat a failure
-there as seriously as any other, it just isn't enforced the same way.
+requiring `test.yml`’s tests and a clean CodeQL scan before merging —
+so a red check there isn’t optional. `test-container.yml` isn’t part
+of that ruleset (it only triggers on the paths above, and GitHub can’t
+gate merges on a check that doesn’t always run) — treat a failure
+there as seriously as any other, it just isn’t enforced the same way.
 
 ## For Large System Changes
 
@@ -75,7 +79,7 @@ real hardware before a change lands, not automated gates:
 
 - [`scripts/test-branch-on-macos/`](../scripts/test-branch-on-macos) —
   full pipeline on your dev machine. Free, fast to iterate with.
-- [`scripts/test-branch-on-hetzner/`](../scripts/test-branch-on-hetzner)
+- [`scripts/test-on-hetzner/`](../scripts/test-on-hetzner)
   — full pipeline on real cloud hardware, either built from your
   feature branch or pulled as an already-built image (e.g. a released
   container), optionally run containerized under a real cgroup
@@ -83,6 +87,6 @@ real hardware before a change lands, not automated gates:
   [Geofabrik](https://download.geofabrik.de/) regional extract instead
   of the full planet for a faster smoke test. Its `validate` subcommand
   then checks the result (schema, provenance, cgroup behavior, and
-  more) against `docs/outputs/CONFLATED_PARQUET.md`'s own contract.
+  more) against `docs/outputs/CONFLATED_PARQUET.md`’s own contract.
   Costs real money and needs Hetzner credentials — see its README
   before reaching for it.

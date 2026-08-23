@@ -17,8 +17,8 @@ pub fn fetch_planet(progress: &MultiProgress, workdir: &Path) -> Result<(PathBuf
         }
         // The .pbf exists, but its .meta.json sidecar is missing or
         // unreadable -- e.g. a regional extract dropped in for cloud
-        // testing (scripts/test-branch-on-hetzner), rather than a file
-        // this function downloaded itself. Compute the metadata now, the
+        // testing (scripts/test-on-hetzner), rather than a file this
+        // function downloaded itself. Compute the metadata now, the
         // same way a fresh download does below, instead of failing or
         // re-downloading a file that's already there.
         let metadata = super::compute_and_persist_metadata(&pbf_path, workdir, progress)?;

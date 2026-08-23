@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Spins up a Hetzner Cloud VM, builds osm-diffs from a given git branch,
-and runs the full pipeline against it -- so testing a development branch
-on real cloud hardware doesn't mean re-deriving the VM setup dance by
-hand each time. See README.md in this directory for the full story,
-including prerequisites and a worked example.
+"""Spins up a Hetzner Cloud VM and runs the full osm-diffs pipeline on it
+-- either built from a given git branch or pulled as an already-built
+image (e.g. a released `ghcr.io` container) -- so testing on real cloud
+hardware doesn't mean re-deriving the VM setup dance by hand each time.
+See README.md in this directory for the full story, including
+prerequisites and a worked example.
 
 Every `hcloud`/`ssh`/`scp` command this runs is echoed to stderr first,
 so a flag mismatch against your installed `hcloud` version should be

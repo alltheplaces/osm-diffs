@@ -42,7 +42,7 @@ process these fit into.
 Unrelated to how `osm-diffs` actually ships to production — this is for
 ad hoc validation of a branch before it lands.
 
-- [`test-branch-on-hetzner/`](test-branch-on-hetzner/README.md): spins
+- [`test-on-hetzner/`](test-on-hetzner/README.md): spins
   up a Hetzner Cloud VM, builds a given git branch on it, runs the
   pipeline against it, and pulls back logs — one command instead of
   repeating the manual setup by hand each time. See

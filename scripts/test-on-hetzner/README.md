@@ -1,4 +1,4 @@
-# Testing a branch on cloud machines
+# Testing on cloud machines
 
 Two small tools: `cloud_test.py` runs the full `osm-diffs` pipeline on
 real Hetzner Cloud hardware, without repeating the manual VM setup by
