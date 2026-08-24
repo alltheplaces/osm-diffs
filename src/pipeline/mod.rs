@@ -114,7 +114,9 @@ fn run_pipeline_steps(
     let _wikidata_ids = run_step("collect_wikidata_ids", || {
         atp::collect_wikidata_ids(&atp, workdir)
     })?;
-    let osm_features = run_step("import_osm", || osm::import_osm(progress, workdir))?;
+    let osm_features = run_step("import_osm", || {
+        osm::import_osm(http_client, progress, workdir)
+    })?;
     let conflated = run_step("conflate", || {
         conflate::conflate(
             &atp,
