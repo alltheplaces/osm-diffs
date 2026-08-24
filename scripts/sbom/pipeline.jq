@@ -117,13 +117,25 @@ else . end |
 .metadata.component.licenses = [{expression: "MIT"}] |
 .components |= [ .[] | add_supplier ] |
 
-# Declare that we only use TLS 1.3, with the AWS BoringSSL fork.
+# Declare that we only use TLS 1.3, with the AWS BoringSSL fork, and
+# that certificate verification trusts Mozilla's own CA root bundle --
+# vendored at compile time via the webpki-roots crate (already listed
+# as an ordinary library component below, since cargo-cyclonedx walks
+# Cargo.lock) -- rather than any OS/container-provided trust store.
+# Not modeled as a CycloneDX "certificate" cryptographic-asset: that
+# type's cryptoProperties (subjectName, issuerName, notValidBefore/
+# After, ...) describe a single certificate, not a curated bundle of
+# ~140 unrelated root CAs -- these properties record the same fact a
+# security auditor would otherwise have to infer from webpki-roots's
+# free-text description, as a directly queryable field instead, same
+# as the crypto:tls:* properties already do for the TLS version.
 .metadata.component.properties += [
-  {name: "cdx:cbom:version",      value: "1.0"},
   {name: "crypto:tls:library",    value: "rustls"},
   {name: "crypto:tls:backend",    value: "aws-lc-rs"},
   {name: "crypto:tls:minVersion", value: "1.3"},
-  {name: "crypto:tls:maxVersion", value: "1.3"}
+  {name: "crypto:tls:maxVersion", value: "1.3"},
+  {name: "crypto:catrust:source", value: "Mozilla CA Certificate Program (via webpki-roots)"},
+  {name: "crypto:catrust:osTrustStoreUsed", value: "false"}
 ] |
 .formulation = [{
     "bom-ref": "build-formulation",

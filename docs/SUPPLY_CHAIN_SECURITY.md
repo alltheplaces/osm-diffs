@@ -59,6 +59,22 @@ Mechanically, a multi-architecture image is just an
 image per platform. Pulling by tag automatically fetches the right one
 for your machine.
 
+## Certificate trust
+
+Because we ship `FROM scratch` (see “Minimal containers” above),
+there’s no `/etc/ssl` in the final image either — no OS-provided CA
+trust store to fall back on for verifying a TLS server’s certificate.
+Rather than adding one, `osm-diffs` embeds Mozilla’s own CA root
+bundle directly into the binary at compile time, via the
+[`webpki-roots`](https://github.com/rustls/webpki-roots) crate (see
+`main.rs`’s `build_client()`) — the same trust store
+[Firefox ships and verifies against](https://wiki.mozilla.org/CA),
+independent of whatever the underlying OS or container happens to
+trust. Certificate verification this way doesn’t depend on anything
+present in the container at all, and behaves identically across every
+platform it runs on. This is also declared as an explicit, queryable
+fact in the CBOM — see below.
+
 ## Bill of Materials (BOM)
 
 A Bill of Materials is a structured, machine-readable record of what

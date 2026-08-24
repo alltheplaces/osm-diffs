@@ -56,8 +56,6 @@ fn build_client() -> reqwest::Client {
     let mut root_store = RootCertStore::empty();
     root_store.extend(TLS_SERVER_ROOTS.iter().cloned());
 
-    // Install the crypto provider as process-wide default,
-    // which makes librqbit use it as well for BitTorrent.
     let provider = rustls::crypto::aws_lc_rs::default_provider();
 
     let config = ClientConfig::builder_with_provider(provider.into())
