@@ -40,9 +40,13 @@ tools such as `apk`, `sed`, `awk` and `grep`. It then:
    `cargo cyclonedx` currently supports).
 2. Pipes that through [`pipeline.jq`](pipeline.jq), which upgrades it to
    CycloneDX 1.7 and enriches it with build-environment metadata,
-   supplier/license info, the CBOM entry, and the vendored “data”
-   components (`id-tagging-schema`, `osm-testdata-grid`) that
-   `cargo cyclonedx` has no way to see.
+   supplier/license info, the CBOM facts (a `cryptographic-asset`
+   component for TLS 1.3, plus `crypto:tls:*`/`crypto:catrust:*`
+   custom properties on the `osm-diffs` component — see that file’s own
+   comments for why a curated CA root bundle isn’t a good fit for
+   CycloneDX’s `certificate` cryptographic-asset type), and the
+   vendored “data” components (`id-tagging-schema`,
+   `osm-testdata-grid`) that `cargo cyclonedx` has no way to see.
 3. Builds a CycloneDX fragment for the statically linked `tippecanoe`
    binary from scratch, with [`tippecanoe.jq`](tippecanoe.jq).
 4. Combines both fragments into the final, single SBOM for the container,
