@@ -112,7 +112,7 @@ restart a run with a clean workdir without tearing down the VM
 | `up` | Create the server + volume, deploy, start the pipeline. |
 | `create` | Server + a formatted, attached, automounted data volume. Also collects `sysinfo` and runs `fio` once, automatically. Prints the exact `destroy` command needed to remove what it just created. |
 | `deploy` | `--branch NAME`: clone/update the given branch on an existing server and build it via the project's `Containerfile`, natively (see below for why that matters). `--image REF`: pull an already-built image instead (e.g. `ghcr.io/alltheplaces/osm-diffs:v1.2.3`) -- either way, binaries get extracted the same way, so bare-mode `start` works unchanged regardless of which path was used. |
-| `start` | Launch `osm-diffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-fetch the planet over BitTorrent. `--containerized --mem-limit SIZE --cpu-limit N` runs `podman run` against the image `deploy` produced instead of the bare extracted binary, for real cgroup accounting -- see below. |
+| `start` | Launch `osm-diffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-download the ~94GB planet file. `--containerized --mem-limit SIZE --cpu-limit N` runs `podman run` against the image `deploy` produced instead of the bare extracted binary, for real cgroup accounting -- see below. |
 | `status` | `systemctl status` for the run, plus `df` and the last few `pipeline.log` lines. |
 | `fio` | Random-read benchmark of the attached volume (the same command used by hand throughout the PR 665 experiment -- see `#667`). Re-runnable anytime, e.g. to check whether a result was a one-off blip. |
 | `sysinfo` | OS/kernel version, CPU model, memory, swap, disk layout, cgroup limits -- environment facts that turned out to matter for interpreting results but aren't anything this tool controls. |
@@ -138,22 +138,31 @@ $ ./cloud_test.py up --name reg1 --ssh-key my-key \
 - `--containerized --mem-limit SIZE --cpu-limit N` runs the pipeline via
   `podman run --memory=<SIZE> --cpus=<N>` instead of the bare extracted
   binary. This is the whole point for anything measuring memory/CPU
-  behavior: a bare-VM run never populates `pipeline.log`'s own
-  `cgroup_*` fields (there's no cgroup to report on), so it can't
-  validate a memory-pressure design under real container limits, only a
-  containerized run can. `--mem-limit`/`--cpu-limit` are required
-  together with `--containerized`.
+  behavior: a bare-VM run's `cgroup_current_bytes` is normally still
+  populated (systemd puts every service unit into its own cgroup even
+  outside a container), but `cgroup_max_bytes` reads `None` -- there's
+  no configured limit to report -- so it can't validate a
+  memory-pressure design against an actual limit, only a containerized
+  run (with a real `podman --memory`) can. See
+  [`src/pipeline/memstats.rs`](../../src/pipeline/memstats.rs)'s own
+  doc comment for the full nuance. `--mem-limit`/`--cpu-limit` are
+  required together with `--containerized`.
 - `--regional-extract REGION` (a Geofabrik path fragment, e.g.
   `europe/switzerland`) downloads that extract straight to
   `planet-latest.osm.pbf` before starting the container, skipping the
-  ~5h BitTorrent download entirely -- cheap, fast iteration for
-  comparing many `--mem-limit`/`--cpu-limit`/`--type` combinations. Only
-  worth it for a region meaningfully bigger than CI's own tiny
-  `zugerland.osm.pbf` fixture (40 KB) -- a micro-extract creates no real
-  memory pressure to observe. Omit it to exercise the real, unmodified
-  BitTorrent path against the full planet, e.g. for a final check once a
-  promising configuration is narrowed down, or to get genuine
-  full-scale cost/duration numbers.
+  planet download entirely -- useful for a quick functional smoke test
+  of the tool/pipeline itself. Since the planet now downloads over
+  plain HTTPS instead of BitTorrent (~28 minutes for the full ~94GB
+  file, not the ~4h48m the old BitTorrent path took), skipping the
+  download buys much less than it used to, and a small extract creates
+  no real memory pressure to observe in the first place -- so prefer
+  omitting `--regional-extract` for anything actually measuring
+  `--mem-limit` behavior; only worth it for a region meaningfully
+  bigger than CI's own tiny `zugerland.osm.pbf` fixture (40 KB)
+  regardless. Omit it to exercise the real download path against the
+  full planet, which is now the recommended default even for
+  comparing several `--mem-limit`/`--cpu-limit`/`--type`
+  combinations, e.g. for #711.
 - `--bucket-name NAME --bucket-region LOC` uploads output to an
   ephemeral S3-compatible test bucket, reading credentials from
   `HETZNER_TEST_S3_ACCESS_KEY_ID`/`HETZNER_TEST_S3_ACCESS_KEY_SECRET` in
@@ -194,10 +203,13 @@ broken, not just that today's data looks different from yesterday's:
   `--expect-pipeline-version` is given -- its `pipeline_version` matches.
 - The `conflate` step reached its `phase="end"` log record with no
   `ERROR` records logged after `phase="start"`.
-- `pipeline.log`'s `cgroup_current_bytes`/`cgroup_max_bytes` are
-  populated on that record (proof the run was actually containerized
-  under a real cgroup, impossible for a bare-VM run) -- and, if
-  `--mem-limit` is given, that `cgroup_max_bytes` matches it.
+- `pipeline.log`'s `cgroup_current_bytes`/`cgroup_max_bytes` are both
+  populated on that record. `cgroup_max_bytes` specifically is the
+  proof: it only reads non-`None` when a real memory limit was
+  configured (i.e. `podman --memory`), unlike `cgroup_current_bytes`,
+  which is normally populated even on a bare VM -- and, if
+  `--mem-limit` is given, `check_cgroup_signal` also checks that
+  `cgroup_max_bytes` matches it.
 - No OOM-kill signature in the downloaded `dmesg.log` (an OOM-killed
   step's own log record is simply missing, not an error entry -- this
   is the check that actually catches that case).

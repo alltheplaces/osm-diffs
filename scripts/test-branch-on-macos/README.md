@@ -31,8 +31,8 @@ monitor log:  /tmp/osm-diffs-workdir/macos_monitor.log
 - `--skip-build` reuses the existing `target/release/osm-diffs` as-is,
   for re-running against the same binary without waiting on a rebuild.
 - `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/
-  its metadata sidecar, so re-running doesn't re-fetch the planet over
-  BitTorrent.
+  its metadata sidecar, so re-running doesn't re-download the ~94GB
+  planet file.
 - `./test_macos.py build` runs just the `cargo build --release` step on
   its own.
 
