@@ -48,7 +48,7 @@ to **~143GB** once `import_osm` finishes and its temporary files are
 cleaned up — consistent across two independent runs on different
 hardware (this sweep, and the earlier
 [#665](https://github.com/alltheplaces/osm-diffs/issues/665) shakedown,
-which saw ~174GB peak / ~148GB settled). **220-250GB** gives reasonable
+which saw ~174GB peak / ~148GB settled). **220–250GB** gives reasonable
 headroom over that peak without being wildly oversized; the 400GB
 default `scripts/test-on-hetzner/cloud_test.py` uses for testing is
 itself generous margin, not a sizing recommendation.
@@ -105,7 +105,7 @@ them as secrets, not plain configuration. Keep them out of a command
 line (visible to anyone who can `ps` the host, and easy to leak into
 shell history or CI logs) and out of any manifest committed to a repo.
 The `podman run --env-file` invocation above already does the
-minimum right thing for a manual/systemd invocation — the file's
+minimum right thing for a manual/systemd invocation — the file’s
 contents never appear as process arguments. Whatever eventually
 schedules this in production should do the equivalent for its own
 environment: a Kubernetes `Secret` referenced via `secretKeyRef` (not
