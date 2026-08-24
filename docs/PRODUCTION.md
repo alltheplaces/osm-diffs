@@ -100,6 +100,18 @@ Five environment variables, read once at startup (see
   `logs/<run-id>.log`), never the ephemeral per-run test buckets
   `scripts/test-on-hetzner` creates for its own testing.
 
+`S3_ACCESS_KEY_ID`/`S3_ACCESS_KEY_SECRET` are real credentials — handle
+them as secrets, not plain configuration. Keep them out of a command
+line (visible to anyone who can `ps` the host, and easy to leak into
+shell history or CI logs) and out of any manifest committed to a repo.
+The `podman run --env-file` invocation above already does the
+minimum right thing for a manual/systemd invocation — the file's
+contents never appear as process arguments. Whatever eventually
+schedules this in production should do the equivalent for its own
+environment: a Kubernetes `Secret` referenced via `secretKeyRef` (not
+a literal value in the `Job`/`CronJob` manifest), or the analogous
+mechanism for whatever scheduler ends up being used.
+
 ## Scheduling
 
 Nothing here runs on a schedule yet. The design intent
