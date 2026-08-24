@@ -85,7 +85,7 @@ Once you run `cut-release.sh vX.Y.Z`:
    pushed directly.
 3. **The script waits** for that PR to clear required checks and the
    merge queue, and actually land on `main`. This normally takes a few
-   minutes (the required test job takes ~4-5 min; the merge queue has a
+   minutes (the required test job takes ~4–5 min; the merge queue has a
    minimum 3 min wait).
 4. **The release is created**: a GitHub Release for `vX.Y.Z` is published
    at the new `main` HEAD, with auto-generated notes (categorized per
@@ -121,8 +121,8 @@ Once you run `cut-release.sh vX.Y.Z`:
    both a build-provenance and an SBOM attestation genuinely exist for
    both architectures (see “Verifying a release” below).
 
-Steps 1-4 usually take under 10 minutes; steps 5-6 (the actual container
-build, plus verification) take roughly another 20-25 minutes.
+Steps 1–4 usually take under 10 minutes; steps 5–6 (the actual container
+build, plus verification) take roughly another 20–25 minutes.
 
 ## Verifying a release
 
@@ -183,7 +183,7 @@ for that walkthrough, which is what `verify-release.sh` automates.
   without a correspondingly published, attested container — that’s a
   known, accepted consequence of immutability, not a bug.
 - **`cut-release.sh` is interrupted, or times out, while waiting on
-  `release.yml`** (~20-25 min; a crashed machine, a dropped connection,
+  `release.yml`** (~20–25 min; a crashed machine, a dropped connection,
   or a truly stuck workflow): the release itself is unaffected — it was
   already created before this wait began. Just run
   `./scripts/verify-release.sh vX.Y.Z` on its own once you’re ready to

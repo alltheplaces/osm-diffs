@@ -1,14 +1,14 @@
 # Documentation
 
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) — start here if you're new.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — start here if you’re new.
 - [`TECHNICAL_DESIGN.md`](TECHNICAL_DESIGN.md) — why this pipeline
-  exists, the background it builds on, and how it's put together.
-- [`TESTING.md`](TESTING.md) — how this project's tests are organized,
+  exists, the background it builds on, and how it’s put together.
+- [`TESTING.md`](TESTING.md) — how this project’s tests are organized,
   what CI enforces, and how to try a change on real hardware before it
   lands.
 - [`LOGGING.md`](LOGGING.md) — the JSON log format `osm-diffs run`
   writes, and where weekly-run logs end up archived in S3.
-- [`outputs/`](outputs/) — the pipeline's output files: what's in
+- [`outputs/`](outputs/) — the pipeline’s output files: what’s in
   them, and how to read them.
 - [`RELEASING.md`](RELEASING.md) — how to cut a release of `osm-diffs`.
 - [`PRODUCTION.md`](PRODUCTION.md) — operational knowledge for running

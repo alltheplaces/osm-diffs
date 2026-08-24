@@ -17,7 +17,8 @@ Every record has:
   snapshot. Omitted entirely on records that don’t have any, so plain
   log lines stay plain.
 
-See [`src/logging.rs`](../src/logging.rs) for the implementation, and
+See [`src/pipeline/logging.rs`](../src/pipeline/logging.rs) for the
+implementation, and
 [`src/pipeline/mod.rs`](../src/pipeline/mod.rs)’s `log_snapshot` for an
 example of a structured record (step name, phase, elapsed time, RSS/
 cgroup memory snapshot — logged at the start and end of every pipeline

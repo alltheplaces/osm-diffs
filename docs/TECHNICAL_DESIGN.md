@@ -1,10 +1,7 @@
 # Technical design: `osm-diffs`
 
-Status: work in progress. This document describes the pipeline as it
-exists today, not a target architecture — see the repository’s
-[status badge](../README.md) and open issues for what’s still ahead
-(in particular, nothing yet uploads suggested edits anywhere; see
-“Status” at the end).
+Status: Work in Progress — see [“Status”](#status) at the end of this
+document for what’s still ahead.
 
 ## Objective
 
@@ -19,7 +16,7 @@ apply to OpenStreetMap.
 
 ### Why OpenStreetMap needs this
 
-OpenStreetMap's coverage of roads and administrative boundaries is
+OpenStreetMap’s coverage of roads and administrative boundaries is
 comprehensive. Points of interest are a different story: a shop,
 restaurant, or other business only ends up on the map if a volunteer
 happened to notice it and add it by hand — while most retail and
@@ -43,11 +40,10 @@ plans to: scraped data isn’t reliable enough to trust unreviewed, and
 even if it were, bulk edits don’t fit how the OSM
 community works — edits get proposed and reviewed by humans, not
 pushed automatically by a script. What this project can do instead:
-to find the delta between the two datasets systematically, for the
+find the delta between the two datasets systematically, for the
 whole planet, within a week, and turn it into edit proposals for
 volunteers to review — turning “maybe someone notices eventually” into
-a
-standing, repeatable check.
+a standing, repeatable check.
 
 ### What conflation is
 
@@ -90,15 +86,35 @@ down to its constituent nodes — this project has to construct real
 geometry for all three cases, not just look up a point (see
 `tables::feature_index` and `pipeline::osm::assemble` for how).
 
+### Working with data bigger than RAM
+
+A planet-scale OSM index doesn’t fit in memory on the kind of cheap
+machine this pipeline is meant to run on. The pattern used throughout
+[`tables`](../src/tables/) (see “Code structure” below): build the
+table on disk — usually via [external
+sorting](https://en.wikipedia.org/wiki/External_sorting), the
+sort-chunks-then-merge technique for sorting more data than fits in
+RAM — then [memory-map](https://en.wikipedia.org/wiki/Memory-mapped_file)
+the finished file instead of loading it onto the heap. From there,
+virtual memory does the rest: the OS keeps only the pages actually
+being touched resident, backed by its page cache, so a table can be
+far bigger than physical RAM without this project doing any caching of
+its own. That’s not just assumed to work — it’s been verified on real,
+memory-constrained hardware, including inside a container under a real
+cgroup memory limit; see [“Why `conflate` doesn’t need its own
+cache”](#why-conflate-doesnt-need-its-own-cache) below, and
+[#711](https://github.com/alltheplaces/osm-diffs/issues/711) for the
+full sweep.
+
 ### What AllThePlaces does
 
 AllThePlaces runs several thousand site-specific scrapers (“spiders”),
 each written in Python against the [Scrapy](https://scrapy.org/)
 framework — deliberately easy to write and contribute, which is a
 large part of why the project has grown as far as it has. Most spiders
-target one retail chain or brand's own store-locator page, but a
+target one retail chain or brand’s own store-locator page, but a
 growing share instead pull from Open Government Data portals under
-clear open licenses, so the combined dump isn't retail-only. It
+clear open licenses, so the combined dump isn’t retail-only. It
 publishes a combined weekly dump of every spider’s output as open data
 (CC0), which several other projects already consume, including
 OpenStreetMap-adjacent tooling and commercial mapping platforms. As
@@ -185,8 +201,8 @@ memory snapshot, regardless of success or failure — see
 [`docs/LOGGING.md`](LOGGING.md). Steps are meant to be memoized
 against files already in `--workdir`, so re-running the pipeline in
 the same directory skips whatever it already built (this also applies
-below the step level, e.g. within `import_atp`/`import_osm`'s own
-sub-stages) — though that memoization isn't fully reliable yet, see
+below the step level, e.g. within `import_atp`/`import_osm`’s own
+sub-stages) — though that memoization isn’t fully reliable yet, see
 [#704](https://github.com/alltheplaces/osm-diffs/issues/704).
 `pipeline.log` itself is uploaded to S3 at the very end of a run no
 matter how the run went (see
@@ -195,25 +211,22 @@ never lost.
 
 ### Pipeline steps
 
-Timings below (where known) come from two real full-planet runs on
-production-representative hardware, not a dev machine: a deliberately
-memory-constrained, bare (uncontainerized) Hetzner cpx22 (2 vCPU / 4 GB
-RAM) with its working directory on an attached volume that peaked at
-~174 GB used (settling to ~148 GB once `import_osm` finished) — see
-[#665](https://github.com/alltheplaces/osm-diffs/issues/665) for the
-full writeup — and a later, containerized Hetzner cpx42 (8 vCPU / 16 GB
-RAM, `podman run --memory=12g --cpus=6`), run in the course of
-validating [#722](https://github.com/alltheplaces/osm-diffs/issues/722)
-(and feeding into [#711](https://github.com/alltheplaces/osm-diffs/issues/711)'s
-memory-limit sweep). The two aren't directly comparable — different
-CPU/memory/container configuration — so both are cited below where
-they cover the same step, rather than one silently overwriting the
-other. Nothing aggregates or dashboards these on an ongoing basis, but
-every run's `pipeline.log` — with per-step timings for that specific
-run — is uploaded to S3 alongside its output (see `upload_logs` above),
-so up-to-date numbers are always one log fetch away. Treat the ones
-below as data points rather than a guarantee — worth refreshing
-occasionally as the planet grows and the code changes.
+Timings below come from two full-planet runs on production-representative
+hardware, not a dev machine: a deliberately memory-constrained, bare
+(uncontainerized) Hetzner cpx22 (2 vCPU / 4 GB RAM, peaking at ~174 GB
+disk used) — see [#665](https://github.com/alltheplaces/osm-diffs/issues/665)
+for the full writeup — and a later, containerized Hetzner cpx42 (8 vCPU
+/ 16 GB RAM, `podman run --memory=12g --cpus=6`) from the
+[#711](https://github.com/alltheplaces/osm-diffs/issues/711)/[#722](https://github.com/alltheplaces/osm-diffs/issues/722)
+`--mem-limit` sweep — see [`PRODUCTION.md`](PRODUCTION.md) for that
+sweep’s full results and the recommended production configuration. The
+two runs used different hardware and container configuration, so
+aren’t directly comparable to each other; both are cited below where
+they cover the same step. Treat the numbers below as data points
+worth refreshing occasionally, not a guarantee — every run’s own
+`pipeline.log` is uploaded to S3 alongside its output (see
+[`LOGGING.md`](LOGGING.md)), so up-to-date numbers are always one log
+fetch away.
 
 - **`import_atp`** ([`src/pipeline/atp/`](../src/pipeline/atp/)) —
   downloads AllThePlaces’ latest published run (`fetch.rs`) and parses
@@ -263,8 +276,8 @@ occasionally as the planet grows and the code changes.
   [`docs/outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)
   for that file’s schema. **~8 minutes** (~5 min matching, ~3 min
   writing) for 3.8M ATP features against the full OpenStreetMap
-  planet, on the #665 bare-VM run. **10m37s** (636.95s) on the cpx42
-  run, writing 1,731,159 rows (719,507 matched).
+  planet, on the #665 bare-VM run. **10m37s** on the cpx42 run,
+  writing 1,731,159 rows (719,507 matched).
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
   — scans `conflated.parquet` for matched rows and asks an
   [`edit_suggesters`](../src/edit_suggesters/) implementation what
@@ -314,19 +327,19 @@ configured cgroup memory limit at all — `cgroup_current_bytes` is
 normally still populated (systemd puts every service unit into its own
 cgroup even outside a container), but `cgroup_max_bytes` reads `None`
 without one; see
-[`src/pipeline/memstats.rs`](../src/pipeline/memstats.rs)'s own doc
+[`src/pipeline/memstats.rs`](../src/pipeline/memstats.rs)’s own doc
 comment. The design’s central bet is specifically about page-cache
 accounting *under* such a limit, which only a real container can
-exercise. The cpx42 run cited above gives a first container data
-point: under a comfortable 12 GB `podman --memory` limit,
-`rss_file_bytes` again dominated during `conflate.match` (11.0 GB of
-11.2 GB total RSS), with no OOM-kill even while `cgroup_current_bytes`
-briefly touched 89–90% of the limit during the later, non-`conflate`
-steps. That’s encouraging, but it’s one comfortable limit, not yet the
-deliberately tight `--mem-limit` sweep
-[#711](https://github.com/alltheplaces/osm-diffs/issues/711) calls for
-to find where the design actually starts to strain — see that issue
-for the current status.
+exercise. The cpx42 run cited above gave a first container data point:
+under a comfortable 12 GB `podman --memory` limit, `rss_file_bytes`
+again dominated during `conflate.match` (11.0 GB of 11.2 GB total
+RSS), with no OOM-kill even while `cgroup_current_bytes` briefly
+touched 89–90% of the limit during the later, non-`conflate` steps. A
+follow-up `--mem-limit` sweep down to genuinely tight limits
+([#711](https://github.com/alltheplaces/osm-diffs/issues/711))
+confirmed the design holds well below that comfortable baseline too —
+see [`PRODUCTION.md`](PRODUCTION.md) for the full results and the
+recommended production memory limit.
 
 ### Code structure
 
