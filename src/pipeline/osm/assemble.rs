@@ -472,7 +472,7 @@ fn assemble_leaf_relations<'a>(
                             /* super_relations */ None,
                         )?
                         else {
-                            log::error!("could not build geometry for relation/{}", relation.id);
+                            log::warn!("could not build geometry for relation/{}", relation.id);
                             continue;
                         };
 
@@ -633,7 +633,7 @@ fn assemble_super_relations(
                 };
 
                 let Some(rel_geometry) = rel_geometry else {
-                    log::error!("could not build geometry for relation/{}", rel_id);
+                    log::warn!("could not build geometry for relation/{}", rel_id);
                     continue;
                 };
 
