@@ -195,20 +195,25 @@ never lost.
 
 ### Pipeline steps
 
-Timings below (where known) are wall-clock numbers from one real
-full-planet run on production-representative hardware — a
-deliberately memory-constrained Hetzner cpx22 (2 vCPU / 4 GB RAM) with
-its working directory on an attached volume that peaked at ~174 GB
-used (settling to ~148 GB once `import_osm` finished), not a dev
-machine; see
+Timings below (where known) come from two real full-planet runs on
+production-representative hardware, not a dev machine: a deliberately
+memory-constrained, bare (uncontainerized) Hetzner cpx22 (2 vCPU / 4 GB
+RAM) with its working directory on an attached volume that peaked at
+~174 GB used (settling to ~148 GB once `import_osm` finished) — see
 [#665](https://github.com/alltheplaces/osm-diffs/issues/665) for the
-full writeup. Nothing aggregates or dashboards these on an ongoing
-basis, but every run's `pipeline.log` — with per-step timings for
-that specific run — is uploaded to S3 alongside its output (see
-`upload_logs` above), so up-to-date numbers are always one log fetch
-away. Treat the ones below as one data point rather than a guarantee
-— worth refreshing occasionally as the planet grows and the code
-changes.
+full writeup — and a later, containerized Hetzner cpx42 (8 vCPU / 16 GB
+RAM, `podman run --memory=12g --cpus=6`), run in the course of
+validating [#722](https://github.com/alltheplaces/osm-diffs/issues/722)
+(and feeding into [#711](https://github.com/alltheplaces/osm-diffs/issues/711)'s
+memory-limit sweep). The two aren't directly comparable — different
+CPU/memory/container configuration — so both are cited below where
+they cover the same step, rather than one silently overwriting the
+other. Nothing aggregates or dashboards these on an ongoing basis, but
+every run's `pipeline.log` — with per-step timings for that specific
+run — is uploaded to S3 alongside its output (see `upload_logs` above),
+so up-to-date numbers are always one log fetch away. Treat the ones
+below as data points rather than a guarantee — worth refreshing
+occasionally as the planet grows and the code changes.
 
 - **`import_atp`** ([`src/pipeline/atp/`](../src/pipeline/atp/)) —
   downloads AllThePlaces’ latest published run (`fetch.rs`) and parses
@@ -225,21 +230,28 @@ changes.
   tracks elsewhere, [#682](https://github.com/alltheplaces/osm-diffs/issues/682));
   not consumed by anything yet. Not separately timed.
 - **`import_osm`** ([`src/pipeline/osm/`](../src/pipeline/osm/)) —
-  downloads the OpenStreetMap planet dump via BitTorrent (`fetch.rs`);
-  does a first pass over it that decides, by tag, which nodes/ways/
-  relations are even worth fully assembling, and which node
-  coordinates and relation members they’ll need (`prune.rs`); builds
-  real OGC geometry (point/line/polygon) for everything kept,
-  resolving ways and relations down through their member nodes as
-  OpenStreetMap’s data model requires (`assemble.rs`; see
-  “Background” above); and writes the result into a memory-mapped
+  downloads the OpenStreetMap planet dump over plain HTTPS (`fetch.rs`;
+  a redirect straight to a well-provisioned cloud object store, not
+  BitTorrent — see [#755](https://github.com/alltheplaces/osm-diffs/pull/755)
+  for why that switch happened); does a first pass over it that
+  decides, by tag, which nodes/ways/relations are even worth fully
+  assembling, and which node coordinates and relation members they’ll
+  need (`prune.rs`); builds real OGC geometry (point/line/polygon) for
+  everything kept, resolving ways and relations down through their
+  member nodes as OpenStreetMap’s data model requires (`assemble.rs`;
+  see “Background” above); and writes the result into a memory-mapped
   spatial index (`OsmFeatureIndex`), queryable by S2 cell range
   without decoding every candidate (`index.rs`,
   [`src/tables/feature_index.rs`](../src/tables/feature_index.rs)).
-  **~4h48m** for the whole step (dominated by the BitTorrent download,
-  which varies with swarm health well beyond this project’s control;
-  `OsmFeatureIndex::create` itself, the compute-heavy part, is only
-  ~26 minutes of that).
+  **~4h48m** for the whole step on the #665 bare-VM run, back when the
+  planet download itself went over BitTorrent and dominated that
+  figure. On the newer, HTTPS-based cpx42 run, the download itself
+  took **~28 minutes** — roughly 10x faster than the old BitTorrent
+  baseline — with the whole step (download + SHA-256 hash + prune/
+  assemble/index-build) completing in **2h24m12s**. The two runs’
+  compute-heavy portions (prune/assemble/index-build) aren’t a clean
+  apples-to-apples comparison, since they ran under different CPU
+  counts and memory limits.
 - **`conflate`**
   ([`src/pipeline/conflate/mod.rs`](../src/pipeline/conflate/mod.rs))
   — a single scan over AllThePlaces (the smaller of the two datasets),
@@ -250,20 +262,28 @@ changes.
   `conflated.parquet`. See
   [`docs/outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)
   for that file’s schema. **~8 minutes** (~5 min matching, ~3 min
-  writing) for 3.8M ATP features against the full planet.
+  writing) for 3.8M ATP features against the full planet, on the #665
+  bare-VM run. **10m37s** (636.95s) on the cpx42 run, writing
+  1,731,159 rows (719,507 matched).
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
   — scans `conflated.parquet` for matched rows and asks an
   [`edit_suggesters`](../src/edit_suggesters/) implementation what
   should change, split into GeoJSON Lines layers by category (shops,
-  infrastructure, trees). Not yet measured at full-planet scale.
+  infrastructure, trees). **~20 seconds** at full-planet scale (cpx42
+  run).
 - **`render_tiles`** ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs))
   — runs [tippecanoe](https://github.com/felt/tippecanoe) over those
-  layers to build one PMTiles archive for visual review. Not yet
-  measured at full-planet scale.
-- **`upload_conflated` / `upload_tiles` / `upload_logs`**
+  layers to build one PMTiles archive for visual review. **~2m48s** at
+  full-planet scale (cpx42 run).
+- **`upload_conflated` / `upload_tiles`**
   ([`src/pipeline/upload.rs`](../src/pipeline/upload.rs)) — push the
-  data output, the tiles, and the run’s own log to S3-compatible
-  storage. Not yet measured at full-planet scale.
+  data output and the tiles to S3-compatible storage. **~5.5s** /
+  **~3s** respectively at full-planet scale (cpx42 run). `upload_logs`
+  (same file, pushes the run’s own log) isn’t wrapped by the same
+  per-step timing machinery as the others (see `run_pipeline` in
+  [`src/pipeline/mod.rs`](../src/pipeline/mod.rs)), so it has no
+  comparable number here — it’s a single small JSON file, not
+  expected to be a meaningful cost either way.
 
 ### Why `conflate` doesn’t need its own cache
 
@@ -288,6 +308,25 @@ which shows up as slower wall-clock time, not an out-of-memory kill —
 so it’s not moot even though the memory is “just” cache. A box with
 meaningfully less RAM than the actively-touched working set erodes
 exactly the speed benefit this design exists for.
+
+That reasoning held on the #665 bare VM, but a bare VM has no
+configured cgroup memory limit at all — `cgroup_current_bytes` is
+normally still populated (systemd puts every service unit into its own
+cgroup even outside a container), but `cgroup_max_bytes` reads `None`
+without one; see
+[`src/pipeline/memstats.rs`](../src/pipeline/memstats.rs)'s own doc
+comment. The design’s central bet is specifically about page-cache
+accounting *under* such a limit, which only a real container can
+exercise. The cpx42 run cited above gives a first container data
+point: under a comfortable 12 GB `podman --memory` limit,
+`rss_file_bytes` again dominated during `conflate.match` (11.0 GB of
+11.2 GB total RSS), with no OOM-kill even while `cgroup_current_bytes`
+briefly touched 89–90% of the limit during the later, non-`conflate`
+steps. That’s encouraging, but it’s one comfortable limit, not yet the
+deliberately tight `--mem-limit` sweep
+[#711](https://github.com/alltheplaces/osm-diffs/issues/711) calls for
+to find where the design actually starts to strain — see that issue
+for the current status.
 
 ### Code structure
 
