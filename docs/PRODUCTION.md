@@ -56,9 +56,9 @@ itself generous margin, not a sizing recommendation.
 ## Container invocation
 
 The published image (`ghcr.io/alltheplaces/osm-diffs:vX.Y.Z` — pin an
-exact, immutable tag; see
-[`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md#immutable-releases))
-runs as:
+exact tag; see
+[the releases page](https://github.com/alltheplaces/osm-diffs/releases)
+for the current version and its notes) runs as:
 
 ```sh
 podman run --rm --read-only \
