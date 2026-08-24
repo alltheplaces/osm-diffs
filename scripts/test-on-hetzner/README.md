@@ -322,3 +322,14 @@ cheap, and worth it.
   experiment) -- if `create` fails on `--volume-size`, that's the first
   thing to check, via a support ticket to raise the quota rather than
   anything this tool can work around.
+- **That quota is a project-wide combined total, not a per-volume
+  cap** -- confirmed empirically during a `--mem-limit` sweep (#711):
+  a fresh project's default is 1024GB (1 TiB) summed across every
+  volume that exists at once, regardless of how modest each individual
+  `--volume-size` request is. This specifically bites running several
+  instances in parallel (e.g. comparing multiple `--mem-limit`
+  configs side by side): two 400GB volumes already leaves only 224GB
+  of headroom for everything else, not another 400GB. `create` fails
+  the same way either way (`volumes size limit exceeded`); if it's not
+  obviously the per-volume cap, check `hcloud volume list`'s total
+  before assuming a single `--volume-size` is just too big.
