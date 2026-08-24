@@ -143,7 +143,21 @@ def list_element_type(duckdb_type):
 
 
 def check_nonempty(con, url):
-    count = con.execute("SELECT count(*) FROM read_parquet(?)", [url]).fetchone()[0]
+    # A run that crashed (or was OOM-killed -- see check_no_oom) before
+    # conflate ever finished never uploads a conflated.parquet at all,
+    # so `url` isn't just empty, it's unreadable -- confirmed the hard
+    # way (#722's own verification checklist item, "confirm validate
+    # correctly fails on a deliberately-bad case": an artificially tiny
+    # --mem-limit produced exactly this). Without this try/except,
+    # DuckDB raises duckdb.IOException (an HTTP 404 against the S3
+    # test bucket) straight out of this function, and every other hard
+    # check that also reads `url` would do the same -- an unhandled
+    # traceback instead of a clean failure report, even though the
+    # underlying `validate` script still exits non-zero either way.
+    try:
+        count = con.execute("SELECT count(*) FROM read_parquet(?)", [url]).fetchone()[0]
+    except duckdb.IOException as e:
+        return CheckResult("non-empty output", False, f"could not read {url}: {e}")
     return CheckResult("non-empty output", count > 0, f"{count} rows")
 
 
@@ -350,11 +364,22 @@ def check_match_rate(con, url, regional_extract):
         # AllThePlaces is always worldwide -- a regional OSM extract
         # shows ~0% match outside its region by design, not by defect.
         return CheckResult("match rate", None, "skipped (regional extract)")
-    total, matched = con.execute(
-        "SELECT count(*), count(*) FILTER (WHERE atp IS NOT NULL AND osm IS NOT NULL) "
-        "FROM read_parquet(?)",
-        [url],
-    ).fetchone()
+    # Same missing-output case check_nonempty's own doc comment
+    # explains (a crashed/OOM-killed run never uploads a
+    # conflated.parquet at all) -- there's genuinely no match rate to
+    # report here, same as the regional-extract case just above, so
+    # this is a skip too, not a failure (advisory checks never fail
+    # validate regardless -- see the module docstring -- but without
+    # this, DuckDB's duckdb.IOException would still surface as an
+    # unhandled traceback rather than a clean skip).
+    try:
+        total, matched = con.execute(
+            "SELECT count(*), count(*) FILTER (WHERE atp IS NOT NULL AND osm IS NOT NULL) "
+            "FROM read_parquet(?)",
+            [url],
+        ).fetchone()
+    except duckdb.IOException as e:
+        return CheckResult("match rate", None, f"skipped: could not read {url}: {e}")
     rate = matched / total if total else 0.0
     return CheckResult("match rate", True, f"{matched}/{total} rows matched ({rate:.1%})")
 
@@ -458,14 +483,37 @@ def run_hard_checks(con, url, records, dmesg_text, mem_limit, expect_pipeline_ve
     """Runs every hard check and returns the list of `CheckResult`s, in
     the order printed. Doesn't short-circuit on the first failure --
     `cmd_validate` wants the full picture in one pass, not a
-    fix-one-rerun-find-the-next loop."""
+    fix-one-rerun-find-the-next loop.
+
+    One exception: if `check_nonempty` itself can't even read `url`
+    (see its own doc comment), the five checks below it that also read
+    that same file are skipped rather than attempted -- each would fail
+    with an identical, redundant "could not read" result for the exact
+    same reason. The four log/dmesg-based checks after those don't
+    depend on the parquet file at all, so they still run -- and are
+    exactly what can explain *why* there's no output (e.g. an
+    OOM-kill, via check_no_oom)."""
+    nonempty = check_nonempty(con, url)
+    if not nonempty.passed:
+        skip = 'skipped: no usable output (see "non-empty output" above)'
+        parquet_checks = [
+            CheckResult("schema", None, skip),
+            CheckResult("atp/atp_geometry null-consistency", None, skip),
+            CheckResult("osm/osm_geometry null-consistency", None, skip),
+            CheckResult("osm_geometry validity", None, skip),
+            CheckResult("provenance BOM", None, skip),
+        ]
+    else:
+        parquet_checks = [
+            check_schema(con, url),
+            check_null_consistency(con, url, "atp", "atp_geometry"),
+            check_null_consistency(con, url, "osm", "osm_geometry"),
+            check_geometry_validity(con, url),
+            check_provenance_bom(con, url, expect_pipeline_version),
+        ]
     return [
-        check_nonempty(con, url),
-        check_schema(con, url),
-        check_null_consistency(con, url, "atp", "atp_geometry"),
-        check_null_consistency(con, url, "osm", "osm_geometry"),
-        check_geometry_validity(con, url),
-        check_provenance_bom(con, url, expect_pipeline_version),
+        nonempty,
+        *parquet_checks,
         check_run_completed(records),
         check_cgroup_signal(records, mem_limit),
         check_no_oom(dmesg_text),
