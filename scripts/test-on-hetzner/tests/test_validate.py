@@ -123,6 +123,19 @@ def test_check_nonempty(tmp_path, select_suffix, expected):
     assert v.check_nonempty(con, url).passed is expected
 
 
+def test_check_nonempty_reports_clean_failure_when_output_is_missing(tmp_path):
+    # A run that crashed/was OOM-killed before conflate ever finished
+    # never uploads conflated.parquet at all -- confirmed against a real
+    # Hetzner run during #722's own verification (a deliberately tiny
+    # --mem-limit). Without the try/except in check_nonempty, DuckDB's
+    # duckdb.IOException would propagate straight out of this call as an
+    # unhandled traceback instead of a reportable CheckResult.
+    con = duckdb.connect()
+    result = v.check_nonempty(con, str(tmp_path / "does-not-exist.parquet"))
+    assert result.passed is False
+    assert "could not read" in result.message
+
+
 @pytest.mark.parametrize(
     "sql,expected",
     [
@@ -323,6 +336,40 @@ def test_run_hard_checks_returns_all_checks_in_order(tmp_path, monkeypatch):
     assert all(r.passed for r in results)
 
 
+def test_run_hard_checks_skips_parquet_checks_when_output_is_missing(tmp_path):
+    # Mirrors a real crashed/OOM-killed run: no conflated.parquet was
+    # ever uploaded. The five checks that also read that file should be
+    # skipped (not attempted and failed one by one for the same
+    # underlying reason) -- but the log/dmesg-based checks don't need
+    # the file at all, and should still run and report the real signal
+    # (here: the OOM that's exactly why there's no output).
+    con = duckdb.connect()
+    url = str(tmp_path / "does-not-exist.parquet")
+    records = [
+        {"level": "INFO", "message": "conflate: start", "fields": {"step": "conflate", "phase": "start"}},
+    ]
+    dmesg_text = "Memory cgroup out of memory: Killed process 2699 (osm-diffs)"
+    results = v.run_hard_checks(
+        con, url, records, dmesg_text=dmesg_text, mem_limit="4g", expect_pipeline_version=None, min_atp_features=None
+    )
+    by_name = {r.name: r for r in results}
+
+    assert by_name["non-empty output"].passed is False
+    for name in [
+        "schema",
+        "atp/atp_geometry null-consistency",
+        "osm/osm_geometry null-consistency",
+        "osm_geometry validity",
+        "provenance BOM",
+    ]:
+        assert by_name[name].passed is None, f"{name} should be skipped, not attempted"
+
+    # Not parquet-dependent -- still actually run, and still report the
+    # real failure (the OOM), not silently skipped alongside the rest.
+    assert by_name["no OOM"].passed is False
+    assert "killed process" in by_name["no OOM"].message.lower()
+
+
 # ── advisory checks ─────────────────────────────────────────────────
 #
 # Leaner than the hard-check tests above: one test per piece of actual
@@ -334,6 +381,13 @@ def test_run_hard_checks_returns_all_checks_in_order(tmp_path, monkeypatch):
 def test_check_match_rate_skips_for_regional_extract(tmp_path):
     con, url = make_parquet(tmp_path, VALID_ROW_SQL)
     result = v.check_match_rate(con, url, regional_extract="europe/switzerland")
+    assert result.passed is None
+    assert "skipped" in result.message
+
+
+def test_check_match_rate_skips_when_output_is_missing(tmp_path):
+    con = duckdb.connect()
+    result = v.check_match_rate(con, str(tmp_path / "does-not-exist.parquet"), regional_extract=None)
     assert result.passed is None
     assert "skipped" in result.message
 
