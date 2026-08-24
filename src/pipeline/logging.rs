@@ -26,7 +26,7 @@
 //! RUST_LOG still controls the level as usual, default `info`.
 
 use anyhow::{Context, Result};
-use std::{fs::OpenOptions, io::Write, path::Path};
+use std::{fs::OpenOptions, io::Write, path::Path, thread};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 const LOG_FILE_NAME: &str = "pipeline.log";
@@ -47,9 +47,20 @@ pub fn init(workdir: &Path) -> Result<()> {
         .target(env_logger::Target::Pipe(Box::new(file)))
         .init();
 
+    // available_parallelism() is what every internal thread pool
+    // (prune.rs/assemble.rs's own worker counts, Rayon's default global
+    // pool for conflate.match) sizes itself from -- logged once here,
+    // structured, so a `--cpus=N` sweep (see docs/PRODUCTION.md) can
+    // actually confirm this returns N under a real cgroup CPU quota,
+    // rather than silently reporting the host's full core count. `Ok`
+    // wraps a `NonZero<usize>`; `.get()` down to a plain number for a
+    // cleaner logged field. `None` if the platform can't answer at
+    // all (see the stdlib's own docs on when this fails) -- worth
+    // recording as an absence, not worth failing pipeline startup over.
     log::info!(
-        "pipeline starting up, version=v{}",
-        env!("CARGO_PKG_VERSION")
+        version = concat!("v", env!("CARGO_PKG_VERSION")),
+        available_parallelism = thread::available_parallelism().map(|n| n.get()).ok();
+        "pipeline starting up"
     );
     Ok(())
 }
@@ -193,14 +204,17 @@ mod tests {
             .iter()
             .find(|r| r["target"] == init_module && r["level"] == "INFO")
             .with_context(|| format!("no startup record found among: {records:?}"))?;
-        assert!(
-            startup["message"]
-                .as_str()
-                .unwrap()
-                .contains(env!("CARGO_PKG_VERSION")),
-            "startup record should mention the binary's version: {startup}"
+        assert_eq!(
+            startup["fields"]["version"],
+            concat!("v", env!("CARGO_PKG_VERSION"))
         );
         assert!(startup["timestamp"].as_str().is_some());
+        assert!(
+            startup["fields"]["available_parallelism"]
+                .as_u64()
+                .is_some_and(|n| n >= 1),
+            "startup record should log a positive available_parallelism: {startup}"
+        );
 
         let warn = records
             .iter()
