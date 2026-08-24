@@ -3,11 +3,11 @@
 `osm-diffs` doesn’t run anywhere permanent yet — see
 [`TECHNICAL_DESIGN.md`](TECHNICAL_DESIGN.md)’s “Status” section. This
 document isn’t a description of an existing deployment; it’s the
-operational knowledge gathered from real testing on Hetzner Cloud
+operational knowledge gathered from testing on Hetzner Cloud
 ([`scripts/test-on-hetzner`](../scripts/test-on-hetzner/README.md),
 [#711](https://github.com/alltheplaces/osm-diffs/issues/711),
 [#722](https://github.com/alltheplaces/osm-diffs/issues/722)), written
-down now so whoever sets up the real thing doesn’t have to
+down now so whoever sets up the actual deployment doesn’t have to
 re-establish it from scratch.
 
 ## Hardware sizing
@@ -39,7 +39,7 @@ for why those two steps behave so differently under memory pressure.
 **Don’t provision at the measured floor.** 6GB is where the sweep
 happened to land this time; it isn’t a target with margin built in, and
 the planet only grows over time — a floor measured today gets tighter,
-never looser. **8GB is the recommended minimum** for real use: the
+never looser. **8GB is the recommended minimum** in production: the
 first config in the sweep with no measurable difference from a
 generous limit.
 
@@ -74,7 +74,7 @@ podman run --rm --read-only \
   [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md#minimal-containers).
   Everything the pipeline writes goes to `/workdir`, the one mounted
   volume.
-- `--memory`/`--cpus`: the real cgroup limits this document’s sizing
+- `--memory`/`--cpus`: the actual cgroup limits this document’s sizing
   guidance is about — without them, `pipeline.log`’s own `cgroup_*`
   memstats fields read `None` (see
   [`LOGGING.md`](LOGGING.md)), and nothing here has been validated
@@ -95,12 +95,12 @@ Five environment variables, read once at startup (see
   uploads (e.g. for a local/dry-run invocation) rather than passing
   empty values.
 - `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_ACCESS_KEY_SECRET`
-  — required once `S3_ENDPOINT` is set; a real S3-compatible bucket for
-  the actual output (`conflated.parquet`, `edits.pmtiles`,
+  — required once `S3_ENDPOINT` is set; a genuine S3-compatible bucket
+  for the actual output (`conflated.parquet`, `edits.pmtiles`,
   `logs/<run-id>.log`), never the ephemeral per-run test buckets
   `scripts/test-on-hetzner` creates for its own testing.
 
-`S3_ACCESS_KEY_ID`/`S3_ACCESS_KEY_SECRET` are real credentials — handle
+`S3_ACCESS_KEY_ID`/`S3_ACCESS_KEY_SECRET` are live credentials — handle
 them as secrets, not plain configuration. Keep them out of a command
 line (visible to anyone who can `ps` the host, and easy to leak into
 shell history or CI logs) and out of any manifest committed to a repo.
@@ -159,10 +159,10 @@ recommended 8GB config takes ~2h43m, so:
   between runs).
 - **~€1.30/month** at a weekly cadence — compute only. Not included:
   S3-compatible storage for the actual output, egress/traffic, or any
-  larger instance chosen for real margin beyond this document’s bare
-  sizing numbers.
+  larger instance chosen for genuine margin beyond this document’s
+  bare sizing numbers.
 
 This is Hetzner-specific pricing, from the same provider
-`scripts/test-on-hetzner` tests against — a real production deployment
-might land on different infrastructure entirely; treat the euro
-figures as an order-of-magnitude anchor, not a quote.
+`scripts/test-on-hetzner` tests against — an actual production
+deployment might land on different infrastructure entirely; treat the
+euro figures as an order-of-magnitude anchor, not a quote.
