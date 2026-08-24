@@ -262,9 +262,9 @@ occasionally as the planet grows and the code changes.
   `conflated.parquet`. See
   [`docs/outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)
   for that file’s schema. **~8 minutes** (~5 min matching, ~3 min
-  writing) for 3.8M ATP features against the full planet, on the #665
-  bare-VM run. **10m37s** (636.95s) on the cpx42 run, writing
-  1,731,159 rows (719,507 matched).
+  writing) for 3.8M ATP features against the full OpenStreetMap
+  planet, on the #665 bare-VM run. **10m37s** (636.95s) on the cpx42
+  run, writing 1,731,159 rows (719,507 matched).
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
   — scans `conflated.parquet` for matched rows and asks an
   [`edit_suggesters`](../src/edit_suggesters/) implementation what
