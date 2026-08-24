@@ -17,7 +17,8 @@ re-establish it from scratch.
 many CPUs” is still an open question, not a documented recommendation.
 
 **Memory**: a `--mem-limit` sweep of the released `v0.8.2` container
-against the full planet, same CPU count throughout, gave:
+against the full OpenStreetMap planet, same CPU count throughout,
+gave:
 
 | `--mem-limit` | `import_osm` | `conflate` | Total |
 |---|---|---|---|
