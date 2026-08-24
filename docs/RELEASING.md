@@ -210,8 +210,12 @@ for that walkthrough, which is what `verify-release.sh` automates.
 
 - **Production deployment isn’t wired up yet.** This process ends at “a
   correctly built, SBOM’d, attested container sits in `ghcr.io`” — what
-  happens after that, to actually run this in production, doesn’t exist
-  yet and isn’t covered here.
+  happens after that, to actually run this in production (scheduling,
+  where it runs), doesn’t exist yet. What it should take to get there
+  once it does — hardware sizing, required configuration, what to
+  monitor — is written down in
+  [`PRODUCTION.md`](PRODUCTION.md), from real testing rather than
+  guesswork.
 - A few low-priority, deliberately-deferred items are tracked separately
   and don’t block anything: automated freshness checks for vendored
   dependencies

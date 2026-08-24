@@ -350,6 +350,10 @@ Related documentation:
   step writes, and where weekly-run logs end up archived.
 - [`docs/SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md) — SBOM,
   build provenance, and the release process’s security properties.
+- [`docs/RELEASING.md`](RELEASING.md) — how to cut a release.
+- [`docs/PRODUCTION.md`](PRODUCTION.md) — hardware sizing, required
+  configuration, and what to monitor, for whoever eventually runs this
+  somewhere real.
 - [`docs/outputs/`](outputs/) — the schema of files this pipeline
   produces for public consumption.
 
@@ -362,7 +366,9 @@ uploaded to S3 at the end of a run. What’s still ahead follows from
 that same choice — several pieces are deliberately simple placeholders
 until the full pipeline was proven out:
 
-- It does not yet run on an automatic weekly schedule in production.
+- It does not yet run on an automatic weekly schedule in production —
+  see [`docs/PRODUCTION.md`](PRODUCTION.md) for what’s known so far
+  about what that would take.
 - Nothing yet uploads suggested edits to any of the tools described
   above — that integration (most likely MapRoulette first, given its
   API is the closest fit) is future work, not yet designed in detail.
