@@ -141,7 +141,7 @@ fn run_pipeline_steps(
     Ok(())
 }
 
-/// Runs one top-level pipeline step, logging a [`memstats`]
+/// Runs one pipeline step, logging a [`memstats`]
 /// snapshot and the step's wall-clock run time -- to help diagnose
 /// out-of-memory kills and resource misconfigurations, since each step
 /// here (import, build tables, conflate, ...) tends to be where a
@@ -149,6 +149,20 @@ fn run_pipeline_steps(
 /// the step succeeds or fails, so a step that errors out (e.g. due to
 /// an actual OOM) still gets its "end" snapshot, with an elapsed time,
 /// on the way out.
+///
+/// Not just for the top-level steps `run_pipeline_steps` itself calls
+/// this with (`import_atp`, `conflate`, ...): `pipeline::osm::import_osm`
+/// also calls this directly (via plain Rust module-tree visibility --
+/// this function isn't `pub`, but `osm` is a descendant module of
+/// `pipeline`, so it can see it) for its own internal sub-steps
+/// (`import_osm.fetch`, `.open`, `.prune`, `.assemble`, `.index`),
+/// dotted-named to stay visually distinct from top-level steps in
+/// `pipeline.log` while sharing the exact same logging shape -- one
+/// mechanism, not two, and no separate parsing convention needed for
+/// sub-step timings. Added after a real case (#711) where only having
+/// `import_osm`'s own start/end pair wasn't enough resolution to tell
+/// which of its internal phases actually needed the memory a tight
+/// `--mem-limit` run ran short on.
 ///
 /// A step that returns `Err` also gets its error logged here, at ERROR
 /// level, with the full `anyhow` context chain -- this is the single

@@ -75,10 +75,32 @@ pub fn import_osm<'a>(
         return OsmFeatures::open(&osm_index_path, &strings_path);
     }
 
-    let (pbf, fetch_metadata) = fetch::fetch_planet(http_client, progress, workdir)?;
+    // Each sub-step below gets the same step/phase/elapsed_seconds/
+    // memstats logging shape as this crate's top-level pipeline steps
+    // (see `super::run_step`, which this reuses directly rather than a
+    // second, parallel logging mechanism) -- just under a dotted name
+    // ("import_osm.fetch", not "fetch") so a log consumer can tell a
+    // sub-step from a top-level one at a glance, and so `import_osm`'s
+    // own already-existing top-level start/end pair (logged by
+    // whichever `run_step` call wraps this whole function, see
+    // `pipeline::run_pipeline_steps`) keeps meaning "the whole step",
+    // not "the whole step minus its sub-steps". Before this, only two
+    // points inside `import_osm` were distinguishable at all --
+    // "opened OpenStreetMap planet file" (after fetch+hash+blob-scan)
+    // and the outer step's own end -- which lumps prune/assemble/
+    // index-build into one undifferentiated number; not enough
+    // resolution to tell which of those actually needs the memory a
+    // tight `--mem-limit` run runs short on (see #711's investigation,
+    // e.g. alltheplaces/osm-diffs#711's comments for a real case where
+    // that distinction mattered).
+    let (pbf, fetch_metadata) = super::run_step("import_osm.fetch", || {
+        fetch::fetch_planet(http_client, progress, workdir)
+    })?;
     let pbf_error = || format!("could not open file `{:?}`", pbf);
     let mut file = File::open(&pbf).with_context(pbf_error)?;
-    let mut reader = BlobReader::open(&mut file).with_context(pbf_error)?;
+    let mut reader = super::run_step("import_osm.open", || {
+        BlobReader::open(&mut file).with_context(pbf_error)
+    })?;
     let header = reader.header();
     let replication_timestamp = header
         .replication_timestamp
@@ -92,9 +114,15 @@ pub fn import_osm<'a>(
         "opened OpenStreetMap planet file"
     );
 
-    let prunings = Prunings::create(&mut reader, progress, workdir)?;
-    let assembly = assemble::assemble(&mut reader, &prunings, progress, workdir)?;
-    let index = index::build_index(&assembly, progress, workdir, &osm_index_path)?;
+    let prunings = super::run_step("import_osm.prune", || {
+        Prunings::create(&mut reader, progress, workdir)
+    })?;
+    let assembly = super::run_step("import_osm.assemble", || {
+        assemble::assemble(&mut reader, &prunings, progress, workdir)
+    })?;
+    let index = super::run_step("import_osm.index", || {
+        index::build_index(&assembly, progress, workdir, &osm_index_path)
+    })?;
     Ok(OsmFeatures {
         index,
         strings: assembly.strings,

@@ -21,7 +21,13 @@ See [`src/logging.rs`](../src/logging.rs) for the implementation, and
 [`src/pipeline/mod.rs`](../src/pipeline/mod.rs)’s `log_snapshot` for an
 example of a structured record (step name, phase, elapsed time, RSS/
 cgroup memory snapshot — logged at the start and end of every pipeline
-step).
+step). A step can log its own internal sub-steps the same way, under a
+dotted name (e.g. `import_osm.fetch`, `import_osm.assemble`) — not a
+second logging mechanism, the exact same `run_step` helper, just called
+again from inside a step for finer timing resolution than that step’s
+own start/end pair alone would give. `import_osm` does this for its
+fetch/open/prune/assemble/index-build phases; see
+[`src/pipeline/osm/mod.rs`](../src/pipeline/osm/mod.rs).
 
 ## Where weekly-run logs end up
 
