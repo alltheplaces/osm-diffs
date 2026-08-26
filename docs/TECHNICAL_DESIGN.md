@@ -176,25 +176,30 @@ detail.
 
 ```mermaid
 graph TD
-    ATP_SRC[AllThePlaces weekly dump]
-    OSM_SRC[OpenStreetMap planet]
+    ATP_SRC@{ shape: cloud, label: "AllThePlaces weekly dump" }
+    OSM_SRC@{ shape: cloud, label: "OpenStreetMap planet" }
 
-    ATP_SRC -->|import_atp| ATP_PARQUET[alltheplaces.parquet]
-    ATP_PARQUET -->|collect_wikidata_ids| WIKIDATA[alltheplaces.wikidata-ids]
+    ATP_SRC --> IMPORT_ATP(import_atp) --> ATP_PARQUET[alltheplaces.parquet]
+    ATP_PARQUET --> COLLECT_WIKI(collect_wikidata_ids) --> WIKIDATA[alltheplaces.wikidata-ids]
 
-    OSM_SRC -->|import_osm| OSM_INDEX[osm-features.index]
+    OSM_SRC --> IMPORT_OSM(import_osm) --> OSM_INDEX[osm-features.index]
 
-    ATP_PARQUET --> CONFLATE
-    OSM_INDEX -->|conflate| CONFLATE[conflated.parquet]
-    CONFLATE -->|upload_conflated| S3A[(S3)]
-    CONFLATE -->|suggest_edits| LAYERS["*.jsonl (for visualization)"]
-    LAYERS -->|render_tiles/tippecanoe| PMTILES[diffed-places.pmtiles]
-    PMTILES -->|upload_tiles| S3B[(S3)]
+    ATP_PARQUET --> CONFLATE(conflate)
+    OSM_INDEX --> CONFLATE
+    CONFLATE --> CONFLATED[conflated.parquet]
+    CONFLATED --> UPLOAD_CONFLATED(upload_conflated) --> S3A[(S3)]
+    CONFLATED --> SUGGEST_EDITS(suggest_edits) --> LAYERS["*.jsonl (for visualization)"]
+    LAYERS --> RENDER_TILES(render_tiles/tippecanoe) --> PMTILES[diffed-places.pmtiles]
+    PMTILES --> UPLOAD_TILES(upload_tiles) --> S3B[(S3)]
+
+    classDef process fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0e28,font-weight:bold;
+    class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES process;
 ```
 
-(`alltheplaces.wikidata-ids` has no outgoing edge above: nothing
-consumes it yet, it’s generated on behalf of planned future work, see
-[#682](https://github.com/alltheplaces/osm-diffs/issues/682).)
+(Pink boxes are processing steps; plain rectangles are the files they
+read or write. `alltheplaces.wikidata-ids` has no outgoing edge above:
+nothing consumes it yet, it’s generated on behalf of planned future
+work, see [#682](https://github.com/alltheplaces/osm-diffs/issues/682).)
 
 Every top-level step above is logged with its own wall-clock time and
 memory snapshot, regardless of success or failure — see
