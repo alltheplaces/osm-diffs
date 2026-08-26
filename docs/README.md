@@ -1,5 +1,16 @@
 # Documentation
 
+## Using the outputs
+
+Just want the data this pipeline produces? Start here.
+
+- [`outputs/`](outputs/) — the pipeline’s output files: what’s in
+  them, and how to read them.
+
+## Building the pipeline
+
+Want to work on the pipeline itself, or run it somewhere? Start here.
+
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — start here if you’re new.
 - [`TECHNICAL_DESIGN.md`](TECHNICAL_DESIGN.md) — why this pipeline
   exists, the background it builds on, and how it’s put together.
@@ -8,8 +19,6 @@
   lands.
 - [`LOGGING.md`](LOGGING.md) — the JSON log format `osm-diffs run`
   writes, and where weekly-run logs end up archived in S3.
-- [`outputs/`](outputs/) — the pipeline’s output files: what’s in
-  them, and how to read them.
 - [`RELEASING.md`](RELEASING.md) — how to cut a release of `osm-diffs`.
 - [`PRODUCTION.md`](PRODUCTION.md) — operational knowledge for running
   a released container somewhere real: hardware sizing, required
@@ -18,6 +27,9 @@
   behind our release process: containers, multi-architecture images,
   SBOM/CBOM, CycloneDX, build provenance and attestations, and
   immutable releases.
+
+## For everyone
+
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — how we expect people to
   treat each other in this project.
 - [`SECURITY.md`](SECURITY.md) — how to report a security vulnerability.
