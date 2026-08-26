@@ -1,5 +1,8 @@
 # `conflated.parquet`
 
+*Looking to download this file rather than read about its format? See
+[downloading the current output](README.md#downloading-the-current-output).*
+
 For every feature [AllThePlaces](https://alltheplaces.xyz/) scrapes
 that plausibly maps to something in
 [OpenStreetMap](https://www.openstreetmap.org/), this file has one row
