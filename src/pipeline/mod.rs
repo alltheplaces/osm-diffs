@@ -218,7 +218,8 @@ fn log_snapshot(name: &str, phase: &str, elapsed_seconds: Option<f64>) {
         rss_shmem_bytes = stats.rss_shmem_bytes,
         cgroup_current_bytes = stats.cgroup_current_bytes,
         cgroup_max_bytes = stats.cgroup_max_bytes,
-        cgroup_peak_bytes = stats.cgroup_peak_bytes;
+        cgroup_peak_bytes = stats.cgroup_peak_bytes,
+        children_rss_peak_bytes = stats.children_rss_peak_bytes;
         "{name}: {phase}"
     );
     if let Some(fraction) = stats.cgroup_usage_fraction()
