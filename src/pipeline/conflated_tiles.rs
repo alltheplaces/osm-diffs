@@ -256,3 +256,84 @@ fn extract_conflated_tile_row(batch: &RecordBatch, row: usize) -> Result<Option<
         osm,
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wkb::writer::{WriteOptions, write_geometry};
+
+    fn encode_point(lon: f64, lat: f64) -> Vec<u8> {
+        let point = geo::point!(x: lon, y: lat);
+        let mut buf = Vec::new();
+        write_geometry(&mut buf, &point, &WriteOptions::default()).expect("encode point");
+        buf
+    }
+
+    #[test]
+    fn unmatched_row_uses_atp_geometry_and_only_atp_tags() {
+        let row = ConflatedTileRow {
+            spider: "acme".to_string(),
+            atp_tags: vec![("shop".to_string(), "bakery".to_string())],
+            atp_geometry_wkb: encode_point(8.5, 47.2),
+            osm: None,
+        };
+        let line = row.to_geojson_line().expect("to_geojson_line");
+        assert!(line.ends_with('\n'));
+        let value: Value = serde_json::from_str(line.trim_end()).expect("valid json");
+
+        assert_eq!(value["type"], "Feature");
+        assert_eq!(value["geometry"]["type"], "Point");
+        assert_eq!(
+            value["geometry"]["coordinates"],
+            Value::from(vec![8.5, 47.2])
+        );
+        assert_eq!(value["properties"]["spider"], "acme");
+        assert_eq!(value["properties"]["atp:shop"], "bakery");
+        assert!(value["properties"].get("osm:type").is_none());
+    }
+
+    #[test]
+    fn matched_row_uses_osm_geometry_and_both_tag_sets() {
+        let row = ConflatedTileRow {
+            spider: "acme".to_string(),
+            atp_tags: vec![("shop".to_string(), "bakery".to_string())],
+            atp_geometry_wkb: encode_point(8.5, 47.2),
+            osm: Some(OsmSide {
+                osm_type: "node".to_string(),
+                osm_id: 42,
+                osm_tags: vec![("shop".to_string(), "bakery".to_string())],
+                osm_geometry_wkb: encode_point(8.50001, 47.20001),
+            }),
+        };
+        let line = row.to_geojson_line().expect("to_geojson_line");
+        let value: Value = serde_json::from_str(line.trim_end()).expect("valid json");
+
+        // The OSM shape, not the ATP one -- that's the whole point of
+        // preferring it once matched.
+        assert_eq!(
+            value["geometry"]["coordinates"],
+            Value::from(vec![8.50001, 47.20001])
+        );
+        assert_eq!(value["properties"]["osm:id"], 42);
+        assert_eq!(value["properties"]["osm:type"], "node");
+        assert_eq!(value["properties"]["osm:shop"], "bakery");
+        assert_eq!(value["properties"]["atp:shop"], "bakery");
+    }
+
+    #[test]
+    fn geometry_coordinates_are_rounded_to_seven_decimal_places() {
+        let row = ConflatedTileRow {
+            spider: "acme".to_string(),
+            atp_tags: vec![],
+            atp_geometry_wkb: encode_point(8.123_456_789, 47.987_654_321),
+            osm: None,
+        };
+        let line = row.to_geojson_line().expect("to_geojson_line");
+        let value: Value = serde_json::from_str(line.trim_end()).expect("valid json");
+
+        assert_eq!(
+            value["geometry"]["coordinates"],
+            Value::from(vec![8.1234568, 47.9876543])
+        );
+    }
+}

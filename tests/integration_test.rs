@@ -45,6 +45,14 @@ fn test_pipeline() -> Result<()> {
 
     assert_conflated_parquet(&workdir.path().join("conflated.parquet"))?;
     assert_shops_jsonl(&workdir.path().join("shops.jsonl"))?;
+    assert_conflated_tile_layers(
+        &workdir.path().join("matched.jsonl"),
+        &workdir.path().join("unmatched.jsonl"),
+    )?;
+    assert!(
+        workdir.path().join("conflated.pmtiles").exists(),
+        "conflated.pmtiles was not produced"
+    );
 
     Ok(())
 }
@@ -353,6 +361,68 @@ fn assert_shops_jsonl(path: &Path) -> Result<()> {
         2,
         "unexpected extra tags in suggested edit: {edit}"
     );
+
+    Ok(())
+}
+
+/// Checks `extract_conflated_layers`'s output against the same fixture
+/// data `assert_conflated_parquet` checks: 3 matched + 3 unmatched ATP
+/// features (see `assert_conflated_parquet`'s own "expected 6 conflated
+/// rows" / "expected 3 ATP features matched" assertions above).
+fn assert_conflated_tile_layers(matched_path: &Path, unmatched_path: &Path) -> Result<()> {
+    let read_features = |path: &Path| -> Result<Vec<serde_json::Value>> {
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("could not read {path:?}"))?;
+        content
+            .lines()
+            .map(|line| Ok(serde_json::from_str(line)?))
+            .collect()
+    };
+
+    let matched = read_features(matched_path)?;
+    let unmatched = read_features(unmatched_path)?;
+    assert_eq!(
+        matched.len(),
+        3,
+        "expected 3 matched features in {matched_path:?}, got:\n{matched:#?}"
+    );
+    assert_eq!(
+        unmatched.len(),
+        3,
+        "expected 3 unmatched features in {unmatched_path:?}, got:\n{unmatched:#?}"
+    );
+
+    for feature in matched.iter().chain(&unmatched) {
+        assert_eq!(feature["type"], "Feature");
+        assert!(
+            feature["properties"]["spider"].is_string(),
+            "feature has no spider: {feature}"
+        );
+        assert!(
+            feature["properties"]
+                .as_object()
+                .expect("properties should be an object")
+                .keys()
+                .any(|k| k.starts_with("atp:")),
+            "feature has no atp:* properties: {feature}"
+        );
+    }
+    for feature in &unmatched {
+        assert!(
+            feature["properties"].get("osm:type").is_none(),
+            "unmatched feature should carry no osm:* properties: {feature}"
+        );
+    }
+
+    // Same known match `assert_shops_jsonl` checks above: MediaMarkt,
+    // matched to OSM way/737021556, a polygon.
+    let media_markt = matched
+        .iter()
+        .find(|f| f["properties"]["osm:id"] == 737021556)
+        .expect("expected a matched feature for OSM feature 737021556");
+    assert_eq!(media_markt["properties"]["osm:type"], "way");
+    assert_eq!(media_markt["geometry"]["type"], "Polygon");
+    assert_eq!(media_markt["properties"]["atp:shop"], "electronics");
 
     Ok(())
 }
