@@ -13,11 +13,10 @@
 
 use crate::edit_suggesters::create_edit_suggester;
 use crate::pipeline::EXTERNAL_SORT_CHUNK_BYTES;
+use crate::utils::parquet::{get_binary, get_string, get_struct, get_tags, get_u32, get_u64};
 use crate::{TileLayer, make_progress_bar};
 use anyhow::{Context, Result};
-use arrow::array::{
-    Array, BinaryArray, MapArray, RecordBatch, StringArray, StructArray, UInt32Array, UInt64Array,
-};
+use arrow::array::{Array, RecordBatch};
 use deepsize::DeepSizeOf;
 use ext_sort::{ExternalSorter, ExternalSorterBuilder, buffer::mem::MemoryLimitedBufferBuilder};
 use geo::Centroid;
@@ -272,7 +271,7 @@ fn extract_conflated_row(batch: &RecordBatch, row: usize) -> Result<Option<Confl
     if osm.is_null(row) {
         return Ok(None);
     }
-    let modified = get_child_struct(osm, "modified")?;
+    let modified = get_struct(osm, "modified")?;
 
     Ok(Some(ConflatedRow {
         atp_tags: get_tags(atp, "tags", row)?,
@@ -283,98 +282,8 @@ fn extract_conflated_row(batch: &RecordBatch, row: usize) -> Result<Option<Confl
         // Top-level, not nested inside `osm` -- GeoParquet 2.0 requires
         // geometry columns to live at the schema root (see
         // `pipeline::conflate::writer::GEO_METADATA_KEY`'s doc comment).
-        osm_geometry_wkb: get_batch_binary(batch, "osm_geometry", row)?,
+        osm_geometry_wkb: get_binary(batch, "osm_geometry", row)?,
     }))
-}
-
-fn get_struct<'a>(batch: &'a RecordBatch, name: &str) -> Result<&'a StructArray> {
-    batch
-        .column_by_name(name)
-        .with_context(|| format!("missing column '{name}'"))?
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .with_context(|| format!("column '{name}' is not a struct"))
-}
-
-fn get_child_struct<'a>(s: &'a StructArray, name: &str) -> Result<&'a StructArray> {
-    s.column_by_name(name)
-        .with_context(|| format!("missing field '{name}'"))?
-        .as_any()
-        .downcast_ref::<StructArray>()
-        .with_context(|| format!("field '{name}' is not a struct"))
-}
-
-fn get_string(s: &StructArray, name: &str, row: usize) -> Result<String> {
-    Ok(s.column_by_name(name)
-        .with_context(|| format!("missing field '{name}'"))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .with_context(|| format!("field '{name}' is not a string"))?
-        .value(row)
-        .to_owned())
-}
-
-fn get_u64(s: &StructArray, name: &str, row: usize) -> Result<u64> {
-    Ok(s.column_by_name(name)
-        .with_context(|| format!("missing field '{name}'"))?
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .with_context(|| format!("field '{name}' is not UInt64"))?
-        .value(row))
-}
-
-fn get_u32(s: &StructArray, name: &str, row: usize) -> Result<u32> {
-    Ok(s.column_by_name(name)
-        .with_context(|| format!("missing field '{name}'"))?
-        .as_any()
-        .downcast_ref::<UInt32Array>()
-        .with_context(|| format!("field '{name}' is not UInt32"))?
-        .value(row))
-}
-
-/// Reads a top-level `RecordBatch` column -- `osm_geometry`/`atp_geometry`
-/// live at the schema root, not nested inside the `osm`/`atp` structs
-/// (see `pipeline::conflate::writer::GEO_METADATA_KEY`'s doc comment),
-/// so this doesn't go through `StructArray` the way the `get_*` helpers
-/// above do.
-fn get_batch_binary(batch: &RecordBatch, name: &str, row: usize) -> Result<Vec<u8>> {
-    Ok(batch
-        .column_by_name(name)
-        .with_context(|| format!("missing column '{name}'"))?
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .with_context(|| format!("column '{name}' is not binary"))?
-        .value(row)
-        .to_vec())
-}
-
-fn get_tags(s: &StructArray, name: &str, row: usize) -> Result<Vec<(String, String)>> {
-    let col = s
-        .column_by_name(name)
-        .with_context(|| format!("missing field '{name}'"))?
-        .as_any()
-        .downcast_ref::<MapArray>()
-        .with_context(|| format!("field '{name}' is not a map"))?;
-
-    let entry = col.value(row);
-    let keys = entry
-        .column_by_name("key")
-        .with_context(|| format!("map '{name}' has no 'key' field"))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .with_context(|| format!("map '{name}' keys are not strings"))?;
-    let values = entry
-        .column_by_name("value")
-        .with_context(|| format!("map '{name}' has no 'value' field"))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .with_context(|| format!("map '{name}' values are not strings"))?;
-
-    let mut tags = Vec::with_capacity(keys.len());
-    for i in 0..keys.len() {
-        tags.push((keys.value(i).to_owned(), values.value(i).to_owned()));
-    }
-    Ok(tags)
 }
 
 /// Every call site (see `suggest_edits` above) spawns exactly three of
