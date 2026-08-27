@@ -298,6 +298,16 @@ pub fn upload_conflated(conflated: &Path, progress: &MultiProgress) -> Result<()
     )
 }
 
+pub fn upload_conflated_tiles(tiles: &Path, progress: &MultiProgress) -> Result<()> {
+    upload_file(
+        tiles,
+        "conflated.pmtiles",
+        "application/vnd.pmtiles",
+        "upload.conflated-tiles",
+        progress,
+    )
+}
+
 /// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log`, where
 /// `<run-id>` is `pipeline_start_time` -- the same timestamp already
 /// embedded into `conflated.parquet`'s provenance BOM as
