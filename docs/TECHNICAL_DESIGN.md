@@ -293,6 +293,9 @@ fetch away.
   `matched`/`unmatched`, for visualizing the *matching* step in
   isolation. See
   [`docs/outputs/CONFLATED_TILES.md`](outputs/CONFLATED_TILES.md).
+  **~3.3s**, writing 730,512 matched / 1,013,503 unmatched rows, on a
+  full-planet `conflated.parquet` (local run, Apple Silicon — not the
+  cpx42 numbers elsewhere on this page).
 - **`render_conflated_tiles`**
   ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs)) — runs
   [tippecanoe](https://github.com/felt/tippecanoe) over those layers to
@@ -300,8 +303,13 @@ fetch away.
   tippecanoe on the CLI, outside the pipeline) against a real
   full-planet `conflated.parquet` measured **3.64 GB peak RSS** /
   **656 MB output** for the entire unfiltered dataset (1.74M rows) —
-  comfortably under the production container’s 12 GB `--mem-limit`; not
-  yet re-measured from an actual full-planet pipeline run.
+  comfortably under the production container’s 12 GB `--mem-limit`.
+  Re-measured from an actual full-planet pipeline run afterwards (same
+  local machine as above, via `children_rss_peak_bytes`): **~1m48s**,
+  **1.87 GB peak RSS**, **768 MB output** — lower than the spike,
+  plausibly because splitting into two named layers (`matched`/
+  `unmatched`) rather than one combined layer changes tippecanoe’s own
+  memory profile.
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
   — scans `conflated.parquet` for matched rows and asks an
   [`edit_suggesters`](../src/edit_suggesters/) implementation what
@@ -317,7 +325,10 @@ fetch away.
   ([`src/pipeline/upload.rs`](../src/pipeline/upload.rs)) — push the
   data output and both sets of tiles to S3-compatible storage. **~5.5s**
   / *(not yet measured)* / **~3s** respectively at full-planet scale
-  (cpx42 run, except `upload_conflated_tiles`). `upload_logs` (same
+  (cpx42 run, except `upload_conflated_tiles`, which needs a real
+  S3-configured run to time — `conflated.pmtiles` is ~768 MB at
+  full-planet scale, several times `edits.pmtiles`’ size, so expect a
+  proportionally longer upload, not the same ~3s). `upload_logs` (same
   file, pushes the run’s own log) isn’t wrapped by the same per-step
   timing machinery as the others (see `run_pipeline` in
   [`src/pipeline/mod.rs`](../src/pipeline/mod.rs)), so it has no
