@@ -4,9 +4,10 @@
 # SPDX-License-Identifier: MIT
 #
 # Generate the CycloneDX Software Bill of Materials (SBOM) for the
-# osm-diffs container image: one single file, describing both the
-# osm-diffs binary (with its Rust dependency graph) and the statically
-# linked tippecanoe binary that ships alongside it.
+# osm-diffs container image: one single file, describing the osm-diffs
+# binary (with its Rust dependency graph) and the two statically
+# linked tippecanoe-project binaries that ship alongside it, tippecanoe
+# and tile-join.
 #
 # Usage:
 #   ./scripts/sbom/generate-sbom.sh [OUTPUT]
@@ -176,6 +177,24 @@ jq -n \
   -f "${SCRIPT_DIR}/tippecanoe.jq" \
   > "${WORKDIR}/tippecanoe.cdx.json"
 
+# ── build the tile-join SBOM fragment ────────────────────────────────────────
+# Same arguments as tippecanoe's own fragment above: tile-join is a
+# sibling binary from that exact same build (see tile-join.jq's own
+# comment for why it reuses TIPPECANOE_VERSION rather than having a
+# version of its own).
+jq -n \
+  --arg ARCH               "${ARCH}" \
+  --arg TIPPECANOE_VERSION "${TIPPECANOE_VERSION}" \
+  --arg ALPINE_VERSION     "${ALPINE_VERSION}" \
+  --arg APK_VERSION        "${APK_VERSION}" \
+  --arg JQ_VERSION         "${JQ_VERSION}" \
+  --arg MUSL_VERSION       "${MUSL_VERSION}" \
+  --arg SQLITE_VERSION     "${SQLITE_VERSION}" \
+  --arg ZLIB_VERSION       "${ZLIB_VERSION}" \
+  --arg DEV_BUILD          "${DEV_BUILD}" \
+  -f "${SCRIPT_DIR}/tile-join.jq" \
+  > "${WORKDIR}/tile-join.cdx.json"
+
 # ── assemble the final, single SBOM ──────────────────────────────────────────
 mkdir -p "$(dirname "$OUTPUT")"
 jq -n \
@@ -184,6 +203,7 @@ jq -n \
   --arg timestamp  "$BUILD_TIMESTAMP" \
   --slurpfile pipeline   "${WORKDIR}/pipeline.cdx.json" \
   --slurpfile tippecanoe "${WORKDIR}/tippecanoe.cdx.json" \
+  --slurpfile tile_join  "${WORKDIR}/tile-join.cdx.json" \
   -f "${SCRIPT_DIR}/merge.jq" \
   > "$OUTPUT"
 

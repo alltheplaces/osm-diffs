@@ -49,8 +49,11 @@ tools such as `apk`, `sed`, `awk` and `grep`. It then:
    `osm-testdata-grid`) that `cargo cyclonedx` has no way to see.
 3. Builds a CycloneDX fragment for the statically linked `tippecanoe`
    binary from scratch, with [`tippecanoe.jq`](tippecanoe.jq).
-4. Combines both fragments into the final, single SBOM for the container,
-   with [`merge.jq`](merge.jq).
+4. Builds a near-identical fragment for `tile-join`, a sibling binary
+   from that same `felt/tippecanoe` build (same commit, same static-link
+   treatment), with [`tile-join.jq`](tile-join.jq).
+5. Combines all three fragments into the final, single SBOM for the
+   container, with [`merge.jq`](merge.jq).
 
 None of the `.jq` files are invoked directly; `generate-sbom.sh` always
 passes the gathered facts to them as `--arg`/`--slurpfile` parameters, so
