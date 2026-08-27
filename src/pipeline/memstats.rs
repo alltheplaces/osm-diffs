@@ -109,6 +109,19 @@ pub struct MemStats {
     /// bytes. Requires Linux 5.19+ (`memory.peak`); `None` on older
     /// kernels.
     pub cgroup_peak_bytes: Option<u64>,
+
+    /// Peak resident set size of this process's *terminated, reaped*
+    /// children, in bytes -- macOS only (`getrusage(RUSAGE_CHILDREN)`).
+    /// Exists because `rss_peak_bytes` above is `RUSAGE_SELF`, which
+    /// explicitly excludes child processes: without this, a step that
+    /// shells out (e.g. `pipeline::tiles`'s `tippecanoe` subprocess)
+    /// would show no memory usage at all in a local macOS run's
+    /// `pipeline.log`, even though `run_step` already waits for the
+    /// child to exit before taking its "end" snapshot. On Linux this is
+    /// deliberately left `None`: `cgroup_current_bytes`/`cgroup_peak_bytes`
+    /// already account for every process sharing the cgroup, children
+    /// included, so there's nothing this field would add there.
+    pub children_rss_peak_bytes: Option<u64>,
 }
 
 impl MemStats {
@@ -130,7 +143,7 @@ impl std::fmt::Display for MemStats {
     /// that are `None` -- meant to be interpolated straight into a
     /// `log::info!` message, e.g. `"step start: {name} {snapshot}"`.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let fields: [(&str, Option<u64>); 8] = [
+        let fields: [(&str, Option<u64>); 9] = [
             ("rss_bytes", self.rss_bytes),
             ("rss_peak_bytes", self.rss_peak_bytes),
             ("rss_anon_bytes", self.rss_anon_bytes),
@@ -139,6 +152,7 @@ impl std::fmt::Display for MemStats {
             ("cgroup_current_bytes", self.cgroup_current_bytes),
             ("cgroup_max_bytes", self.cgroup_max_bytes),
             ("cgroup_peak_bytes", self.cgroup_peak_bytes),
+            ("children_rss_peak_bytes", self.children_rss_peak_bytes),
         ];
         let mut first = true;
         for (name, value) in fields {
@@ -302,22 +316,24 @@ mod macos {
 
     pub(super) fn snapshot() -> MemStats {
         MemStats {
-            rss_peak_bytes: peak_rss_bytes(),
+            rss_peak_bytes: peak_rss_bytes(libc::RUSAGE_SELF),
+            children_rss_peak_bytes: peak_rss_bytes(libc::RUSAGE_CHILDREN),
             ..MemStats::default()
         }
     }
 
-    /// Returns this process's peak resident set size since it started,
-    /// in bytes -- the same "maximum resident set size" figure
-    /// `/usr/bin/time -l` reports. Deliberately not `phys_footprint`;
-    /// see the module docs.
-    fn peak_rss_bytes() -> Option<u64> {
+    /// Returns the peak resident set size of either this process
+    /// (`who = RUSAGE_SELF`, the same "maximum resident set size"
+    /// figure `/usr/bin/time -l` reports) or its terminated, reaped
+    /// children (`who = RUSAGE_CHILDREN`), in bytes. Deliberately not
+    /// `phys_footprint`; see the module docs.
+    fn peak_rss_bytes(who: libc::c_int) -> Option<u64> {
         // SAFETY: `usage` is a plain-old-data struct that `getrusage`
         // fully overwrites on success (return value 0); we only read it
         // in that case.
         unsafe {
             let mut usage: libc::rusage = std::mem::zeroed();
-            if libc::getrusage(libc::RUSAGE_SELF, &mut usage) == 0 {
+            if libc::getrusage(who, &mut usage) == 0 {
                 // On Darwin, ru_maxrss is already in bytes (unlike
                 // Linux, where the same field is in kilobytes).
                 u64::try_from(usage.ru_maxrss).ok()
@@ -335,13 +351,24 @@ mod macos {
         fn test_peak_rss_bytes_is_nonzero() {
             // Every process has touched at least some resident memory
             // by the time it's running test code.
-            assert!(peak_rss_bytes().unwrap_or(0) > 0);
+            assert!(peak_rss_bytes(libc::RUSAGE_SELF).unwrap_or(0) > 0);
+        }
+
+        #[test]
+        fn test_peak_rss_bytes_children_succeeds() {
+            // Not necessarily nonzero -- other tests in this same
+            // process may or may not have spawned+reaped a child by
+            // now, and `cargo test`'s parallel execution makes that
+            // order unpredictable -- but getrusage(RUSAGE_CHILDREN)
+            // itself should always succeed.
+            assert!(peak_rss_bytes(libc::RUSAGE_CHILDREN).is_some());
         }
 
         #[test]
         fn test_snapshot_populates_rss_peak_bytes() {
             let stats = snapshot();
             assert!(stats.rss_peak_bytes.is_some());
+            assert!(stats.children_rss_peak_bytes.is_some());
             assert_eq!(stats.rss_bytes, None);
             assert_eq!(stats.cgroup_current_bytes, None);
         }
