@@ -10,8 +10,9 @@ pub fn render_tiles(
     layers: &[TileLayer],
     progress: &MultiProgress,
     workdir: &Path,
+    out_filename: &str,
 ) -> Result<PathBuf> {
-    let out_path = workdir.join("diffed-places.pmtiles");
+    let out_path = workdir.join(out_filename);
     if out_path.exists() {
         return Ok(out_path);
     }

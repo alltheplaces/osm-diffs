@@ -31,6 +31,7 @@ pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
 
 mod atp;
 mod conflate;
+mod conflated_tiles;
 mod edits;
 mod logging;
 mod memstats;
@@ -140,11 +141,28 @@ fn run_pipeline_steps(
     run_step("upload_conflated", || {
         upload::upload_conflated(&conflated, progress)
     })?;
+
+    // Two independent branches off `conflated`, neither depending on
+    // the other: `conflated.pmtiles` (every ATP feature, matched or
+    // not -- see conflated_tiles's own doc comment) visualizes the
+    // *matching* step itself, while `diffed-places.pmtiles` below
+    // visualizes only what `suggest_edits` separately decided to
+    // propose.
+    let conflated_layers = run_step("extract_conflated_layers", || {
+        conflated_tiles::extract_conflated_layers(&conflated, progress, workdir)
+    })?;
+    let conflated_tiles_out = run_step("render_conflated_tiles", || {
+        tiles::render_tiles(&conflated_layers, progress, workdir, "conflated.pmtiles")
+    })?;
+    run_step("upload_conflated_tiles", || {
+        upload::upload_conflated_tiles(&conflated_tiles_out, progress)
+    })?;
+
     let edits = run_step("suggest_edits", || {
         edits::suggest_edits(&conflated, progress, workdir)
     })?;
     let tiles = run_step("render_tiles", || {
-        tiles::render_tiles(&edits, progress, workdir)
+        tiles::render_tiles(&edits, progress, workdir, "diffed-places.pmtiles")
     })?;
     run_step("upload_tiles", || upload::upload_tiles(&tiles, progress))?;
 
