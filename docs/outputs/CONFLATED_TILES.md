@@ -13,6 +13,12 @@ It's a [PMTiles](https://protomaps.com/docs/pmtiles) archive, built with
 `edits.pmtiles` is — see [`pmtiles.io`](https://pmtiles.io) for how to
 open one in a browser, no server required.
 
+⚠️ **This file is for visualization only** — a debugging aid for
+reviewing matching/conflation, not a data product. Its structure may
+change at any time, or we may stop producing it altogether, without
+notice. If you need something stable to build on, use
+[`conflated.parquet`](CONFLATED_PARQUET.md) instead.
+
 ## Layers
 
 Two layers, split by whether `conflate()` found an OpenStreetMap match:
@@ -41,10 +47,6 @@ noise doesn't inflate the file for no visual benefit.
 Tag properties are prefixed (`atp:name` vs. `osm:name`) rather than
 merged, since the two sides can and do disagree — that disagreement is
 often exactly what's worth reviewing.
-
-There's no match-confidence score yet — see
-[`CONFLATED_PARQUET.md`](CONFLATED_PARQUET.md) for why `conflate()`
-doesn't persist one today.
 
 ## What this isn't (yet)
 

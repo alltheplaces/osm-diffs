@@ -10,7 +10,8 @@ pipeline’s code, not for people using its output.)
   pairing AllThePlaces features with their matching OpenStreetMap
   features.
 - [`CONFLATED_TILES.md`](CONFLATED_TILES.md) — `conflated.pmtiles`,
-  visualizing `conflated.parquet` itself, matched or not.
+  visualizing `conflated.parquet`, matched or not, useful for
+  debugging.
 
 ## Downloading the current output
 
