@@ -188,12 +188,15 @@ graph TD
     OSM_INDEX --> CONFLATE
     CONFLATE --> CONFLATED[conflated.parquet]
     CONFLATED --> UPLOAD_CONFLATED(upload_conflated) --> S3A[(S3)]
+    CONFLATED --> EXTRACT_CONFLATED_LAYERS(extract_conflated_layers) --> CONFLATED_LAYERS["matched.jsonl, unmatched.jsonl"]
+    CONFLATED_LAYERS --> RENDER_CONFLATED_TILES(render_conflated_tiles/tippecanoe) --> CONFLATED_PMTILES[conflated.pmtiles]
+    CONFLATED_PMTILES --> UPLOAD_CONFLATED_TILES(upload_conflated_tiles) --> S3C[(S3)]
     CONFLATED --> SUGGEST_EDITS(suggest_edits) --> LAYERS["*.jsonl (for visualization)"]
     LAYERS --> RENDER_TILES(render_tiles/tippecanoe) --> PMTILES[diffed-places.pmtiles]
     PMTILES --> UPLOAD_TILES(upload_tiles) --> S3B[(S3)]
 
     classDef process fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0e28,font-weight:bold;
-    class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES process;
+    class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,EXTRACT_CONFLATED_LAYERS,RENDER_CONFLATED_TILES,UPLOAD_CONFLATED_TILES,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES process;
 ```
 
 (Pink boxes are processing steps; plain rectangles are the files they
@@ -283,6 +286,22 @@ fetch away.
   writing) for 3.8M ATP features against the full OpenStreetMap
   planet, on the #665 bare-VM run. **10m37s** on the cpx42 run,
   writing 1,731,159 rows (719,507 matched).
+- **`extract_conflated_layers`**
+  ([`src/pipeline/conflated_tiles.rs`](../src/pipeline/conflated_tiles.rs))
+  — scans every row of `conflated.parquet` (matched or not, unlike
+  `suggest_edits` below) and splits it into two GeoJSON Lines layers,
+  `matched`/`unmatched`, for visualizing the *matching* step in
+  isolation. See
+  [`docs/outputs/CONFLATED_TILES.md`](outputs/CONFLATED_TILES.md).
+- **`render_conflated_tiles`**
+  ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs)) — runs
+  [tippecanoe](https://github.com/felt/tippecanoe) over those layers to
+  build `conflated.pmtiles`. A pre-implementation spike (duckdb export +
+  tippecanoe on the CLI, outside the pipeline) against a real
+  full-planet `conflated.parquet` measured **3.64 GB peak RSS** /
+  **656 MB output** for the entire unfiltered dataset (1.74M rows) —
+  comfortably under the production container’s 12 GB `--mem-limit`; not
+  yet re-measured from an actual full-planet pipeline run.
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
   — scans `conflated.parquet` for matched rows and asks an
   [`edit_suggesters`](../src/edit_suggesters/) implementation what
@@ -290,15 +309,17 @@ fetch away.
   infrastructure, trees). **~20 seconds** at full-planet scale (cpx42
   run).
 - **`render_tiles`** ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs))
-  — runs [tippecanoe](https://github.com/felt/tippecanoe) over those
-  layers to build one PMTiles archive for visual review. **~2m48s** at
-  full-planet scale (cpx42 run).
-- **`upload_conflated` / `upload_tiles`**
+  — runs tippecanoe over those layers to build `diffed-places.pmtiles`
+  for visual review. **~2m48s** at full-planet scale (cpx42 run). The
+  same function now builds both this and `conflated.pmtiles` above,
+  parameterized by output filename.
+- **`upload_conflated` / `upload_conflated_tiles` / `upload_tiles`**
   ([`src/pipeline/upload.rs`](../src/pipeline/upload.rs)) — push the
-  data output and the tiles to S3-compatible storage. **~5.5s** /
-  **~3s** respectively at full-planet scale (cpx42 run). `upload_logs`
-  (same file, pushes the run’s own log) isn’t wrapped by the same
-  per-step timing machinery as the others (see `run_pipeline` in
+  data output and both sets of tiles to S3-compatible storage. **~5.5s**
+  / *(not yet measured)* / **~3s** respectively at full-planet scale
+  (cpx42 run, except `upload_conflated_tiles`). `upload_logs` (same
+  file, pushes the run’s own log) isn’t wrapped by the same per-step
+  timing machinery as the others (see `run_pipeline` in
   [`src/pipeline/mod.rs`](../src/pipeline/mod.rs)), so it has no
   comparable number here — it’s a single small JSON file, not
   expected to be a meaningful cost either way.
@@ -379,7 +400,8 @@ Related documentation:
 
 We wanted to get the pipeline running end to end before polishing any
 single piece of it. As of this writing, it does: it produces
-`conflated.parquet` and a PMTiles archive for visual review, each
+`conflated.parquet` and two PMTiles archives for visual review — one of
+`conflated.parquet` itself, one of what `suggest_edits` proposes — each
 uploaded to S3 at the end of a run. What’s still ahead follows from
 that same choice — several pieces are deliberately simple placeholders
 until the full pipeline was proven out:
@@ -397,8 +419,10 @@ until the full pipeline was proven out:
   conflating municipal tree datasets against OSM by spatial distance
   and species looks particularly tractable). See
   [#708](https://github.com/alltheplaces/osm-diffs/issues/708).
-- `conflated.parquet` itself — every ATP feature, matched or not, not
-  just what `suggest_edits` decided to propose — has no visualization
-  of its own yet, which makes the matching step harder to review in
-  isolation. See
-  [#709](https://github.com/alltheplaces/osm-diffs/issues/709).
+- `conflated.pmtiles`' matched features show only the OpenStreetMap
+  side, not a visual link back to where AllThePlaces placed it —
+  see [#775](https://github.com/alltheplaces/osm-diffs/issues/775).
+- There’s no per-row match-confidence or cartographic-importance
+  signal yet, so both PMTiles archives rely entirely on tippecanoe’s
+  own density-based dropping at low zoom — see
+  [#713](https://github.com/alltheplaces/osm-diffs/issues/713).
