@@ -7,14 +7,19 @@
 //! hit for.
 
 use anyhow::{Context, Result};
-use arrow::array::{
-    Array, BinaryArray, Int64Array, MapArray, RecordBatch, StringArray, UInt16Array, UInt64Array,
-};
+use arrow::array::{Array, Int64Array, RecordBatch};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
-use crate::{matchers::MatchMask, places::Place, utils::UtcTimestamp};
+use crate::{
+    matchers::MatchMask,
+    places::Place,
+    utils::{
+        UtcTimestamp,
+        parquet::{get_binary, get_string, get_tags, get_u16, get_u64},
+    },
+};
 
 pub struct PlaceReader {
     file_path: PathBuf,
@@ -65,11 +70,11 @@ impl PlaceReader {
 
 fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
     Ok(Place {
-        s2_cell_id: get_u64_required(batch, "s2_cell_id", row)?,
-        spider: get_string_required(batch, "spider", row)?,
-        mask: MatchMask(get_u16_required(batch, "mask", row)?),
-        tags: get_tags(batch, row)?,
-        shape_wkb: get_binary_required(batch, "shape", row)?,
+        s2_cell_id: get_u64(batch, "s2_cell_id", row)?,
+        spider: get_string(batch, "spider", row)?,
+        mask: MatchMask(get_u16(batch, "mask", row)?),
+        tags: get_tags(batch, "tags", row)?,
+        shape_wkb: get_binary(batch, "shape", row)?,
         fetched: get_fetched(batch, row)?,
     })
 }
@@ -77,7 +82,7 @@ fn extract_place(batch: &RecordBatch, row: usize) -> Result<Place> {
 fn get_fetched(batch: &RecordBatch, row: usize) -> Result<UtcTimestamp> {
     let millis = batch
         .column_by_name("fetched")
-        .context("missing required column 'fetched'")?
+        .context("missing column 'fetched'")?
         .as_any()
         .downcast_ref::<Int64Array>()
         .context("column 'fetched' is not Int64")?
@@ -85,77 +90,6 @@ fn get_fetched(batch: &RecordBatch, row: usize) -> Result<UtcTimestamp> {
     let t = time::UtcDateTime::from_unix_timestamp_nanos(i128::from(millis) * 1_000_000)
         .with_context(|| format!("invalid 'fetched' timestamp: {millis} ms"))?;
     Ok(UtcTimestamp(t))
-}
-
-fn get_u64_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u64> {
-    Ok(batch
-        .column_by_name(name)
-        .with_context(|| format!("missing required column '{name}'"))?
-        .as_any()
-        .downcast_ref::<UInt64Array>()
-        .with_context(|| format!("column '{name}' is not UInt64"))?
-        .value(row))
-}
-
-fn get_u16_required(batch: &RecordBatch, name: &str, row: usize) -> Result<u16> {
-    Ok(batch
-        .column_by_name(name)
-        .with_context(|| format!("missing required column '{name}'"))?
-        .as_any()
-        .downcast_ref::<UInt16Array>()
-        .with_context(|| format!("column '{name}' is not UInt16"))?
-        .value(row))
-}
-
-fn get_string_required(batch: &RecordBatch, name: &str, row: usize) -> Result<String> {
-    Ok(batch
-        .column_by_name(name)
-        .with_context(|| format!("missing required column '{name}'"))?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .with_context(|| format!("column '{name}' is not Utf8/String"))?
-        .value(row)
-        .to_owned())
-}
-
-fn get_binary_required(batch: &RecordBatch, name: &str, row: usize) -> Result<Vec<u8>> {
-    Ok(batch
-        .column_by_name(name)
-        .with_context(|| format!("missing required column '{name}'"))?
-        .as_any()
-        .downcast_ref::<BinaryArray>()
-        .with_context(|| format!("column '{name}' is not Binary"))?
-        .value(row)
-        .to_vec())
-}
-
-fn get_tags(batch: &RecordBatch, row: usize) -> Result<Vec<(String, String)>> {
-    let col = batch
-        .column_by_name("tags")
-        .context("missing required column 'tags'")?
-        .as_any()
-        .downcast_ref::<MapArray>()
-        .context("column 'tags' is not a MapArray")?;
-
-    let map_entry = col.value(row);
-    let keys = map_entry
-        .column_by_name("key")
-        .context("map 'tags' has no 'key' field")?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .context("map 'tags' keys are not strings")?;
-    let values = map_entry
-        .column_by_name("value")
-        .context("map 'tags' has no 'value' field")?
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .context("map 'tags' values are not strings")?;
-
-    let mut tags = Vec::with_capacity(keys.len());
-    for i in 0..keys.len() {
-        tags.push((keys.value(i).to_owned(), values.value(i).to_owned()));
-    }
-    Ok(tags)
 }
 
 #[cfg(test)]

@@ -114,19 +114,29 @@ fn run_pipeline_steps(
     let _wikidata_ids = run_step("collect_wikidata_ids", || {
         atp::collect_wikidata_ids(&atp, workdir)
     })?;
-    let osm_features = run_step("import_osm", || {
-        osm::import_osm(http_client, progress, workdir)
-    })?;
-    let conflated = run_step("conflate", || {
-        conflate::conflate(
-            &atp,
-            &osm_features,
-            progress,
-            workdir,
-            pipeline_run_id,
-            pipeline_start_time,
-        )
-    })?;
+    // `osm_features` is scoped to just these two steps, not bound at
+    // this function's top level: it's an `OsmFeatureIndex`, holding the
+    // pipeline's largest mmap'd tables (coordinates, features, the
+    // inverted index -- tens of GB on a full-planet run). Nothing after
+    // `conflate()` needs it, so it should drop -- unmapping those tables
+    // -- right here, instead of pinning that address space for the rest
+    // of the pipeline's steps (`suggest_edits`, `render_tiles`, and
+    // beyond) for no reason.
+    let conflated = {
+        let osm_features = run_step("import_osm", || {
+            osm::import_osm(http_client, progress, workdir)
+        })?;
+        run_step("conflate", || {
+            conflate::conflate(
+                &atp,
+                &osm_features,
+                progress,
+                workdir,
+                pipeline_run_id,
+                pipeline_start_time,
+            )
+        })?
+    };
     run_step("upload_conflated", || {
         upload::upload_conflated(&conflated, progress)
     })?;
@@ -208,7 +218,8 @@ fn log_snapshot(name: &str, phase: &str, elapsed_seconds: Option<f64>) {
         rss_shmem_bytes = stats.rss_shmem_bytes,
         cgroup_current_bytes = stats.cgroup_current_bytes,
         cgroup_max_bytes = stats.cgroup_max_bytes,
-        cgroup_peak_bytes = stats.cgroup_peak_bytes;
+        cgroup_peak_bytes = stats.cgroup_peak_bytes,
+        children_rss_peak_bytes = stats.children_rss_peak_bytes;
         "{name}: {phase}"
     );
     if let Some(fraction) = stats.cgroup_usage_fraction()

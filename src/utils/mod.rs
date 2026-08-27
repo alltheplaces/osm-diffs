@@ -4,6 +4,8 @@
 //! home for other such helpers as they accumulate, as long as they're
 //! genuinely small and genuinely cross-cutting.
 
+pub(crate) mod parquet;
+
 /// Renders `bytes` as a lowercase hex string, e.g. for a digest.
 pub(crate) fn to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
