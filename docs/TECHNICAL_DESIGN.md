@@ -313,10 +313,7 @@ fetch away.
   **~4.6s**, writing 730,512 matched / 1,013,503 unmatched rows and
   2,038,379 detail features, on a full-planet `conflated.parquet`
   (local run, Apple Silicon — not the cpx42 numbers elsewhere on this
-  page). One pass, not two: an earlier version of this step split
-  overview and detail extraction into two separate scans over the same
-  file (~3.3s + ~3.4s); merging them removed both the redundant I/O
-  and the redundant per-row decode work for rows both scans touched.
+  page).
 - **`render_conflated_overview`**
   ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs)) — runs
   [tippecanoe](https://github.com/felt/tippecanoe) over the overview
