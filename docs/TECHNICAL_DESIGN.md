@@ -189,9 +189,11 @@ graph TD
     CONFLATE --> CONFLATED[conflated.parquet]
     CONFLATED --> UPLOAD_CONFLATED(upload_conflated) --> S3A[(S3)]
 
-    CONFLATED --> EXTRACT_CONFLATED_LAYERS(extract_conflated_layers) --> CONFLATED_LAYERS["matched.jsonl, unmatched.jsonl,<br/>matched-detail.jsonl"]
-    CONFLATED_LAYERS --> RENDER_CONFLATED_OVERVIEW("render_conflated_overview<br/>(tippecanoe, z0..12)") --> OVERVIEW_PMTILES[conflated-overview.pmtiles]
-    CONFLATED_LAYERS --> RENDER_CONFLATED_DETAIL("render_conflated_detail<br/>(tippecanoe, z13..16)") --> DETAIL_PMTILES[conflated-detail.pmtiles]
+    CONFLATED --> EXTRACT_CONFLATED_LAYERS(extract_conflated_layers)
+    EXTRACT_CONFLATED_LAYERS --> OVERVIEW_LAYERS["matched.jsonl,<br/>unmatched.jsonl"]
+    EXTRACT_CONFLATED_LAYERS --> DETAIL_LAYER[matched-detail.jsonl]
+    OVERVIEW_LAYERS --> RENDER_CONFLATED_OVERVIEW("render_conflated_overview<br/>(tippecanoe, z0..12)") --> OVERVIEW_PMTILES[conflated-overview.pmtiles]
+    DETAIL_LAYER --> RENDER_CONFLATED_DETAIL("render_conflated_detail<br/>(tippecanoe, z13..16)") --> DETAIL_PMTILES[conflated-detail.pmtiles]
     OVERVIEW_PMTILES --> JOIN_CONFLATED_TILES(join_conflated_tiles/tile-join)
     DETAIL_PMTILES --> JOIN_CONFLATED_TILES
     JOIN_CONFLATED_TILES --> CONFLATED_PMTILES[conflated.pmtiles]
