@@ -47,12 +47,15 @@ tools such as `apk`, `sed`, `awk` and `grep`. It then:
    CycloneDX’s `certificate` cryptographic-asset type), and the
    vendored “data” components (`id-tagging-schema`,
    `osm-testdata-grid`) that `cargo cyclonedx` has no way to see.
-3. Builds a CycloneDX fragment for the statically linked `tippecanoe`
-   binary from scratch, with [`tippecanoe.jq`](tippecanoe.jq).
-4. Builds a near-identical fragment for `tile-join`, a sibling binary
-   from that same `felt/tippecanoe` build (same commit, same static-link
-   treatment), with [`tile-join.jq`](tile-join.jq).
-5. Combines all three fragments into the final, single SBOM for the
+3. Builds a CycloneDX fragment for each statically linked binary from
+   the `felt/tippecanoe` build — `tippecanoe` itself and its sibling
+   `tile-join` (same commit, same static-link treatment) — by
+   instantiating the one shared
+   [`tippecanoe-binary.jq`](tippecanoe-binary.jq) template twice, via
+   `build_binary_fragment` (a shell function local to
+   `generate-sbom.sh`), rather than keeping two near-duplicate `.jq`
+   files.
+4. Combines all three fragments into the final, single SBOM for the
    container, with [`merge.jq`](merge.jq).
 
 None of the `.jq` files are invoked directly; `generate-sbom.sh` always
