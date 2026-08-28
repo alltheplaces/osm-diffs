@@ -189,10 +189,9 @@ graph TD
     CONFLATE --> CONFLATED[conflated.parquet]
     CONFLATED --> UPLOAD_CONFLATED(upload_conflated) --> S3A[(S3)]
 
-    CONFLATED --> EXTRACT_CONFLATED_LAYERS(extract_conflated_layers) --> CONFLATED_LAYERS["matched.jsonl, unmatched.jsonl"]
+    CONFLATED --> EXTRACT_CONFLATED_LAYERS(extract_conflated_layers) --> CONFLATED_LAYERS["matched.jsonl, unmatched.jsonl,<br/>matched-detail.jsonl"]
     CONFLATED_LAYERS --> RENDER_CONFLATED_OVERVIEW("render_conflated_overview<br/>(tippecanoe, z0..12)") --> OVERVIEW_PMTILES[conflated-overview.pmtiles]
-    CONFLATED --> EXTRACT_DETAIL(extract_matched_detail_layer) --> DETAIL_LAYER[matched-detail.jsonl]
-    DETAIL_LAYER --> RENDER_CONFLATED_DETAIL("render_conflated_detail<br/>(tippecanoe, z13..16)") --> DETAIL_PMTILES[conflated-detail.pmtiles]
+    CONFLATED_LAYERS --> RENDER_CONFLATED_DETAIL("render_conflated_detail<br/>(tippecanoe, z13..16)") --> DETAIL_PMTILES[conflated-detail.pmtiles]
     OVERVIEW_PMTILES --> JOIN_CONFLATED_TILES(join_conflated_tiles/tile-join)
     DETAIL_PMTILES --> JOIN_CONFLATED_TILES
     JOIN_CONFLATED_TILES --> CONFLATED_PMTILES[conflated.pmtiles]
@@ -203,7 +202,7 @@ graph TD
     PMTILES --> UPLOAD_TILES(upload_tiles) --> S3B[(S3)]
 
     classDef process fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0e28,font-weight:bold;
-    class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,EXTRACT_CONFLATED_LAYERS,RENDER_CONFLATED_OVERVIEW,EXTRACT_DETAIL,RENDER_CONFLATED_DETAIL,JOIN_CONFLATED_TILES,UPLOAD_CONFLATED_TILES,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES process;
+    class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,EXTRACT_CONFLATED_LAYERS,RENDER_CONFLATED_OVERVIEW,RENDER_CONFLATED_DETAIL,JOIN_CONFLATED_TILES,UPLOAD_CONFLATED_TILES,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES process;
 ```
 
 (Pink boxes are processing steps; plain rectangles are the files they
@@ -296,36 +295,37 @@ fetch away.
 - **`extract_conflated_layers`**
   ([`src/pipeline/conflated_tiles.rs`](../src/pipeline/conflated_tiles.rs))
   — scans every row of `conflated.parquet` (matched or not, unlike
-  `suggest_edits` below) and splits it into two GeoJSON Lines layers,
-  `matched`/`unmatched`, for visualizing the *matching* step in
-  isolation. See
+  `suggest_edits` below) exactly once, writing every layer both of
+  `conflated.pmtiles`' passes need: the coarse overview’s `matched`/
+  `unmatched` layers (one feature per row) and the high-zoom detail
+  pass’s `matched-detail.jsonl` (matched rows only, up to three
+  features per row — the ATP point, the OSM shape, and a connector
+  line between their centroids, each carrying only its own side’s
+  tags so a tile inspector shows which is which). Rows whose ATP↔OSM
+  offset is below `MIN_CONNECTOR_LENGTH_METERS` (a documented
+  constant, currently 5m) omit the connector — it would draw a
+  visually meaningless near-zero-length line, and is exactly the
+  degenerate geometry that makes tippecanoe’s automatic zoom selection
+  never terminate, see the next step. See
   [`docs/outputs/CONFLATED_TILES.md`](outputs/CONFLATED_TILES.md).
-  **~3.3s**, writing 730,512 matched / 1,013,503 unmatched rows, on a
-  full-planet `conflated.parquet` (local run, Apple Silicon — not the
-  cpx42 numbers elsewhere on this page).
+  **~4.6s**, writing 730,512 matched / 1,013,503 unmatched rows and
+  2,038,379 detail features, on a full-planet `conflated.parquet`
+  (local run, Apple Silicon — not the cpx42 numbers elsewhere on this
+  page). One pass, not two: an earlier version of this step split
+  overview and detail extraction into two separate scans over the same
+  file (~3.3s + ~3.4s); merging them removed both the redundant I/O
+  and the redundant per-row decode work for rows both scans touched.
 - **`render_conflated_overview`**
   ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs)) — runs
-  [tippecanoe](https://github.com/felt/tippecanoe) over those layers,
-  bounded to z0–12 (`ZoomRange::Bounded`, not tippecanoe’s automatic
-  zoom selection — see `extract_matched_detail_layer` below for why),
-  to build `conflated-overview.pmtiles`. **~1m44s**, **1.87 GB peak
-  RSS**, **~750 MB output** on a full-planet `conflated.parquet` (same
-  local run as `extract_conflated_layers` above).
-- **`extract_matched_detail_layer`**
-  ([`src/pipeline/conflated_tiles.rs`](../src/pipeline/conflated_tiles.rs))
-  — a second, independent extraction, matched rows only: up to three
-  features per row (the ATP point, the OSM shape, and a connector line
-  between their centroids — each carrying only its own side’s tags, so
-  a tile inspector shows which is which), into `matched-detail.jsonl`.
-  Rows whose ATP↔OSM offset is below `MIN_CONNECTOR_LENGTH_METERS`
-  (a documented constant, currently 5m) omit the connector — it would
-  draw a visually meaningless near-zero-length line, and is exactly
-  the degenerate geometry that makes automatic zoom selection never
-  terminate, see the next step. **~3.4s**, producing 2,038,379 detail
-  features from 730,512 matched rows on the same run.
+  [tippecanoe](https://github.com/felt/tippecanoe) over the overview
+  layers, bounded to z0–12 (`ZoomRange::Bounded`, not tippecanoe’s
+  automatic zoom selection — see `render_conflated_detail` below for
+  why), to build `conflated-overview.pmtiles`. **~1m45s**, **1.76 GB
+  peak RSS**, **~750 MB output** on a full-planet `conflated.parquet`
+  (same local run as `extract_conflated_layers` above).
 - **`render_conflated_detail`**
   ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs)) — tippecanoe
-  again, bounded to z13–16 this time
+  again, over `matched-detail.jsonl`, bounded to z13–16 this time
   (`conflated_tiles::DETAIL_MIN_ZOOM`/`DETAIL_MAX_ZOOM`, two more
   documented constants), building `conflated-detail.pmtiles`.
   Deliberately *not* `-zg`/`--extend-zooms-if-still-dropping`: that
@@ -337,7 +337,7 @@ fetch away.
   reached z19 chasing that impossible separation before an unrelated
   internal limit stopped it; seeing the actual PMTiles header
   (`min_zoom`/`max_zoom` bytes) is what caught this, not a guess.
-  **~2m02s**, **2.08 GB peak RSS**, **~1.0 GB output** on the same run.
+  **~2m04s**, **2.15 GB peak RSS**, **~1.0 GB output** on the same run.
 - **`join_conflated_tiles`**
   ([`src/pipeline/tiles.rs`](../src/pipeline/tiles.rs)) — merges the
   overview and detail archives into the final `conflated.pmtiles` with
@@ -345,9 +345,9 @@ fetch away.
   from tippecanoe’s own build, see `Containerfile`), tippecanoe’s own
   documented tool for exactly this coarse/detail split (`man
   tippecanoe`’s “Show countries at low zoom levels but states at
-  higher zoom levels” example). **~2m42s**, **2.13 GB peak RSS**,
+  higher zoom levels” example). **~2m41s**, **2.16 GB peak RSS**,
   **~1.8 GB output** (z0–16) on the same run — total added cost over a
-  single-pass `conflated.pmtiles` build: **~4m43s**, **+~1.05 GB**.
+  single-pass `conflated.pmtiles` build: **~4m47s**, **+~1.05 GB**.
 - **`suggest_edits`** ([`src/pipeline/edits.rs`](../src/pipeline/edits.rs))
   — scans `conflated.parquet` for matched rows and asks an
   [`edit_suggesters`](../src/edit_suggesters/) implementation what

@@ -10,15 +10,16 @@
 //! merge across rows -- a straight sequential-batch, rayon-parallel-per-
 //! batch scan is enough.
 //!
-//! Two extraction paths feed `conflated.pmtiles`' two-pass build (see
-//! `pipeline::tiles::ZoomRange` and `pipeline::tiles::join_tiles`):
-//! [`extract_conflated_layers`] (single feature per row, both matched
-//! and unmatched) for the coarse overview pass, and
-//! [`extract_matched_detail_layer`] (matched rows only, up to three
-//! features per row) for the high-zoom detail pass -- see that
-//! function's own doc comment for why matched rows need more than one
-//! feature there, and [#775](https://github.com/alltheplaces/osm-diffs/issues/775)
-//! for the full design discussion.
+//! [`extract_conflated_layers`] produces every layer
+//! `conflated.pmtiles`' two-pass build needs (see
+//! `pipeline::tiles::ZoomRange` and `pipeline::tiles::join_tiles`) in
+//! one scan: the coarse overview layers (single feature per row, both
+//! matched and unmatched), and the high-zoom detail layer (matched
+//! rows only, up to three features per row -- see
+//! [`ConflatedTileRow::to_detail_geojson_lines`] for why matched rows
+//! need more than one feature there). See
+//! [#775](https://github.com/alltheplaces/osm-diffs/issues/775) for
+//! the full design discussion.
 
 use crate::utils::parquet::{get_binary, get_string, get_struct, get_tags, get_u64};
 use crate::{TileLayer, make_progress_bar};
@@ -36,9 +37,30 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use wkb::reader::read_wkb;
 
-/// Zoom level at which `conflated.pmtiles`' detail pass (see
-/// [`extract_matched_detail_layer`]) takes over from the coarse
-/// overview pass ([`extract_conflated_layers`]). The overview pass is
+/// The tippecanoe layer name matched features belong to, whether they
+/// come from the overview pass's single-feature representation or the
+/// detail pass's up-to-three-feature one. A named constant, not a
+/// string literal repeated at each construction site: both
+/// `ConflatedLayers.overview`'s matched layer and
+/// `ConflatedLayers.detail` are built from this same symbol, so
+/// `tile-join` is guaranteed to merge them into one continuous
+/// `matched` layer spanning the whole zoom range -- see
+/// `DETAIL_MIN_ZOOM`'s doc comment for why that split exists at all.
+/// If these ever named different strings, `tile-join` wouldn't error;
+/// it would just silently produce two separately-toggleable layers
+/// instead of one, so keeping this a single source of truth matters
+/// more than it might look.
+const MATCHED_LAYER_NAME: &str = "matched";
+
+/// The tippecanoe layer name unmatched features belong to. Only ever
+/// used by the overview pass -- unlike `MATCHED_LAYER_NAME`, nothing
+/// else needs to agree with this one, but it's named for the same
+/// reason: so the string exists in exactly one place.
+const UNMATCHED_LAYER_NAME: &str = "unmatched";
+
+/// Zoom level at which `conflated.pmtiles`' detail pass (fed by
+/// [`ConflatedLayers::detail`]) takes over from the coarse overview
+/// pass (fed by [`ConflatedLayers::overview`]). The overview pass is
 /// built up to `DETAIL_MIN_ZOOM - 1`; the detail pass starts at
 /// `DETAIL_MIN_ZOOM`. Keep both call sites (`pipeline::mod`'s
 /// `render_conflated_overview`/`render_conflated_detail` steps) in
@@ -74,6 +96,23 @@ pub(crate) const DETAIL_MAX_ZOOM: u8 = 16;
 /// silently dropped).
 pub(crate) const MIN_CONNECTOR_LENGTH_METERS: f64 = 5.0;
 
+/// Every GeoJSON Lines layer [`extract_conflated_layers`] produces,
+/// grouped by which of `conflated.pmtiles`' two tippecanoe passes
+/// consumes them.
+pub struct ConflatedLayers {
+    /// Fed to the overview pass (`ZoomRange::Bounded { min: 0, max:
+    /// DETAIL_MIN_ZOOM - 1 }`): one `matched` layer (single feature
+    /// per matched row) and one `unmatched` layer.
+    pub overview: Vec<TileLayer>,
+    /// Fed to the detail pass (`ZoomRange::Bounded { min:
+    /// DETAIL_MIN_ZOOM, max: DETAIL_MAX_ZOOM }`): matched rows only,
+    /// up to three features each. Named `MATCHED_LAYER_NAME` -- the
+    /// same layer name `overview`'s matched layer uses -- so
+    /// `tile-join` merges them into one continuous layer; see that
+    /// constant's doc comment.
+    pub detail: TileLayer,
+}
+
 /// One decoded row of `conflated.parquet`, kept whether or not it has
 /// an OSM match -- unlike `edits::ConflatedRow`, which only exists for
 /// matched rows (nothing to suggest an edit for otherwise). `None`
@@ -99,8 +138,8 @@ impl ConflatedTileRow {
     /// row. Geometry is the actual OSM shape when matched (what a
     /// reviewer is meant to review -- point/line/polygon, all valid
     /// within one GeoJSON/MVT layer), the raw ATP-provided shape
-    /// otherwise. See [`extract_matched_detail_layer`] for the richer,
-    /// matched-only, high-zoom-only representation.
+    /// otherwise. See [`Self::to_detail_geojson_lines`] for the
+    /// richer, matched-only, high-zoom-only representation.
     ///
     /// TODO(#713): once conflated.parquet carries a per-row rank/
     /// importance signal, this is the natural place to also emit it
@@ -134,8 +173,7 @@ impl ConflatedTileRow {
     /// called for an unmatched one, since the detail pass is
     /// matched-only (an unmatched row is already a single point at
     /// every zoom, so it never benefits from higher zoom's extra
-    /// detail; see `extract_matched_detail_layer`'s doc comment).
-    /// `osm` is passed explicitly, rather than read from
+    /// detail). `osm` is passed explicitly, rather than read from
     /// `self.osm`, so that precondition is enforced by the type
     /// system instead of an internal `Option::unwrap`.
     ///
@@ -234,24 +272,40 @@ fn geometry_to_geojson_line(
     Ok(line)
 }
 
+/// Scans `conflated.parquet` once and writes every GeoJSON Lines layer
+/// `conflated.pmtiles`' overview and detail passes need -- see
+/// [`ConflatedLayers`]. One pass, not two: every row's decode work
+/// (WKB, tags, geometry rounding) happens once, even though matched
+/// rows contribute to both the overview and detail layers.
 pub fn extract_conflated_layers(
     conflated: &Path,
     progress: &MultiProgress,
     workdir: &Path,
-) -> Result<Vec<TileLayer>> {
+) -> Result<ConflatedLayers> {
     assert!(workdir.exists());
 
-    let layers = vec![
-        TileLayer {
-            name: String::from("matched"),
-            path: workdir.join("matched.jsonl"),
+    let layers = ConflatedLayers {
+        overview: vec![
+            TileLayer {
+                name: String::from(MATCHED_LAYER_NAME),
+                path: workdir.join("matched.jsonl"),
+            },
+            TileLayer {
+                name: String::from(UNMATCHED_LAYER_NAME),
+                path: workdir.join("unmatched.jsonl"),
+            },
+        ],
+        detail: TileLayer {
+            name: String::from(MATCHED_LAYER_NAME),
+            path: workdir.join("matched-detail.jsonl"),
         },
-        TileLayer {
-            name: String::from("unmatched"),
-            path: workdir.join("unmatched.jsonl"),
-        },
-    ];
-    if layers.iter().all(|layer| layer.path.exists()) {
+    };
+    if layers
+        .overview
+        .iter()
+        .chain(std::iter::once(&layers.detail))
+        .all(|layer| layer.path.exists())
+    {
         return Ok(layers);
     }
 
@@ -265,30 +319,42 @@ pub fn extract_conflated_layers(
     };
     let progress_bar = make_progress_bar(progress, "confl-tiles", num_rows, "conflated features");
 
-    let mut matched_tmp = PathBuf::from(&layers[0].path);
+    let mut matched_tmp = PathBuf::from(&layers.overview[0].path);
     matched_tmp.add_extension("tmp");
-    let mut unmatched_tmp = PathBuf::from(&layers[1].path);
+    let mut unmatched_tmp = PathBuf::from(&layers.overview[1].path);
     unmatched_tmp.add_extension("tmp");
+    let mut detail_tmp = PathBuf::from(&layers.detail.path);
+    detail_tmp.add_extension("tmp");
     let mut matched_writer = BufWriter::with_capacity(32768, File::create(&matched_tmp)?);
     let mut unmatched_writer = BufWriter::with_capacity(32768, File::create(&unmatched_tmp)?);
+    let mut detail_writer = BufWriter::with_capacity(32768, File::create(&detail_tmp)?);
 
-    let (num_matched, num_unmatched) = extract_rows(
+    let counts = extract_rows(
         conflated,
         &progress_bar,
         &mut matched_writer,
         &mut unmatched_writer,
+        &mut detail_writer,
     )?;
     matched_writer.flush()?;
     unmatched_writer.flush()?;
-    rename(&matched_tmp, &layers[0].path)?;
-    rename(&unmatched_tmp, &layers[1].path)?;
+    detail_writer.flush()?;
+    rename(&matched_tmp, &layers.overview[0].path)?;
+    rename(&unmatched_tmp, &layers.overview[1].path)?;
+    rename(&detail_tmp, &layers.detail.path)?;
 
     progress_bar.finish_with_message(format!(
-        "{} conflated features → {} matched, {} unmatched",
-        num_rows, num_matched, num_unmatched
+        "{} conflated features → {} matched, {} unmatched, {} detail features",
+        num_rows, counts.matched, counts.unmatched, counts.detail_features
     ));
 
     Ok(layers)
+}
+
+struct RowCounts {
+    matched: u64,
+    unmatched: u64,
+    detail_features: u64,
 }
 
 fn extract_rows(
@@ -296,10 +362,14 @@ fn extract_rows(
     progress_bar: &ProgressBar,
     matched_writer: &mut impl Write,
     unmatched_writer: &mut impl Write,
-) -> Result<(u64, u64)> {
+    detail_writer: &mut impl Write,
+) -> Result<RowCounts> {
     let start = Instant::now();
-    let mut num_matched = 0u64;
-    let mut num_unmatched = 0u64;
+    let mut counts = RowCounts {
+        matched: 0,
+        unmatched: 0,
+        detail_features: 0,
+    };
 
     let file = File::open(conflated)?;
     let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
@@ -311,132 +381,49 @@ fn extract_rows(
         // there's nothing to deduplicate or sort here, unlike edits.rs,
         // so no channels/external sort are needed, just an ordered
         // in-memory Vec per batch.
-        let lines: Vec<Option<(bool, String)>> = (0..batch.num_rows())
+        type RowResult = Option<(bool, String, Vec<String>)>;
+        let rows: Vec<RowResult> = (0..batch.num_rows())
             .into_par_iter()
-            .map(|row| -> Result<Option<(bool, String)>> {
+            .map(|row| -> Result<RowResult> {
                 let Some(row) = extract_conflated_tile_row(&batch, row)? else {
                     return Ok(None);
                 };
-                let matched = row.osm.is_some();
-                Ok(Some((matched, row.to_geojson_line()?)))
+                let overview_line = row.to_geojson_line()?;
+                let detail_lines = match &row.osm {
+                    Some(osm) => row.to_detail_geojson_lines(osm)?,
+                    None => Vec::new(),
+                };
+                Ok(Some((row.osm.is_some(), overview_line, detail_lines)))
             })
             .collect::<Result<Vec<_>>>()?;
 
-        for line in lines {
+        for entry in rows {
             progress_bar.inc(1);
-            let Some((matched, line)) = line else {
+            let Some((matched, overview_line, detail_lines)) = entry else {
                 continue;
             };
             if matched {
-                matched_writer.write_all(line.as_bytes())?;
-                num_matched += 1;
+                matched_writer.write_all(overview_line.as_bytes())?;
+                counts.matched += 1;
+                for line in detail_lines {
+                    detail_writer.write_all(line.as_bytes())?;
+                    counts.detail_features += 1;
+                }
             } else {
-                unmatched_writer.write_all(line.as_bytes())?;
-                num_unmatched += 1;
+                unmatched_writer.write_all(overview_line.as_bytes())?;
+                counts.unmatched += 1;
             }
         }
     }
 
     log::info!(
         elapsed_seconds = start.elapsed().as_secs_f64(),
-        matched = num_matched,
-        unmatched = num_unmatched;
+        matched = counts.matched,
+        unmatched = counts.unmatched,
+        detail_features = counts.detail_features;
         "extract_conflated_layers: done"
     );
-    Ok((num_matched, num_unmatched))
-}
-
-/// The detail pass's own extraction: matched rows only (an unmatched
-/// row is already a single point at every zoom, so the detail pass has
-/// nothing to add for it -- see `DETAIL_MIN_ZOOM`'s doc comment for
-/// the overview/detail split this feeds into), each yielding up to
-/// three features via [`ConflatedTileRow::to_detail_geojson_lines`].
-/// The returned layer is deliberately named `"matched"` -- the same
-/// name [`extract_conflated_layers`]' overview layer uses -- so that
-/// once `tile-join` merges the overview (z0..DETAIL_MIN_ZOOM-1) and
-/// detail (DETAIL_MIN_ZOOM..DETAIL_MAX_ZOOM) passes, the result is one
-/// continuous `matched` layer spanning the whole zoom range, not two
-/// separately-toggleable layers in a tile inspector.
-pub fn extract_matched_detail_layer(
-    conflated: &Path,
-    progress: &MultiProgress,
-    workdir: &Path,
-) -> Result<TileLayer> {
-    assert!(workdir.exists());
-
-    let layer = TileLayer {
-        name: String::from("matched"),
-        path: workdir.join("matched-detail.jsonl"),
-    };
-    if layer.path.exists() {
-        return Ok(layer);
-    }
-
-    let num_rows = {
-        let file = File::open(conflated)?;
-        ParquetRecordBatchReaderBuilder::try_new(file)?
-            .metadata()
-            .file_metadata()
-            .num_rows() as u64
-    };
-    let progress_bar = make_progress_bar(progress, "confl-detail", num_rows, "conflated features");
-
-    let mut tmp_path = PathBuf::from(&layer.path);
-    tmp_path.add_extension("tmp");
-    let mut writer = BufWriter::with_capacity(32768, File::create(&tmp_path)?);
-
-    let num_features = extract_detail_rows(conflated, &progress_bar, &mut writer)?;
-    writer.flush()?;
-    rename(&tmp_path, &layer.path)?;
-
-    progress_bar.finish_with_message(format!(
-        "{} conflated features → {} detail features",
-        num_rows, num_features
-    ));
-
-    Ok(layer)
-}
-
-fn extract_detail_rows(
-    conflated: &Path,
-    progress_bar: &ProgressBar,
-    writer: &mut impl Write,
-) -> Result<u64> {
-    let start = Instant::now();
-    let mut num_features = 0u64;
-
-    let file = File::open(conflated)?;
-    let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
-    for batch in reader {
-        let batch = batch?;
-        let lines: Vec<Vec<String>> = (0..batch.num_rows())
-            .into_par_iter()
-            .map(|row| -> Result<Vec<String>> {
-                let Some(row) = extract_conflated_tile_row(&batch, row)? else {
-                    return Ok(Vec::new());
-                };
-                let Some(osm) = &row.osm else {
-                    return Ok(Vec::new());
-                };
-                row.to_detail_geojson_lines(osm)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        for row_lines in lines {
-            progress_bar.inc(1);
-            for line in row_lines {
-                writer.write_all(line.as_bytes())?;
-                num_features += 1;
-            }
-        }
-    }
-
-    log::info!(
-        elapsed_seconds = start.elapsed().as_secs_f64(),
-        features = num_features;
-        "extract_matched_detail_layer: done"
-    );
-    Ok(num_features)
+    Ok(counts)
 }
 
 /// `None` means this row has no ATP side -- the schema allows it even
@@ -479,7 +466,46 @@ fn extract_conflated_tile_row(batch: &RecordBatch, row: usize) -> Result<Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indicatif::ProgressDrawTarget;
+    use tempfile::TempDir;
     use wkb::writer::{WriteOptions, write_geometry};
+
+    fn hidden_progress() -> MultiProgress {
+        MultiProgress::with_draw_target(ProgressDrawTarget::hidden())
+    }
+
+    #[test]
+    fn memoized_layers_share_the_matched_layer_name() {
+        // Exercises the real extract_conflated_layers/ConflatedLayers
+        // construction, not just the constant in isolation: pre-create
+        // all three output files so the memoization check short-circuits
+        // before ever touching `conflated` (a path that doesn't exist),
+        // then confirm the overview's matched layer and the detail
+        // layer really do carry the identical tippecanoe layer name --
+        // the whole reason ConflatedLayers/MATCHED_LAYER_NAME exist: if
+        // a future edit ever let these drift apart, tile-join wouldn't
+        // error, it would just silently produce two layers instead of
+        // one continuous one.
+        let workdir = TempDir::new().expect("tempdir");
+        for name in ["matched.jsonl", "unmatched.jsonl", "matched-detail.jsonl"] {
+            std::fs::write(workdir.path().join(name), b"").expect("write placeholder");
+        }
+
+        let layers = extract_conflated_layers(
+            Path::new("/no/such/conflated.parquet"),
+            &hidden_progress(),
+            workdir.path(),
+        )
+        .expect("memoized path should not touch `conflated` at all");
+
+        let overview_matched = layers
+            .overview
+            .iter()
+            .find(|l| l.path.ends_with("matched.jsonl"))
+            .expect("expected a matched overview layer");
+        assert_eq!(overview_matched.name, layers.detail.name);
+        assert_eq!(layers.detail.name, MATCHED_LAYER_NAME);
+    }
 
     fn encode_point(lon: f64, lat: f64) -> Vec<u8> {
         let point = geo::point!(x: lon, y: lat);
