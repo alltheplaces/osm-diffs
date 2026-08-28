@@ -163,37 +163,30 @@ jq \
   -f "${SCRIPT_DIR}/pipeline.jq" \
   "$RAW_PIPELINE" > "${WORKDIR}/pipeline.cdx.json"
 
-# ── build the tippecanoe SBOM fragment ───────────────────────────────────────
-jq -n \
-  --arg ARCH               "${ARCH}" \
-  --arg TIPPECANOE_VERSION "${TIPPECANOE_VERSION}" \
-  --arg ALPINE_VERSION     "${ALPINE_VERSION}" \
-  --arg APK_VERSION        "${APK_VERSION}" \
-  --arg JQ_VERSION         "${JQ_VERSION}" \
-  --arg MUSL_VERSION       "${MUSL_VERSION}" \
-  --arg SQLITE_VERSION     "${SQLITE_VERSION}" \
-  --arg ZLIB_VERSION       "${ZLIB_VERSION}" \
-  --arg DEV_BUILD          "${DEV_BUILD}" \
-  -f "${SCRIPT_DIR}/tippecanoe.jq" \
-  > "${WORKDIR}/tippecanoe.cdx.json"
+# ── build the tippecanoe/tile-join SBOM fragments ────────────────────────────
+# Both binaries come from the exact same felt/tippecanoe build (same
+# commit, same static-link treatment), so tippecanoe-binary.jq is one
+# template instantiated twice -- $1 the component name, $2 the purl
+# suffix that distinguishes tile-join from tippecanoe itself within
+# that same source tree -- rather than two near-duplicate .jq files.
+build_binary_fragment() {
+  jq -n \
+    --arg NAME               "$1" \
+    --arg PURL_SUFFIX        "$2" \
+    --arg ARCH               "${ARCH}" \
+    --arg TIPPECANOE_VERSION "${TIPPECANOE_VERSION}" \
+    --arg ALPINE_VERSION     "${ALPINE_VERSION}" \
+    --arg APK_VERSION        "${APK_VERSION}" \
+    --arg JQ_VERSION         "${JQ_VERSION}" \
+    --arg MUSL_VERSION       "${MUSL_VERSION}" \
+    --arg SQLITE_VERSION     "${SQLITE_VERSION}" \
+    --arg ZLIB_VERSION       "${ZLIB_VERSION}" \
+    --arg DEV_BUILD          "${DEV_BUILD}" \
+    -f "${SCRIPT_DIR}/tippecanoe-binary.jq"
+}
 
-# ── build the tile-join SBOM fragment ────────────────────────────────────────
-# Same arguments as tippecanoe's own fragment above: tile-join is a
-# sibling binary from that exact same build (see tile-join.jq's own
-# comment for why it reuses TIPPECANOE_VERSION rather than having a
-# version of its own).
-jq -n \
-  --arg ARCH               "${ARCH}" \
-  --arg TIPPECANOE_VERSION "${TIPPECANOE_VERSION}" \
-  --arg ALPINE_VERSION     "${ALPINE_VERSION}" \
-  --arg APK_VERSION        "${APK_VERSION}" \
-  --arg JQ_VERSION         "${JQ_VERSION}" \
-  --arg MUSL_VERSION       "${MUSL_VERSION}" \
-  --arg SQLITE_VERSION     "${SQLITE_VERSION}" \
-  --arg ZLIB_VERSION       "${ZLIB_VERSION}" \
-  --arg DEV_BUILD          "${DEV_BUILD}" \
-  -f "${SCRIPT_DIR}/tile-join.jq" \
-  > "${WORKDIR}/tile-join.cdx.json"
+build_binary_fragment "tippecanoe" ""            > "${WORKDIR}/tippecanoe.cdx.json"
+build_binary_fragment "tile-join"  "#tile-join"  > "${WORKDIR}/tile-join.cdx.json"
 
 # ── assemble the final, single SBOM ──────────────────────────────────────────
 mkdir -p "$(dirname "$OUTPUT")"
