@@ -148,11 +148,52 @@ fn run_pipeline_steps(
     // *matching* step itself, while `diffed-places.pmtiles` below
     // visualizes only what `suggest_edits` separately decided to
     // propose.
+    //
+    // conflated.pmtiles itself is built in two zoom-bounded passes,
+    // joined together, rather than one -zg/auto-zoom build: an
+    // overview pass (single feature per row, up to
+    // DETAIL_MIN_ZOOM - 1) and a detail pass (matched rows only, up
+    // to three features per row, DETAIL_MIN_ZOOM..DETAIL_MAX_ZOOM).
+    // See conflated_tiles::DETAIL_MAX_ZOOM's doc comment for why the
+    // detail pass can't use tippecanoe's automatic zoom selection the
+    // way the overview pass (and diffed-places.pmtiles, below) safely
+    // can.
     let conflated_layers = run_step("extract_conflated_layers", || {
         conflated_tiles::extract_conflated_layers(&conflated, progress, workdir)
     })?;
-    let conflated_tiles_out = run_step("render_conflated_tiles", || {
-        tiles::render_tiles(&conflated_layers, progress, workdir, "conflated.pmtiles")
+    let conflated_overview = run_step("render_conflated_overview", || {
+        tiles::render_tiles(
+            &conflated_layers,
+            progress,
+            workdir,
+            "conflated-overview.pmtiles",
+            tiles::ZoomRange::Bounded {
+                min: 0,
+                max: conflated_tiles::DETAIL_MIN_ZOOM - 1,
+            },
+        )
+    })?;
+    let detail_layer = run_step("extract_matched_detail_layer", || {
+        conflated_tiles::extract_matched_detail_layer(&conflated, progress, workdir)
+    })?;
+    let conflated_detail = run_step("render_conflated_detail", || {
+        tiles::render_tiles(
+            std::slice::from_ref(&detail_layer),
+            progress,
+            workdir,
+            "conflated-detail.pmtiles",
+            tiles::ZoomRange::Bounded {
+                min: conflated_tiles::DETAIL_MIN_ZOOM,
+                max: conflated_tiles::DETAIL_MAX_ZOOM,
+            },
+        )
+    })?;
+    let conflated_tiles_out = run_step("join_conflated_tiles", || {
+        tiles::join_tiles(
+            &[conflated_overview, conflated_detail],
+            workdir,
+            "conflated.pmtiles",
+        )
     })?;
     run_step("upload_conflated_tiles", || {
         upload::upload_conflated_tiles(&conflated_tiles_out, progress)
@@ -162,7 +203,13 @@ fn run_pipeline_steps(
         edits::suggest_edits(&conflated, progress, workdir)
     })?;
     let tiles = run_step("render_tiles", || {
-        tiles::render_tiles(&edits, progress, workdir, "diffed-places.pmtiles")
+        tiles::render_tiles(
+            &edits,
+            progress,
+            workdir,
+            "diffed-places.pmtiles",
+            tiles::ZoomRange::Auto,
+        )
     })?;
     run_step("upload_tiles", || upload::upload_tiles(&tiles, progress))?;
 

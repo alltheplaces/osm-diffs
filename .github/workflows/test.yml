@@ -57,6 +57,13 @@ jobs:
       run: |
         protoc --version
         tippecanoe --version
+        # tile-join ships in the same apt package as tippecanoe (same
+        # upstream source tree); tests/integration_test.rs now
+        # actually invokes it via pipeline::tiles::join_tiles, so
+        # confirm its presence here too, not just tippecanoe's --
+        # tile-join has no --version flag of its own, so just resolve
+        # it on PATH.
+        which tile-join
     - name: Install Rust coverage tool
       uses: taiki-e/install-action@6cd13508893c0e7eab5f273c2575d3859bd7229a # v2.86.6
       with:

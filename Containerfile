@@ -51,6 +51,13 @@ RUN echo "@edge https://dl-cdn.alpinelinux.org/alpine/edge/community" >> /etc/ap
 # ----------------------------------------------------------------------------
 #  Stage 1.2: Build statically linked tippecanoe binary
 # ----------------------------------------------------------------------------
+#
+# `make install` also installs tile-join -- a sibling binary from this
+# same source tree/commit, used by pipeline::tiles::join_tiles to merge
+# conflated.pmtiles' overview and detail passes (see
+# pipeline::conflated_tiles' module doc comment). Not a second
+# dependency to track: same repo, same commit, same static-link
+# treatment, same license.
 
 WORKDIR /build/tippecanoe
 
@@ -63,12 +70,14 @@ RUN make -j"$(nproc)" \
         PREFIX=/usr/local \
         LDFLAGS="-static -static-libgcc -static-libstdc++" && \
     make install PREFIX=/usr/local && \
-    strip --strip-all /usr/local/bin/tippecanoe
+    strip --strip-all /usr/local/bin/tippecanoe /usr/local/bin/tile-join
 
-# Sanity-check: confirm the binary is truly statically linked
-RUN readelf -d /usr/local/bin/tippecanoe 2>&1 | grep -q NEEDED \
-    && (echo "✗ dynamic deps detected" && exit 1) \
-    || echo "✓ no dynamic library dependencies"
+# Sanity-check: confirm both binaries are truly statically linked
+RUN for bin in tippecanoe tile-join; do \
+        readelf -d "/usr/local/bin/$bin" 2>&1 | grep -q NEEDED \
+        && (echo "✗ dynamic deps detected in $bin" && exit 1) \
+        || echo "✓ no dynamic library dependencies in $bin"; \
+    done
 
 
 # ----------------------------------------------------------------------------
@@ -107,6 +116,7 @@ ARG VCS_REF
 ARG VCS_URL
 
 COPY --from=builder /usr/local/bin/tippecanoe /usr/local/bin/tippecanoe
+COPY --from=builder /usr/local/bin/tile-join /usr/local/bin/tile-join
     
 COPY --from=builder --chown=1000:1000  \
     /usr/osm-diffs/target/release/osm-diffs  \
