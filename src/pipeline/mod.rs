@@ -164,7 +164,10 @@ fn run_pipeline_steps(
     })?;
     let conflated_overview = run_step("render_conflated_overview", || {
         tiles::render_tiles(
-            &conflated_layers.overview,
+            &[
+                conflated_layers.overview_matched.clone(),
+                conflated_layers.overview_unmatched.clone(),
+            ],
             progress,
             workdir,
             "conflated-overview.pmtiles",

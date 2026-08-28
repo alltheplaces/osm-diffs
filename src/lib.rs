@@ -55,8 +55,11 @@ fn make_download_bar(
 }
 
 /// A single layer to be rendered into tiles with Tippecanoe.
-/// Instances are passed from `suggest_edits()` to `tiles::render()`.
-#[derive(Debug)]
+/// `Clone` because `pipeline::mod`'s render_conflated_overview needs
+/// to build a short-lived `&[TileLayer]` from two of
+/// `conflated_tiles::ConflatedLayers`' named fields -- cheap either
+/// way, just a small `String` and `PathBuf`.
+#[derive(Debug, Clone)]
 struct TileLayer {
     name: String,
     path: PathBuf,

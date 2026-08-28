@@ -41,8 +41,8 @@ use wkb::reader::read_wkb;
 /// come from the overview pass's single-feature representation or the
 /// detail pass's up-to-three-feature one. A named constant, not a
 /// string literal repeated at each construction site: both
-/// `ConflatedLayers.overview`'s matched layer and
-/// `ConflatedLayers.detail` are built from this same symbol, so
+/// `ConflatedLayers.overview_matched` and `ConflatedLayers.detail`
+/// are built from this same symbol, so
 /// `tile-join` is guaranteed to merge them into one continuous
 /// `matched` layer spanning the whole zoom range -- see
 /// `DETAIL_MIN_ZOOM`'s doc comment for why that split exists at all.
@@ -98,16 +98,18 @@ pub(crate) const MIN_CONNECTOR_LENGTH_METERS: f64 = 5.0;
 
 /// Every GeoJSON Lines layer [`extract_conflated_layers`] produces,
 /// grouped by which of `conflated.pmtiles`' two tippecanoe passes
-/// consumes them.
+/// consumes them. Named fields, not a `Vec` some caller has to index
+/// positionally and remember the order of.
 pub struct ConflatedLayers {
     /// Fed to the overview pass (`ZoomRange::Bounded { min: 0, max:
-    /// DETAIL_MIN_ZOOM - 1 }`): one `matched` layer (single feature
-    /// per matched row) and one `unmatched` layer.
-    pub overview: Vec<TileLayer>,
+    /// DETAIL_MIN_ZOOM - 1 }`) together with [`Self::overview_unmatched`].
+    pub overview_matched: TileLayer,
+    /// Fed to the overview pass together with [`Self::overview_matched`].
+    pub overview_unmatched: TileLayer,
     /// Fed to the detail pass (`ZoomRange::Bounded { min:
     /// DETAIL_MIN_ZOOM, max: DETAIL_MAX_ZOOM }`): matched rows only,
     /// up to three features each. Named `MATCHED_LAYER_NAME` -- the
-    /// same layer name `overview`'s matched layer uses -- so
+    /// same layer name [`Self::overview_matched`] uses -- so
     /// `tile-join` merges them into one continuous layer; see that
     /// constant's doc comment.
     pub detail: TileLayer,
@@ -285,26 +287,26 @@ pub fn extract_conflated_layers(
     assert!(workdir.exists());
 
     let layers = ConflatedLayers {
-        overview: vec![
-            TileLayer {
-                name: String::from(MATCHED_LAYER_NAME),
-                path: workdir.join("matched.jsonl"),
-            },
-            TileLayer {
-                name: String::from(UNMATCHED_LAYER_NAME),
-                path: workdir.join("unmatched.jsonl"),
-            },
-        ],
+        overview_matched: TileLayer {
+            name: String::from(MATCHED_LAYER_NAME),
+            path: workdir.join("matched.jsonl"),
+        },
+        overview_unmatched: TileLayer {
+            name: String::from(UNMATCHED_LAYER_NAME),
+            path: workdir.join("unmatched.jsonl"),
+        },
         detail: TileLayer {
             name: String::from(MATCHED_LAYER_NAME),
             path: workdir.join("matched-detail.jsonl"),
         },
     };
-    if layers
-        .overview
-        .iter()
-        .chain(std::iter::once(&layers.detail))
-        .all(|layer| layer.path.exists())
+    if [
+        &layers.overview_matched,
+        &layers.overview_unmatched,
+        &layers.detail,
+    ]
+    .iter()
+    .all(|layer| layer.path.exists())
     {
         return Ok(layers);
     }
@@ -319,9 +321,9 @@ pub fn extract_conflated_layers(
     };
     let progress_bar = make_progress_bar(progress, "confl-tiles", num_rows, "conflated features");
 
-    let mut matched_tmp = PathBuf::from(&layers.overview[0].path);
+    let mut matched_tmp = PathBuf::from(&layers.overview_matched.path);
     matched_tmp.add_extension("tmp");
-    let mut unmatched_tmp = PathBuf::from(&layers.overview[1].path);
+    let mut unmatched_tmp = PathBuf::from(&layers.overview_unmatched.path);
     unmatched_tmp.add_extension("tmp");
     let mut detail_tmp = PathBuf::from(&layers.detail.path);
     detail_tmp.add_extension("tmp");
@@ -339,8 +341,8 @@ pub fn extract_conflated_layers(
     matched_writer.flush()?;
     unmatched_writer.flush()?;
     detail_writer.flush()?;
-    rename(&matched_tmp, &layers.overview[0].path)?;
-    rename(&unmatched_tmp, &layers.overview[1].path)?;
+    rename(&matched_tmp, &layers.overview_matched.path)?;
+    rename(&unmatched_tmp, &layers.overview_unmatched.path)?;
     rename(&detail_tmp, &layers.detail.path)?;
 
     progress_bar.finish_with_message(format!(
@@ -498,12 +500,7 @@ mod tests {
         )
         .expect("memoized path should not touch `conflated` at all");
 
-        let overview_matched = layers
-            .overview
-            .iter()
-            .find(|l| l.path.ends_with("matched.jsonl"))
-            .expect("expected a matched overview layer");
-        assert_eq!(overview_matched.name, layers.detail.name);
+        assert_eq!(layers.overview_matched.name, layers.detail.name);
         assert_eq!(layers.detail.name, MATCHED_LAYER_NAME);
     }
 
