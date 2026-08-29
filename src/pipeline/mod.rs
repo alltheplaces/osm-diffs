@@ -151,14 +151,15 @@ fn run_pipeline_steps(
     //
     // conflated.pmtiles itself is built in two zoom-bounded passes,
     // joined together, rather than one -zg/auto-zoom build: an
-    // overview pass (single feature per row, up to
-    // DETAIL_MIN_ZOOM - 1) and a detail pass (matched rows only, up
-    // to three features per row, DETAIL_MIN_ZOOM..DETAIL_MAX_ZOOM).
-    // See conflated_tiles::DETAIL_MAX_ZOOM's doc comment for why the
-    // detail pass can't use tippecanoe's automatic zoom selection the
-    // way the overview pass (and diffed-places.pmtiles, below) safely
-    // can. Both passes' input layers come from one extract_conflated_layers
-    // scan, not two -- see that function's own doc comment.
+    // overview pass (one minimal feature per row -- no tags -- up to
+    // DETAIL_MIN_ZOOM - 1) and a detail pass (full-tag features,
+    // DETAIL_MIN_ZOOM..DETAIL_MAX_ZOOM; matched rows up to three each,
+    // unmatched rows one). See conflated_tiles::DETAIL_MAX_ZOOM's doc
+    // comment for why the detail pass can't use tippecanoe's automatic
+    // zoom selection the way the overview pass (and diffed-places.pmtiles,
+    // below) safely can, and the conflated_tiles module doc comment for
+    // why the overview carries no tags. Both passes' input layers come
+    // from one extract_conflated_layers scan, not two.
     let conflated_layers = run_step("extract_conflated_layers", || {
         conflated_tiles::extract_conflated_layers(&conflated, progress, workdir)
     })?;
@@ -179,7 +180,10 @@ fn run_pipeline_steps(
     })?;
     let conflated_detail = run_step("render_conflated_detail", || {
         tiles::render_tiles(
-            std::slice::from_ref(&conflated_layers.detail),
+            &[
+                conflated_layers.detail_matched.clone(),
+                conflated_layers.detail_unmatched.clone(),
+            ],
             progress,
             workdir,
             "conflated-detail.pmtiles",

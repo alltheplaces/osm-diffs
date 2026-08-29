@@ -45,10 +45,7 @@ fn test_pipeline() -> Result<()> {
 
     assert_conflated_parquet(&workdir.path().join("conflated.parquet"))?;
     assert_shops_jsonl(&workdir.path().join("shops.jsonl"))?;
-    assert_conflated_tile_layers(
-        &workdir.path().join("matched.jsonl"),
-        &workdir.path().join("unmatched.jsonl"),
-    )?;
+    assert_conflated_tile_layers(workdir.path())?;
     assert!(
         workdir.path().join("conflated.pmtiles").exists(),
         "conflated.pmtiles was not produced"
@@ -365,64 +362,128 @@ fn assert_shops_jsonl(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Checks `extract_conflated_layers`'s output against the same fixture
-/// data `assert_conflated_parquet` checks: 3 matched + 3 unmatched ATP
-/// features (see `assert_conflated_parquet`'s own "expected 6 conflated
-/// rows" / "expected 3 ATP features matched" assertions above).
-fn assert_conflated_tile_layers(matched_path: &Path, unmatched_path: &Path) -> Result<()> {
-    let read_features = |path: &Path| -> Result<Vec<serde_json::Value>> {
+/// Checks `extract_conflated_layers`'s four output layers against the
+/// same fixture data `assert_conflated_parquet` checks: 3 matched + 3
+/// unmatched ATP features (see `assert_conflated_parquet`'s own
+/// "expected 6 conflated rows" / "expected 3 ATP features matched"
+/// assertions above). The overview layers are deliberately minimal
+/// (no tags); the detail layers carry the full tag set, keyed back to
+/// the overview by `fid`.
+fn assert_conflated_tile_layers(workdir: &Path) -> Result<()> {
+    let read_features = |name: &str| -> Result<Vec<serde_json::Value>> {
+        let path = workdir.join(name);
         let content =
-            std::fs::read_to_string(path).with_context(|| format!("could not read {path:?}"))?;
+            std::fs::read_to_string(&path).with_context(|| format!("could not read {path:?}"))?;
         content
             .lines()
             .map(|line| Ok(serde_json::from_str(line)?))
             .collect()
     };
 
-    let matched = read_features(matched_path)?;
-    let unmatched = read_features(unmatched_path)?;
+    let overview_matched = read_features("matched.jsonl")?;
+    let overview_unmatched = read_features("unmatched.jsonl")?;
+    let detail_matched = read_features("matched-detail.jsonl")?;
+    let detail_unmatched = read_features("unmatched-detail.jsonl")?;
     assert_eq!(
-        matched.len(),
+        overview_matched.len(),
         3,
-        "expected 3 matched features in {matched_path:?}, got:\n{matched:#?}"
+        "expected 3 overview-matched features, got:\n{overview_matched:#?}"
     );
     assert_eq!(
-        unmatched.len(),
+        overview_unmatched.len(),
         3,
-        "expected 3 unmatched features in {unmatched_path:?}, got:\n{unmatched:#?}"
+        "expected 3 overview-unmatched features, got:\n{overview_unmatched:#?}"
     );
 
-    for feature in matched.iter().chain(&unmatched) {
+    // Overview features are minimal: spider + matched, plus
+    // osm:type/osm:id when matched, and *no* tags and *no* fid (every
+    // low-zoom byte counts).
+    for feature in overview_matched.iter().chain(&overview_unmatched) {
         assert_eq!(feature["type"], "Feature");
         assert!(
-            feature["properties"]["spider"].is_string(),
-            "feature has no spider: {feature}"
+            feature["properties"].get("fid").is_none(),
+            "overview feature must not carry fid: {feature}"
         );
         assert!(
-            feature["properties"]
-                .as_object()
-                .expect("properties should be an object")
-                .keys()
-                .any(|k| k.starts_with("atp:")),
-            "feature has no atp:* properties: {feature}"
+            feature["properties"]["spider"].is_string(),
+            "overview feature has no spider: {feature}"
+        );
+        let taglike: Vec<&String> = feature["properties"]
+            .as_object()
+            .expect("properties should be an object")
+            .keys()
+            .filter(|k| {
+                (k.starts_with("atp:") || k.starts_with("osm:"))
+                    && k.as_str() != "osm:type"
+                    && k.as_str() != "osm:id"
+            })
+            .collect();
+        assert!(
+            taglike.is_empty(),
+            "overview feature must carry no tags, found {taglike:?}: {feature}"
         );
     }
-    for feature in &unmatched {
+    for feature in &overview_matched {
+        assert_eq!(feature["properties"]["matched"], true);
+    }
+    for feature in &overview_unmatched {
+        assert_eq!(feature["properties"]["matched"], false);
         assert!(
             feature["properties"].get("osm:type").is_none(),
-            "unmatched feature should carry no osm:* properties: {feature}"
+            "unmatched overview feature should carry no osm:* properties: {feature}"
+        );
+    }
+
+    // The detail layers carry the tags the overview drops. Matched rows
+    // contribute 2-3 features each (atp / osm / optional link); unmatched
+    // rows one.
+    assert!(
+        detail_matched.len() >= 6 && detail_matched.len() <= 9,
+        "expected 2-3 matched-detail features per matched row, got {}:\n{detail_matched:#?}",
+        detail_matched.len()
+    );
+    assert_eq!(
+        detail_unmatched.len(),
+        3,
+        "expected 3 unmatched-detail features, got:\n{detail_unmatched:#?}"
+    );
+    for feature in detail_matched.iter().chain(&detail_unmatched) {
+        assert!(
+            ["atp", "osm", "link"].contains(&feature["properties"]["part"].as_str().unwrap_or("")),
+            "detail feature has no valid part: {feature}"
+        );
+        assert!(
+            feature["properties"]["fid"].is_u64(),
+            "detail feature has no fid: {feature}"
         );
     }
 
     // Same known match `assert_shops_jsonl` checks above: MediaMarkt,
-    // matched to OSM way/737021556, a polygon.
-    let media_markt = matched
+    // matched to OSM way/737021556, a polygon. Its overview feature is
+    // the bare OSM shape; the tags live on the detail features. The
+    // overview carries no fid, so the join to detail is on osm:id (the
+    // matched-feature join key a viewer would use too).
+    let media_markt = overview_matched
         .iter()
         .find(|f| f["properties"]["osm:id"] == 737021556)
-        .expect("expected a matched feature for OSM feature 737021556");
+        .expect("expected an overview feature for OSM feature 737021556");
     assert_eq!(media_markt["properties"]["osm:type"], "way");
     assert_eq!(media_markt["geometry"]["type"], "Polygon");
-    assert_eq!(media_markt["properties"]["atp:shop"], "electronics");
+    let media_markt_osm = detail_matched
+        .iter()
+        .find(|f| f["properties"]["osm:id"] == 737021556 && f["properties"]["part"] == "osm")
+        .expect("expected a matched-detail osm feature for OSM way/737021556");
+    let fid = &media_markt_osm["properties"]["fid"];
+    assert!(
+        fid.is_u64(),
+        "detail feature must carry an fid: {media_markt_osm}"
+    );
+    // The atp side of the same match shares that fid.
+    let media_markt_atp = detail_matched
+        .iter()
+        .find(|f| &f["properties"]["fid"] == fid && f["properties"]["part"] == "atp")
+        .expect("expected the matched-detail atp feature sharing MediaMarkt's fid");
+    assert_eq!(media_markt_atp["properties"]["atp:shop"], "electronics");
 
     Ok(())
 }
