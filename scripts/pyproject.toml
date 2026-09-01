@@ -10,7 +10,7 @@ authors = [{ name = "Sascha Brawer", email = "sascha@brawer.ch" }]
 description = "Helper scripts internal to this project"
 requires-python = ">=3.12"
 dependencies = [
-    "boto3>=1.43.75",
+    "boto3>=1.43.83",
     "duckdb>=1.5.5",
 ]
 
