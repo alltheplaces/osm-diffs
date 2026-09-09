@@ -16,6 +16,14 @@ pub(crate) fn to_hex(bytes: &[u8]) -> String {
     hex
 }
 
+/// Lowercase-hex SHA-256 of `bytes`, via the same `aws_lc_rs` crypto
+/// library this crate already uses for TLS -- for small in-memory
+/// values (to hash a whole file, stream it instead).
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    use aws_lc_rs::digest::{SHA256, digest};
+    to_hex(digest(&SHA256, bytes).as_ref())
+}
+
 /// (De)serializes [`time::UtcDateTime`] as RFC 3339 strings, e.g.
 /// "2026-03-04T15:16:17Z" -- for use as
 /// `#[serde(with = "crate::utils::rfc3339")]`. `time`'s own `serde`
