@@ -33,6 +33,7 @@ pub(crate) const EXTERNAL_SORT_CHUNK_BYTES: usize = 512 * 1024 * 1024;
 mod atp;
 mod conflate;
 mod conflated_tiles;
+mod datapackage;
 mod edits;
 mod logging;
 mod memstats;
@@ -221,9 +222,20 @@ fn run_pipeline_steps(
             conflate::conflate(&atp, &osm_features, progress, workdir, pipeline_run_id)
         })?
     };
-    run_step("upload_conflated", || {
-        upload::upload_conflated(&conflated, progress)
-    })?;
+
+    // The input-anchored release timestamp (see `provenance`): its
+    // calendar date names every published `data/` object
+    // (`<stem>-<YYYYMMDD>-<hash8>.<ext>`), and it becomes the manifest's
+    // `version`. Available now that both inputs' metadata is in `workdir`.
+    let anchor = provenance::read_anchor(workdir)?;
+    let date = anchor.date().to_string().replace('-', "");
+
+    // Each published file's manifest entry, collected as it's uploaded;
+    // `datapackage.json` is built from these and uploaded last.
+    let mut published = Vec::new();
+    published.push(run_step("upload_conflated", || {
+        upload::upload_conflated(&conflated, &date, progress)
+    })?);
 
     // Two independent branches off `conflated`, neither depending on
     // the other: `conflated.pmtiles` (every ATP feature, matched or
@@ -283,9 +295,9 @@ fn run_pipeline_steps(
             "conflated.pmtiles",
         )
     })?;
-    run_step("upload_conflated_tiles", || {
-        upload::upload_conflated_tiles(&conflated_tiles_out, progress)
-    })?;
+    published.push(run_step("upload_conflated_tiles", || {
+        upload::upload_conflated_tiles(&conflated_tiles_out, &date, progress)
+    })?);
 
     let edits = run_step("suggest_edits", || {
         edits::suggest_edits(&conflated, progress, workdir)
@@ -299,7 +311,21 @@ fn run_pipeline_steps(
             tiles::ZoomRange::Auto,
         )
     })?;
-    run_step("upload_tiles", || upload::upload_tiles(&tiles, progress))?;
+    published.push(run_step("upload_tiles", || {
+        upload::upload_tiles(&tiles, &date, progress)
+    })?);
+
+    // Standalone provenance BOM for conflated.parquet (paired to it by
+    // content hash), then the manifest -- both after every dated file is
+    // up, so a partial run never advertises a file that isn't there.
+    // `published[0]` is `upload_conflated`'s entry.
+    let conflated_entry = published[0].clone();
+    published.push(run_step("upload_conflated_bom", || {
+        upload::upload_conflated_bom(workdir, pipeline_run_id, &conflated_entry, &date, progress)
+    })?);
+    run_step("upload_datapackage", || {
+        upload::upload_datapackage(workdir, anchor, &published, progress)
+    })?;
 
     Ok(())
 }

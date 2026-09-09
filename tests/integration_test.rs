@@ -59,29 +59,125 @@ fn test_pipeline() -> Result<()> {
         workdir.path().join("conflated.pmtiles").exists(),
         "conflated.pmtiles was not produced"
     );
+    assert_publish_artifacts(workdir.path())?;
 
     Ok(())
 }
 
-/// `conflated.parquet` must be byte-identical across independent runs on
-/// the same inputs -- the guarantee a Kubernetes retry (fresh volume, or
-/// a crash that re-runs `conflate`) depends on. Covers the embedded
-/// provenance BOM (input-anchored timestamps, deterministic
-/// serialNumber) and the row sort being a total order. PMTiles and
+/// With no `PUBLIC_S3_ENDPOINT`, the publish steps still write their
+/// local artifacts (so an operator can inspect / `frictionless validate`
+/// before a real upload). Checks `datapackage.json` and the standalone
+/// BOM sidecar are well-formed and internally consistent.
+fn assert_publish_artifacts(workdir: &Path) -> Result<()> {
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(workdir.join("datapackage.json"))?)
+            .context("datapackage.json is not valid JSON")?;
+    assert!(
+        manifest["$schema"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("https://datapackage.org/profiles/2.0/"),
+        "datapackage.json is not a Frictionless v2 profile: {manifest}"
+    );
+    assert_eq!(manifest["name"], "osm-diffs");
+
+    let resources = manifest["resources"].as_array().context("no resources")?;
+    // conflated + sbom + conflated-tiles + edits-tiles
+    assert_eq!(resources.len(), 4, "manifest resources: {resources:#?}");
+    // Resource name -> the workdir file it was uploaded from (the local
+    // copies keep their undated names; only the S3 key and the manifest
+    // path carry the date+hash).
+    let local_name = |name: &str| match name {
+        "conflated" => "conflated.parquet",
+        "conflated-tiles" => "conflated.pmtiles",
+        "edits-tiles" => "diffed-places.pmtiles",
+        "sbom" => "", // exists under its manifest path
+        other => panic!("unexpected resource {other}"),
+    };
+    for r in resources {
+        let rel = r["path"].as_str().context("resource path")?;
+        assert!(
+            !rel.contains('/') && !rel.contains(':'),
+            "resource path {rel:?} must be a bare relative basename"
+        );
+        let name = r["name"].as_str().context("resource name")?;
+        let local = workdir.join(if name == "sbom" {
+            rel
+        } else {
+            local_name(name)
+        });
+        assert!(
+            local.exists(),
+            "resource {name}: {} not in workdir",
+            local.display()
+        );
+        assert_eq!(
+            std::fs::metadata(&local)?.len(),
+            r["bytes"].as_u64().context("resource bytes")?,
+            "byte size mismatch for resource {name}"
+        );
+        let hash = r["hash"].as_str().context("resource hash")?;
+        assert!(
+            hash.starts_with("sha256:") && hash.len() == "sha256:".len() + 64,
+            "resource {name} hash {hash:?} must be sha256:<64 hex>"
+        );
+    }
+
+    let sbom = resources
+        .iter()
+        .find(|r| r["name"] == "sbom")
+        .context("no sbom resource")?;
+    assert_eq!(sbom["describes"], "conflated");
+    let bom: serde_json::Value = serde_json::from_slice(&std::fs::read(
+        workdir.join(sbom["path"].as_str().unwrap()),
+    )?)
+    .context("the .cdx.json sidecar is not valid JSON")?;
+    assert_eq!(bom["bomFormat"], "CycloneDX");
+    // The standalone BOM carries the finished Parquet's own digests.
+    assert_eq!(bom["metadata"]["component"]["hashes"][0]["alg"], "SHA-256");
+    assert_eq!(bom["metadata"]["component"]["hashes"][1]["alg"], "SHA-512");
+    Ok(())
+}
+
+/// Byte-identical across independent runs on the same inputs -- the
+/// guarantee a Kubernetes retry (fresh volume, or a crash that re-runs a
+/// step) depends on. Covers `conflated.parquet` (embedded BOM +
+/// total-order sort) and its standalone `.cdx.json` sidecar. The PMTiles
+/// archives, `datapackage.json` (which lists their per-run hashes), and
 /// `pipeline.log` are deliberately out of scope.
 #[test]
-fn test_conflated_parquet_is_reproducible() -> Result<()> {
+fn test_reproducible_artifacts() -> Result<()> {
     let a = run_pipeline_on_fixtures(&[])?;
     let b = run_pipeline_on_fixtures(&[])?;
-    let pa = std::fs::read(a.path().join("conflated.parquet"))?;
-    let pb = std::fs::read(b.path().join("conflated.parquet"))?;
+
+    let read = |dir: &Path, name: &str| std::fs::read(dir.join(name));
     assert_eq!(
-        pa,
-        pb,
-        "conflated.parquet is not byte-reproducible across runs \
-         ({} vs {} bytes)",
-        pa.len(),
-        pb.len()
+        read(a.path(), "conflated.parquet")?,
+        read(b.path(), "conflated.parquet")?,
+        "conflated.parquet is not byte-reproducible across runs"
+    );
+
+    // The .cdx.json name embeds the Parquet's content hash, so a
+    // reproducible Parquet gives it a stable name too.
+    let cdx_name = |dir: &TempDir| -> Result<String> {
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("datapackage.json"))?)?;
+        Ok(manifest["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == "sbom")
+            .unwrap()["path"]
+            .as_str()
+            .unwrap()
+            .to_string())
+    };
+    let (na, nb) = (cdx_name(&a)?, cdx_name(&b)?);
+    assert_eq!(na, nb, "the .cdx.json sidecar name is not reproducible");
+    assert_eq!(
+        read(a.path(), &na)?,
+        read(b.path(), &nb)?,
+        "the .cdx.json sidecar is not byte-reproducible across runs"
     );
     Ok(())
 }

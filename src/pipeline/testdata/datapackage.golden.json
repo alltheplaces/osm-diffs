@@ -1,0 +1,52 @@
+{
+  "$schema": "https://datapackage.org/profiles/2.0/datapackage.json",
+  "created": "2026-09-01T00:00:02Z",
+  "description": "For every AllThePlaces feature that plausibly maps to OpenStreetMap, one row pairing it with its matched OpenStreetMap feature (or with no match). GeoParquet 2.0, with an AllThePlaces geometry column and an OpenStreetMap one.",
+  "homepage": "https://github.com/alltheplaces/osm-diffs",
+  "id": "5a01ca49-df2a-5645-8108-bb28c7ab246f",
+  "licenses": [
+    {
+      "name": "ODbL-1.0",
+      "path": "https://opendatacommons.org/licenses/odbl/1-0/",
+      "title": "Open Data Commons Open Database License v1.0"
+    }
+  ],
+  "name": "osm-diffs",
+  "resources": [
+    {
+      "bytes": 786432000,
+      "description": "This dated object is immutable; the manifest's version advances.",
+      "format": "parquet",
+      "hash": "sha256:a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
+      "mediatype": "application/vnd.apache.parquet",
+      "name": "conflated",
+      "path": "conflated-20260901-a1b2c3d4.parquet",
+      "title": "Conflated AllThePlaces/OpenStreetMap dataset (GeoParquet)",
+      "type": "file"
+    },
+    {
+      "bytes": 4096,
+      "describes": "conflated",
+      "description": "Provenance for conflated.parquet.",
+      "format": "json",
+      "hash": "sha256:9f8e7d6c9f8e7d6c9f8e7d6c9f8e7d6c9f8e7d6c9f8e7d6c9f8e7d6c9f8e7d6c",
+      "mediatype": "application/vnd.cyclonedx+json; version=1.7",
+      "name": "sbom",
+      "path": "conflated-20260901-a1b2c3d4.cdx.json",
+      "title": "CycloneDX 1.7 provenance BOM",
+      "type": "json"
+    }
+  ],
+  "sources": [
+    {
+      "path": "https://example.org/atp.zip",
+      "title": "AllThePlaces run 2026-08-29T13:32:16Z"
+    },
+    {
+      "path": "https://planet.openstreetmap.org/",
+      "title": "OpenStreetMap planet 2026-09-01T00:00:02Z"
+    }
+  ],
+  "title": "AllThePlaces ↔ OpenStreetMap conflation",
+  "version": "2026-09-01"
+}

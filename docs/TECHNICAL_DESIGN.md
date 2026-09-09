@@ -203,8 +203,14 @@ graph TD
     LAYERS --> RENDER_TILES("render_tiles<br/>(tippecanoe, auto zoom)") --> PMTILES[diffed-places.pmtiles]
     PMTILES --> UPLOAD_TILES(upload_tiles) --> S3B[("public S3")]
 
+    CONFLATED --> UPLOAD_BOM(upload_conflated_bom) --> S3A
+    UPLOAD_CONFLATED --> UPLOAD_DATAPACKAGE
+    UPLOAD_CONFLATED_TILES --> UPLOAD_DATAPACKAGE
+    UPLOAD_TILES --> UPLOAD_DATAPACKAGE
+    UPLOAD_BOM --> UPLOAD_DATAPACKAGE(upload_datapackage<br/>data/datapackage.json) --> S3A
+
     classDef process fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0e28,font-weight:bold;
-    class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,EXTRACT_CONFLATED_LAYERS,RENDER_CONFLATED_OVERVIEW,RENDER_CONFLATED_DETAIL,JOIN_CONFLATED_TILES,UPLOAD_CONFLATED_TILES,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES process;
+    class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,EXTRACT_CONFLATED_LAYERS,RENDER_CONFLATED_OVERVIEW,RENDER_CONFLATED_DETAIL,JOIN_CONFLATED_TILES,UPLOAD_CONFLATED_TILES,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES,UPLOAD_BOM,UPLOAD_DATAPACKAGE process;
 ```
 
 (Pink boxes are processing steps; plain rectangles are the files they
@@ -382,17 +388,29 @@ fetch away.
   parameterized by output filename.
 - **`upload_conflated` / `upload_conflated_tiles` / `upload_tiles`**
   ([`src/pipeline/upload.rs`](../src/pipeline/upload.rs)) — push the
-  data output and both sets of tiles to S3-compatible storage. **~5.5s**
-  / *(not yet measured)* / **~3s** respectively at full-planet scale
-  (cpx42 run, except `upload_conflated_tiles`, which needs a real
-  S3-configured run to time — `conflated.pmtiles` is ~1.8 GB at
-  full-planet scale, over 20x `edits.pmtiles`’ size, so expect a
-  proportionally longer upload, not the same ~3s). `upload_logs` (same
-  file, pushes the run’s own log) isn’t wrapped by the same per-step
+  data output and both sets of tiles to the public (`PUBLIC_S3_*`)
+  bucket, each under a dated, content-hashed key
+  `data/<stem>-<YYYYMMDD>-<hash8>.<ext>` (see
+  [`PRODUCTION.md`](PRODUCTION.md#what-the-pipeline-publishes) for the
+  CDN contract behind that naming). Each step also SHA-256s the file
+  first (the key depends on the hash, so this can't ride the upload's
+  own read); **~5.5s** / *(not yet measured)* / **~3s** for the uploads
+  themselves at full-planet scale (cpx42 run), plus tens of seconds of
+  hashing across the three.
+- **`upload_conflated_bom` / `upload_datapackage`**
+  ([`src/pipeline/upload.rs`](../src/pipeline/upload.rs)) — after every
+  dated file is up: write `conflated-<date>-<hash8>.cdx.json` (the
+  provenance BOM as a standalone file, carrying the Parquet's own
+  digests) and then `data/datapackage.json` (a
+  [Frictionless](https://datapackage.org/) manifest listing every file
+  with size + hash, the one object at a stable key). Small; the manifest
+  goes last so "listed" always implies "already uploaded".
+- **`upload_logs`** (same file, pushes the run's own log to the
+  *internal* `INTERNAL_S3_*` bucket) isn't wrapped by the same per-step
   timing machinery as the others (see `run_pipeline` in
   [`src/pipeline/mod.rs`](../src/pipeline/mod.rs)), so it has no
-  comparable number here — it’s a single small JSON file, not
-  expected to be a meaningful cost either way.
+  comparable number here — it's a single small JSON file, not expected
+  to be a meaningful cost either way.
 
 ### Why `conflate` doesn’t need its own cache
 
