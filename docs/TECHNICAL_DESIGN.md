@@ -472,12 +472,15 @@ Two properties keep that safe:
     for a fixed library version (pinned in the release container).
 
 The one input this leaves is `--run_id` — a scheduler-supplied
-identifier for *this execution*, distinct from the data. It appears in
-the BOM as the workflow `uid`, and it names the run’s `pipeline.log`
-object in S3. On startup the pipeline writes it to `workdir/run_id` and,
-on a restart, checks it matches — a workdir that already belongs to a
-different run is refused rather than half-overwritten. A local run
-without `--run_id` skips the check.
+identifier for *this execution*, distinct from the data. It is
+normalised once at startup to a filesystem/URL-safe form (unsafe
+character runs → `_`, plus a short hash of the original when that
+changed anything, so distinct IDs can’t collide) and that value is then
+used everywhere it’s written down: the BOM’s workflow `uid`, the run’s
+`pipeline.log` object key, and the `workdir/run_id` sentinel. On a
+restart the pipeline checks the sentinel matches — a workdir that
+already belongs to a different run is refused rather than
+half-overwritten. A local run without `--run_id` skips the check.
 
 **Not reproducible, by design:** the PMTiles archives (tippecanoe runs
 in parallel and stamps its own metadata — and they’re a debugging aid,

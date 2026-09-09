@@ -55,16 +55,20 @@ pub(crate) use osm::{
 mod tiles;
 mod upload;
 
-pub fn run_pipeline(
-    http_client: &reqwest::Client,
-    workdir: &Path,
-    pipeline_run_id: &str,
-) -> Result<()> {
+pub fn run_pipeline(http_client: &reqwest::Client, workdir: &Path, raw_run_id: &str) -> Result<()> {
     // Fallback identifier for this invocation, used only for
     // `pipeline.log`'s upload key when no `--run_id` was given (a
     // local/dev run). Everything that must be reproducible is anchored to
     // the inputs instead (see `pipeline::provenance`).
     let pipeline_start_time = UtcDateTime::now();
+
+    // `--run_id` is scheduler-supplied and could contain anything;
+    // normalise it once, here, to a filesystem/URL-safe form and use
+    // *that* everywhere -- the log object key, the `workdir/run_id`
+    // sentinel, and the provenance BOM's workflow `uid` -- so the three
+    // always agree. See [`run_id_slug`].
+    let pipeline_run_id = run_id_slug(raw_run_id);
+    let pipeline_run_id = pipeline_run_id.as_str();
 
     if !workdir.exists() {
         std::fs::create_dir(workdir)?;
@@ -97,18 +101,53 @@ pub fn run_pipeline(
     result
 }
 
+/// A filesystem- and URL-safe rendering of `--run_id`, used verbatim as
+/// this run's identity everywhere it's written down: `pipeline.log`'s
+/// object key, the `workdir/run_id` sentinel, and the provenance BOM's
+/// workflow `uid`.
+///
+/// Empty stays empty (a local run with no `--run_id`). Otherwise every
+/// maximal run of characters outside `[A-Za-z0-9._-]` collapses to a
+/// single `_`, and leading/trailing `_ . -` are trimmed. If any of that
+/// changed the string (or it collapsed to nothing), an 8-hex-character
+/// SHA-256 prefix of the *original* is appended -- so two distinct
+/// `--run_id`s can never collide on the same key, while a value that was
+/// already safe (a Kubernetes Job name, a UUID, a colon-free timestamp)
+/// passes through untouched.
+fn run_id_slug(raw: &str) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    let mut s = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_') {
+            s.push(ch);
+        } else if !s.ends_with('_') {
+            s.push('_');
+        }
+    }
+    let trimmed = s.trim_matches(|c| matches!(c, '_' | '.' | '-'));
+    if trimmed == raw {
+        return trimmed.to_string();
+    }
+    let hash = &crate::utils::sha256_hex(raw.as_bytes())[..8];
+    if trimmed.is_empty() {
+        hash.to_string()
+    } else {
+        format!("{trimmed}-{hash}")
+    }
+}
+
 /// Filename, in the workdir, of the run-ID sentinel [`reconcile_run_id`]
 /// writes and checks.
 const RUN_ID_FILENAME: &str = "run_id";
 
-/// Reconciles `run_id` (from `--run_id`) with `workdir/run_id`, so a
-/// restarted job can't quietly resume a workdir that belongs to a
-/// different run.
+/// Reconciles `run_id` (already normalised by [`run_id_slug`]) with
+/// `workdir/run_id`, so a restarted job can't quietly resume a workdir
+/// that belongs to a different run.
 ///
 /// - `run_id` empty (a local/interactive run): nothing to pin, and
 ///   re-running in place is expected -- do nothing.
-/// - not made only of `[A-Za-z0-9._-]`: rejected, since it names files
-///   and an S3 object key.
 /// - `workdir/run_id` absent: written (temp file, flushed, atomically
 ///   renamed), marking the workdir as this run's.
 /// - present and equal: a restart of the same run -- proceed, reusing
@@ -121,15 +160,6 @@ const RUN_ID_FILENAME: &str = "run_id";
 fn reconcile_run_id(workdir: &Path, run_id: &str) -> Result<()> {
     if run_id.is_empty() {
         return Ok(());
-    }
-    if !run_id
-        .bytes()
-        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-    {
-        anyhow::bail!(
-            "--run_id {run_id:?} may contain only ASCII letters, digits, \
-             '.', '_' and '-' (it names files and an S3 object key)"
-        );
     }
     let path = workdir.join(RUN_ID_FILENAME);
     match std::fs::read_to_string(&path) {
@@ -452,11 +482,30 @@ mod tests {
             err.contains("job-abc.1") && err.contains("job-xyz"),
             "{err}"
         );
-
-        // Malformed --run_id: refused before touching the workdir.
-        let fresh = tempfile::tempdir()?;
-        assert!(reconcile_run_id(fresh.path(), "bad id/with slash").is_err());
-        assert!(!fresh.path().join(RUN_ID_FILENAME).exists());
         Ok(())
+    }
+
+    #[test]
+    fn test_run_id_slug() {
+        // Empty stays empty (a local run).
+        assert_eq!(run_id_slug(""), "");
+
+        // Already-safe values pass straight through.
+        for safe in ["osmdiffs-28912345", "2026-09-09-14-30-00", "a.b_c-1"] {
+            assert_eq!(run_id_slug(safe), safe);
+        }
+
+        // Unsafe characters collapse to a single '_', and a hash of the
+        // original is appended so distinct inputs can't collide.
+        let a = run_id_slug("2026-09-09T14:30:00+00:00");
+        assert!(a.starts_with("2026-09-09T14_30_00_00_00-"), "{a}");
+        assert_eq!(run_id_slug("run/1"), run_id_slug("run/1")); // deterministic
+        assert_ne!(run_id_slug("run/1"), run_id_slug("run:1")); // no collision
+        assert!(run_id_slug("run/1").starts_with("run_1-"));
+
+        // All-unsafe input still yields a usable, non-empty key.
+        let h = run_id_slug("///");
+        assert_eq!(h.len(), 8);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
     }
 }

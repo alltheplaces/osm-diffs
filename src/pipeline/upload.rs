@@ -310,12 +310,12 @@ pub fn upload_conflated_tiles(tiles: &Path, progress: &MultiProgress) -> Result<
 
 /// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log`.
 ///
-/// `<run-id>` is `--run_id` when the scheduler supplied one -- so a
-/// restarted job appends to (rather than forks) its run's single log
-/// object -- and otherwise the process-start timestamp
-/// (`YYYY-MM-DD-HH-MM-SS`), for a local run with no `--run_id`. See
-/// [docs/LOGGING.md](../../../docs/LOGGING.md) for the user-facing
-/// explanation of this layout.
+/// `<run-id>` is the slugged `--run_id` (see `pipeline::run_id_slug`)
+/// when the scheduler supplied one -- so a restarted job appends to
+/// (rather than forks) its run's single log object -- and otherwise the
+/// process-start timestamp (`YYYY-MM-DD-HH-MM-SS`), for a local run with
+/// no `--run_id`. See [docs/LOGGING.md](../../../docs/LOGGING.md) for the
+/// user-facing explanation of this layout.
 pub fn upload_logs(
     workdir: &Path,
     pipeline_run_id: &str,

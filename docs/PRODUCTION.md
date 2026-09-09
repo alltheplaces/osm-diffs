@@ -79,12 +79,15 @@ podman run --rm --read-only \
   memstats fields read `None` (see
   [`LOGGING.md`](LOGGING.md)), and nothing here has been validated
   running unconstrained.
-- `--run_id`: becomes `formulation[].workflows[].uid` in the output’s
-  embedded provenance BOM (see
-  [`outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)) —
-  whatever identifier the scheduling system assigns this run (a
-  Kubernetes Job name, a cron invocation ID, …). Optional; empty if
-  omitted.
+- `--run_id`: whatever identifier the scheduling system assigns this
+  run (a Kubernetes Job name, a cron invocation ID, …). It becomes
+  `formulation[].workflows[].uid` in the output’s embedded provenance
+  BOM (see
+  [`outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)), keys
+  the run’s archived `pipeline.log`, and pins the workdir against a
+  mismatched restart. Anything outside `[A-Za-z0-9._-]` is normalised
+  for those uses (see [`LOGGING.md`](LOGGING.md)); pass a clean value
+  and it’s used verbatim. Optional; empty if omitted.
 
 ## Required configuration
 
