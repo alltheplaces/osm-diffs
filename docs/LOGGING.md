@@ -33,14 +33,17 @@ fetch/open/prune/assemble/index-build phases; see
 ## Where weekly-run logs end up
 
 Every pipeline run uploads its `pipeline.log` to S3 storage at
-`logs/<run-id>.log`, where `<run-id>` is the run’s start timestamp.
-That timestamp is effectively each production run’s own ID — for
-traceability, it’s also stamped into `conflated.parquet`’s own metadata
-(see [`outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)),
-so a run’s log and its data output can always be tied back together.
-This happens regardless of whether the run succeeded — a failed run’s
-log is exactly the one you want archived for debugging, not just a
-successful one’s.
+`logs/<run-id>.log`. `<run-id>` is the `--run_id` the scheduler passed
+in (a Kubernetes Job name, a cron invocation ID, …) — so a restarted
+attempt appends to, rather than forks, its run’s single log object.
+That same `--run_id` is stamped into `conflated.parquet`’s provenance
+BOM as the workflow `uid` (see
+[`outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)), so a
+run’s log and its data output can always be tied back together. A local
+run with no `--run_id` falls back to the process start timestamp
+(`YYYY-MM-DD-HH-MM-SS`). Uploading happens regardless of whether the run
+succeeded — a failed run’s log is exactly the one you want archived for
+debugging, not just a successful one’s.
 
 ## Why bother
 

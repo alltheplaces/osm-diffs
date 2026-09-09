@@ -3,36 +3,37 @@ use assert_cmd::{Command, cargo_bin};
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
-#[test]
-fn test_pipeline() -> Result<()> {
+/// Sets up a workdir with the fixture inputs symlinked in (so the
+/// pipeline uses them instead of fetching), runs `osm-diffs run` to
+/// completion, and returns the workdir.
+fn run_pipeline_on_fixtures(extra_args: &[&str]) -> Result<TempDir> {
     use std::os::unix::fs::symlink;
 
     let workdir = TempDir::new()?;
+    let fixture = |name: &str| {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("tests/test_data");
+        p.push(name);
+        p
+    };
 
-    let mut atp = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    atp.push("tests/test_data/alltheplaces.zip");
-    symlink(&atp, workdir.path().join("alltheplaces.zip"))?;
-
-    // fetch_atp() requires the metadata sidecar alongside a pre-existing
-    // alltheplaces.zip (see AtpMetadata in src/pipeline/atp/fetch.rs), so
-    // it has to be symlinked in too, not just the zip itself.
-    let mut atp_meta = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    atp_meta.push("tests/test_data/alltheplaces.meta.json");
-    symlink(&atp_meta, workdir.path().join("alltheplaces.meta.json"))?;
-
-    let mut osm = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    osm.push("tests/test_data/zugerland.osm.pbf");
-    symlink(&osm, workdir.path().join("planet-latest.osm.pbf"))?;
-
-    // fetch_planet() requires the metadata sidecar alongside a
-    // pre-existing planet-latest.osm.pbf (see OsmMetadata in
-    // src/pipeline/osm/mod.rs), analogous to alltheplaces.meta.json
-    // above -- otherwise it would try to download a fresh copy from
-    // OSM's torrent.
-    let mut osm_meta = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    osm_meta.push("tests/test_data/planet-latest.osm.pbf.meta.json");
     symlink(
-        &osm_meta,
+        fixture("alltheplaces.zip"),
+        workdir.path().join("alltheplaces.zip"),
+    )?;
+    // fetch_atp() / fetch_planet() each require the metadata sidecar
+    // alongside the pre-existing input file (see AtpMetadata /
+    // OsmMetadata) -- otherwise they'd try to download a fresh copy.
+    symlink(
+        fixture("alltheplaces.meta.json"),
+        workdir.path().join("alltheplaces.meta.json"),
+    )?;
+    symlink(
+        fixture("zugerland.osm.pbf"),
+        workdir.path().join("planet-latest.osm.pbf"),
+    )?;
+    symlink(
+        fixture("planet-latest.osm.pbf.meta.json"),
         workdir.path().join("planet-latest.osm.pbf.meta.json"),
     )?;
 
@@ -40,8 +41,16 @@ fn test_pipeline() -> Result<()> {
         .arg("run")
         .arg("--workdir")
         .arg(workdir.path())
+        .args(extra_args)
         .assert()
         .success();
+
+    Ok(workdir)
+}
+
+#[test]
+fn test_pipeline() -> Result<()> {
+    let workdir = run_pipeline_on_fixtures(&[])?;
 
     assert_conflated_parquet(&workdir.path().join("conflated.parquet"))?;
     assert_shops_jsonl(&workdir.path().join("shops.jsonl"))?;
@@ -50,6 +59,57 @@ fn test_pipeline() -> Result<()> {
         workdir.path().join("conflated.pmtiles").exists(),
         "conflated.pmtiles was not produced"
     );
+
+    Ok(())
+}
+
+/// `conflated.parquet` must be byte-identical across independent runs on
+/// the same inputs -- the guarantee a Kubernetes retry (fresh volume, or
+/// a crash that re-runs `conflate`) depends on. Covers the embedded
+/// provenance BOM (input-anchored timestamps, deterministic
+/// serialNumber) and the row sort being a total order. PMTiles and
+/// `pipeline.log` are deliberately out of scope.
+#[test]
+fn test_conflated_parquet_is_reproducible() -> Result<()> {
+    let a = run_pipeline_on_fixtures(&[])?;
+    let b = run_pipeline_on_fixtures(&[])?;
+    let pa = std::fs::read(a.path().join("conflated.parquet"))?;
+    let pb = std::fs::read(b.path().join("conflated.parquet"))?;
+    assert_eq!(
+        pa,
+        pb,
+        "conflated.parquet is not byte-reproducible across runs \
+         ({} vs {} bytes)",
+        pa.len(),
+        pb.len()
+    );
+    Ok(())
+}
+
+/// The workdir run-ID guard: a restart with the same `--run_id` resumes;
+/// a different `--run_id` against the same workdir is refused.
+#[test]
+fn test_workdir_run_id_guard() -> Result<()> {
+    let workdir = run_pipeline_on_fixtures(&["--run_id", "run-A"])?;
+
+    // Same run id, same workdir: a restart -- succeeds (steps are cached).
+    Command::new(cargo_bin!("osm-diffs"))
+        .arg("run")
+        .arg("--workdir")
+        .arg(workdir.path())
+        .args(["--run_id", "run-A"])
+        .assert()
+        .success();
+
+    // Different run id, same workdir: refused.
+    Command::new(cargo_bin!("osm-diffs"))
+        .arg("run")
+        .arg("--workdir")
+        .arg(workdir.path())
+        .args(["--run_id", "run-B"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("run-A"));
 
     Ok(())
 }

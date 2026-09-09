@@ -1,5 +1,6 @@
 use anyhow::{Context, Ok, Result};
 use std::{
+    io::Write,
     path::Path,
     time::{Instant, SystemTime},
 };
@@ -59,11 +60,10 @@ pub fn run_pipeline(
     workdir: &Path,
     pipeline_run_id: &str,
 ) -> Result<()> {
-    // Captured before anything else runs, so it's a genuine start
-    // time for this invocation -- embedded into the provenance BOM
-    // (pipeline::provenance) as formulation[].workflows[].timeStart, and
-    // reused below as pipeline.log's own upload key, so a run's log and
-    // its data output can always be tied back together.
+    // Fallback identifier for this invocation, used only for
+    // `pipeline.log`'s upload key when no `--run_id` was given (a
+    // local/dev run). Everything that must be reproducible is anchored to
+    // the inputs instead (see `pipeline::provenance`).
     let pipeline_start_time = UtcDateTime::now();
 
     if !workdir.exists() {
@@ -71,14 +71,13 @@ pub fn run_pipeline(
     }
     logging::init(workdir)?;
 
+    // Before any step runs: pin this run's identity to the workdir, so a
+    // restart can't quietly resume a workdir that belongs to a different
+    // run. Returns early (nothing to upload) on a mismatch.
+    reconcile_run_id(workdir, pipeline_run_id)?;
+
     let progress = indicatif::MultiProgress::new();
-    let result = run_pipeline_steps(
-        http_client,
-        workdir,
-        pipeline_run_id,
-        pipeline_start_time,
-        &progress,
-    );
+    let result = run_pipeline_steps(http_client, workdir, pipeline_run_id, &progress);
 
     // Upload the log regardless of whether the run above succeeded --
     // a failed run's log is exactly the one you want archived for
@@ -89,18 +88,79 @@ pub fn run_pipeline(
     if let Err(e) = &result {
         log::error!("pipeline run failed: {e:#}");
     }
-    if let Err(upload_err) = upload::upload_logs(workdir, pipeline_start_time, &progress) {
+    if let Err(upload_err) =
+        upload::upload_logs(workdir, pipeline_run_id, pipeline_start_time, &progress)
+    {
         log::error!("failed to upload pipeline.log: {upload_err:#}");
     }
 
     result
 }
 
+/// Filename, in the workdir, of the run-ID sentinel [`reconcile_run_id`]
+/// writes and checks.
+const RUN_ID_FILENAME: &str = "run_id";
+
+/// Reconciles `run_id` (from `--run_id`) with `workdir/run_id`, so a
+/// restarted job can't quietly resume a workdir that belongs to a
+/// different run.
+///
+/// - `run_id` empty (a local/interactive run): nothing to pin, and
+///   re-running in place is expected -- do nothing.
+/// - not made only of `[A-Za-z0-9._-]`: rejected, since it names files
+///   and an S3 object key.
+/// - `workdir/run_id` absent: written (temp file, flushed, atomically
+///   renamed), marking the workdir as this run's.
+/// - present and equal: a restart of the same run -- proceed, reusing
+///   whatever completed steps already left behind.
+/// - present and different: refuse, rather than mix two runs'
+///   intermediate files in one workdir.
+///
+/// Kubernetes ephemeral CSI volumes start empty, so a first start always
+/// takes the "absent" branch and a same-volume restart takes "equal".
+fn reconcile_run_id(workdir: &Path, run_id: &str) -> Result<()> {
+    if run_id.is_empty() {
+        return Ok(());
+    }
+    if !run_id
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        anyhow::bail!(
+            "--run_id {run_id:?} may contain only ASCII letters, digits, \
+             '.', '_' and '-' (it names files and an S3 object key)"
+        );
+    }
+    let path = workdir.join(RUN_ID_FILENAME);
+    match std::fs::read_to_string(&path) {
+        std::result::Result::Ok(existing) if existing == run_id => Ok(()),
+        std::result::Result::Ok(existing) => anyhow::bail!(
+            "workdir {} belongs to run {existing:?}, but --run_id is {run_id:?}; \
+             use a fresh workdir",
+            workdir.display()
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let tmp = path.with_extension("tmp");
+            let mut file = std::fs::File::create(&tmp)
+                .with_context(|| format!("failed to create {}", tmp.display()))?;
+            file.write_all(run_id.as_bytes())
+                .with_context(|| format!("failed to write {}", tmp.display()))?;
+            file.sync_all()
+                .with_context(|| format!("failed to flush {}", tmp.display()))?;
+            drop(file);
+            std::fs::rename(&tmp, &path).with_context(|| {
+                format!("failed to rename {} to {}", tmp.display(), path.display())
+            })?;
+            Ok(())
+        }
+        Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
 fn run_pipeline_steps(
     http_client: &reqwest::Client,
     workdir: &Path,
     pipeline_run_id: &str,
-    pipeline_start_time: UtcDateTime,
     progress: &indicatif::MultiProgress,
 ) -> Result<()> {
     crate::geometry::init_geospatial_stats()?;
@@ -128,14 +188,7 @@ fn run_pipeline_steps(
             osm::import_osm(http_client, progress, workdir)
         })?;
         run_step("conflate", || {
-            conflate::conflate(
-                &atp,
-                &osm_features,
-                progress,
-                workdir,
-                pipeline_run_id,
-                pipeline_start_time,
-            )
+            conflate::conflate(&atp, &osm_features, progress, workdir, pipeline_run_id)
         })?
     };
     run_step("upload_conflated", || {
@@ -373,5 +426,37 @@ mod tests {
     fn test_run_step_propagates_the_closures_error() {
         let result: Result<()> = run_step("test-step", || anyhow::bail!("boom"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_reconcile_run_id() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let wd = dir.path();
+        let sentinel = wd.join(RUN_ID_FILENAME);
+
+        // Empty --run_id: a no-op, writes nothing.
+        reconcile_run_id(wd, "")?;
+        assert!(!sentinel.exists());
+
+        // First run with an id: writes the sentinel.
+        reconcile_run_id(wd, "job-abc.1")?;
+        assert_eq!(std::fs::read_to_string(&sentinel)?, "job-abc.1");
+
+        // Restart of the same run: fine, sentinel unchanged.
+        reconcile_run_id(wd, "job-abc.1")?;
+        assert_eq!(std::fs::read_to_string(&sentinel)?, "job-abc.1");
+
+        // A different run against the same workdir: refused.
+        let err = reconcile_run_id(wd, "job-xyz").unwrap_err().to_string();
+        assert!(
+            err.contains("job-abc.1") && err.contains("job-xyz"),
+            "{err}"
+        );
+
+        // Malformed --run_id: refused before touching the workdir.
+        let fresh = tempfile::tempdir()?;
+        assert!(reconcile_run_id(fresh.path(), "bad id/with slash").is_err());
+        assert!(!fresh.path().join(RUN_ID_FILENAME).exists());
+        Ok(())
     }
 }

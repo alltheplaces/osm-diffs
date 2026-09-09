@@ -729,6 +729,16 @@ impl Ord for ParquetRow {
             .then(self.osm_id.cmp(&other.osm_id))
             .then(self.atp_spider.cmp(&other.atp_spider))
             .then(self.atp_tags.cmp(&other.atp_tags))
+            // Final tie-break so the sort is a total order and the
+            // output file is byte-reproducible: without it, two ATP
+            // features at the same S2 cell with the same spider and tags
+            // (e.g. a source that lists a place twice) would order
+            // however the parallel producer and external merge happened
+            // to interleave them. The geometry bytes settle any such
+            // pair; anything still equal after this is a genuine
+            // duplicate row and identical on disk either way.
+            .then(self.atp_shape_wkb.cmp(&other.atp_shape_wkb))
+            .then(self.osm_shape_wkb.cmp(&other.osm_shape_wkb))
     }
 }
 

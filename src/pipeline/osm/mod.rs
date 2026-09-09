@@ -221,9 +221,15 @@ pub(crate) fn compute_and_persist_metadata(
         sha256: Some(sha256),
         ..header
     };
+    // Write via a temp file and rename, so a crash mid-write can't leave
+    // a truncated sidecar that a restart would fail to parse.
     let path = meta_json_path(workdir);
+    let mut tmp = path.clone();
+    tmp.add_extension("tmp");
     let data = serde_json::to_string(&metadata)?;
-    std::fs::write(&path, &data).with_context(|| format!("Failed to write {}", path.display()))?;
+    std::fs::write(&tmp, &data).with_context(|| format!("Failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, &path)
+        .with_context(|| format!("Failed to rename {} to {}", tmp.display(), path.display()))?;
     Ok(metadata)
 }
 

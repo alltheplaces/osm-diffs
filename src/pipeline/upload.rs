@@ -308,20 +308,27 @@ pub fn upload_conflated_tiles(tiles: &Path, progress: &MultiProgress) -> Result<
     )
 }
 
-/// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log`, where
-/// `<run-id>` is `pipeline_start_time` -- the same timestamp already
-/// embedded into `conflated.parquet`'s provenance BOM as
-/// `formulation[].workflows[].timeStart` (see `pipeline::provenance`), so
-/// a given run's log and its data output can always be tied back
-/// together. See [docs/LOGGING.md](../../../docs/LOGGING.md) for the
-/// user-facing explanation of this layout.
+/// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log`.
+///
+/// `<run-id>` is `--run_id` when the scheduler supplied one -- so a
+/// restarted job appends to (rather than forks) its run's single log
+/// object -- and otherwise the process-start timestamp
+/// (`YYYY-MM-DD-HH-MM-SS`), for a local run with no `--run_id`. See
+/// [docs/LOGGING.md](../../../docs/LOGGING.md) for the user-facing
+/// explanation of this layout.
 pub fn upload_logs(
     workdir: &Path,
+    pipeline_run_id: &str,
     pipeline_start_time: UtcDateTime,
     progress: &MultiProgress,
 ) -> Result<()> {
     let log_path = workdir.join("pipeline.log");
-    let destination = format!("logs/{}.log", run_id(pipeline_start_time)?);
+    let key_stem = if pipeline_run_id.is_empty() {
+        run_id(pipeline_start_time)?
+    } else {
+        pipeline_run_id.to_string()
+    };
+    let destination = format!("logs/{key_stem}.log");
     // TODO: We should use an official, IANA-assigned content type for
     // JSON Lines here, but as of August 2026, no consensus has yet been
     // reached on what string to use, so the registration appears to be

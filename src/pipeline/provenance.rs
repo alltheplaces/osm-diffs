@@ -100,23 +100,24 @@ fn license_external_reference(url: &str) -> Value {
 /// actual workflow execution "within its deployment context", something
 /// this code has no way to know on its own.
 ///
-/// `pipeline_start_time` becomes `formulation[].workflows[].timeStart`;
-/// the moment this function runs (near the very end of the pipeline,
-/// once conflation is done) becomes `timeEnd`, and also
-/// `metadata.timestamp`/`metadata.component.version`.
-pub fn build_bom_for_conflated_parquet(
-    workdir: &Path,
-    pipeline_run_id: &str,
-    pipeline_start_time: UtcDateTime,
-) -> Result<Value> {
+/// Every timestamp in the document is anchored to the inputs, not the
+/// wall clock: `metadata.timestamp`, the output component's `version`,
+/// and the workflow's `timeStart`/`timeEnd` all become
+/// [`anchor_timestamp`] (the freshness of the most-recently-updated
+/// input). `serialNumber` is a version-5 UUID derived from the two
+/// inputs' SHA-256s. So a rebuild from the same cached inputs -- e.g. a
+/// Kubernetes retry that re-runs `conflate` on a partially populated
+/// volume -- produces a byte-identical BOM. `pipeline_run_id` (from
+/// `--run_id`) is the one field that legitimately identifies this
+/// particular execution rather than the data.
+pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) -> Result<Value> {
     let atp_metadata = pipeline::read_cached_atp_metadata(workdir)
         .context("could not read AllThePlaces provenance")?;
     let osm_metadata = pipeline::read_cached_metadata(workdir)
         .context("could not read OpenStreetMap provenance")?;
 
-    let run_timestamp = format_rfc3339(UtcDateTime::now());
-    let start_timestamp = format_rfc3339(pipeline_start_time);
-    let serial_number = Uuid::new_v4().urn().to_string();
+    let anchor = format_rfc3339(anchor_timestamp(&atp_metadata, &osm_metadata));
+    let serial_number = deterministic_serial_number(&atp_metadata, &osm_metadata)?;
 
     Ok(json!({
         "bomFormat": "CycloneDX",
@@ -124,12 +125,12 @@ pub fn build_bom_for_conflated_parquet(
         "serialNumber": serial_number,
         "version": 1,
         "metadata": {
-            "timestamp": run_timestamp,
+            "timestamp": anchor,
             "supplier": supplier(),
             "tools": {
                 "components": [tool_component()],
             },
-            "component": output_component(&run_timestamp),
+            "component": output_component(&anchor),
         },
         "components": [
             atp_component(&atp_metadata)?,
@@ -145,8 +146,43 @@ pub fn build_bom_for_conflated_parquet(
             "ref": "conflated.parquet",
             "dependsOn": ["alltheplaces.zip", pipeline::PLANET_PBF_FILENAME],
         }],
-        "formulation": [formulation(pipeline_run_id, &start_timestamp, &run_timestamp)],
+        "formulation": [formulation(pipeline_run_id, &anchor, &anchor)],
     }))
+}
+
+/// The BOM's single time anchor: the freshness of whichever input was
+/// updated most recently. Used for every timestamp in the document
+/// instead of the wall clock, so the BOM is reproducible from the cached
+/// inputs alone (see [`build_bom_for_conflated_parquet`]).
+fn anchor_timestamp(atp: &AtpMetadata, osm: &OsmMetadata) -> UtcDateTime {
+    atp.start_time.max(osm.replication_timestamp)
+}
+
+/// Fixed, arbitrary namespace for the version-5 (SHA-1) UUID used as the
+/// BOM's `serialNumber` -- a constant so the derivation
+/// `UUIDv5(namespace, atp_sha256 ":" osm_sha256)` is entirely
+/// self-contained. Generated once as `UUIDv5(URL,
+/// "https://github.com/alltheplaces/osm-diffs#provenance-bom-serial")`.
+const SERIAL_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x18, 0x68, 0x7b, 0x2b, 0xa4, 0x9c, 0x56, 0x07, 0xb1, 0xe7, 0xf7, 0x40, 0xda, 0xee, 0x83, 0x2f,
+]);
+
+/// The BOM's `serialNumber`, derived from the two inputs' SHA-256s so an
+/// identical input pair always yields an identically identified BOM --
+/// rather than a fresh random v4 UUID per run, which made every BOM
+/// (and, with it, `conflated.parquet`) non-reproducible.
+fn deterministic_serial_number(atp: &AtpMetadata, osm: &OsmMetadata) -> Result<String> {
+    let atp_sha = atp.sha256.as_deref().context(
+        "AllThePlaces metadata has no sha256 (workdir from an older osm-diffs version?)",
+    )?;
+    let osm_sha = osm.sha256.as_deref().context(
+        "OpenStreetMap metadata has no sha256 (workdir from an older osm-diffs version?)",
+    )?;
+    Ok(
+        Uuid::new_v5(&SERIAL_NAMESPACE, format!("{atp_sha}:{osm_sha}").as_bytes())
+            .urn()
+            .to_string(),
+    )
 }
 
 /// The `osm-diffs` pipeline itself, as the tool that produced the output
@@ -344,15 +380,17 @@ mod tests {
         let workdir = TempDir::new()?;
         write_fixtures(workdir.path())?;
 
-        let start_time = UtcDateTime::from_unix_timestamp(1_770_000_000)?; // 2026-02-01T20:00:00Z
-        let bom = build_bom_for_conflated_parquet(workdir.path(), "k8s-job-42", start_time)?;
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "k8s-job-42")?;
 
         assert_eq!(bom["bomFormat"], "CycloneDX");
         assert_eq!(bom["specVersion"], "1.7");
         assert_eq!(bom["version"], 1);
         let serial_number = bom["serialNumber"].as_str().expect("serialNumber");
         assert!(serial_number.starts_with("urn:uuid:"));
-        assert!(bom["metadata"]["timestamp"].as_str().is_some());
+        // Anchored to the most-recently-updated input (here the ATP run,
+        // 2026-03-04, which is later than the OSM snapshot, 2026-01-27),
+        // not the wall clock -- so the BOM is reproducible.
+        assert_eq!(bom["metadata"]["timestamp"], "2026-03-04T15:16:17Z");
         assert_eq!(bom["metadata"]["supplier"]["name"], "All The Places");
 
         let tool = &bom["metadata"]["tools"]["components"][0];
@@ -373,7 +411,7 @@ mod tests {
         assert_eq!(output["type"], "data");
         assert_eq!(output["name"], "conflated.parquet");
         assert_eq!(output["mime-type"], "application/vnd.apache.parquet");
-        assert!(output["version"].as_str().is_some());
+        assert_eq!(output["version"], "2026-03-04T15:16:17Z");
         assert_eq!(output["licenses"][0]["license"]["id"], "ODbL-1.0");
         assert_eq!(output["licenses"][0]["license"]["url"], ODBL_URL);
         assert_eq!(output["copyright"], OSM_COPYRIGHT);
@@ -471,7 +509,9 @@ mod tests {
         assert_eq!(workflow["uid"], "k8s-job-42");
         assert_eq!(workflow["trigger"]["type"], "scheduled");
         assert_eq!(workflow["trigger"]["uid"], "k8s-job-42");
-        assert_eq!(workflow["timeStart"], format_rfc3339(start_time));
+        // timeStart/timeEnd are the input anchor too, not a wall-clock
+        // span -- the workflow's own `uid` is the only run-specific field.
+        assert_eq!(workflow["timeStart"], "2026-03-04T15:16:17Z");
         assert_eq!(workflow["timeEnd"], bom["metadata"]["timestamp"]);
         assert_eq!(workflow["resourceReferences"][0]["ref"], "tool-osm-diffs");
         for input in workflow["inputs"].as_array().expect("inputs") {
@@ -493,7 +533,7 @@ mod tests {
         let workdir = TempDir::new()?;
         write_fixtures(workdir.path())?;
 
-        let bom = build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now())?;
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "")?;
         assert_eq!(bom["formulation"][0]["workflows"][0]["uid"], "");
         assert_eq!(bom["formulation"][0]["workflows"][0]["trigger"]["uid"], "");
         Ok(())
@@ -502,18 +542,38 @@ mod tests {
     #[test]
     fn test_build_missing_atp_metadata() {
         let workdir = TempDir::new().expect("tempdir");
-        assert!(build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now()).is_err());
+        assert!(build_bom_for_conflated_parquet(workdir.path(), "").is_err());
     }
 
     #[test]
-    fn test_build_is_fresh_per_run() -> Result<()> {
-        // serialNumber must not be reused across BOMs.
+    fn test_build_is_reproducible() -> Result<()> {
+        // Same inputs -> byte-identical BOM (serialNumber included), so a
+        // Kubernetes retry that re-runs `conflate` produces the same
+        // `conflated.parquet`. Only `--run_id` legitimately varies.
         let workdir = TempDir::new()?;
         write_fixtures(workdir.path())?;
 
-        let first = build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now())?;
-        let second = build_bom_for_conflated_parquet(workdir.path(), "", UtcDateTime::now())?;
-        assert_ne!(first["serialNumber"], second["serialNumber"]);
+        let first = build_bom_for_conflated_parquet(workdir.path(), "job-1")?;
+        let second = build_bom_for_conflated_parquet(workdir.path(), "job-1")?;
+        assert_eq!(first, second);
+        assert!(
+            first["serialNumber"]
+                .as_str()
+                .expect("serialNumber")
+                .starts_with("urn:uuid:")
+        );
+
+        // A different --run_id changes only the workflow uid, nothing else.
+        let other = build_bom_for_conflated_parquet(workdir.path(), "job-2")?;
+        assert_eq!(other["serialNumber"], first["serialNumber"]);
+        assert_eq!(
+            other["metadata"]["timestamp"],
+            first["metadata"]["timestamp"]
+        );
+        assert_ne!(
+            other["formulation"][0]["workflows"][0]["uid"],
+            first["formulation"][0]["workflows"][0]["uid"]
+        );
         Ok(())
     }
 }

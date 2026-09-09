@@ -19,7 +19,6 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use time::UtcDateTime;
 
 /// How often [produce_rows] logs a progress/memory snapshot while
 /// running -- a wall-clock interval, not a feature count, since what
@@ -39,7 +38,6 @@ pub fn conflate(
     progress: &MultiProgress,
     workdir: &Path,
     pipeline_run_id: &str,
-    pipeline_start_time: UtcDateTime,
 ) -> Result<PathBuf> {
     let input_modified = last_modified(&[atp])?.max(osm.modified()?);
     let out_path = workdir.join("conflated.parquet");
@@ -61,14 +59,8 @@ pub fn conflate(
             producer_result = produce_rows(&atp_reader, osm, producer_progress, tx);
         });
         s.spawn(|| {
-            writer_result = write_conflated(
-                rx,
-                writer_progress,
-                workdir,
-                &out_path,
-                pipeline_run_id,
-                pipeline_start_time,
-            );
+            writer_result =
+                write_conflated(rx, writer_progress, workdir, &out_path, pipeline_run_id);
         });
     });
     writer_result?;
@@ -218,7 +210,6 @@ fn write_conflated(
     workdir: &Path,
     out: &Path,
     pipeline_run_id: &str,
-    pipeline_start_time: UtcDateTime,
 ) -> Result<()> {
     let start = Instant::now();
     let row_count = AtomicU64::new(0);
@@ -237,13 +228,10 @@ fn write_conflated(
         std::io::Result::Ok(row)
     }))?;
     progress.set_length(row_count.load(Ordering::SeqCst));
-    let provenance_bom = crate::pipeline::provenance::build_bom_for_conflated_parquet(
-        workdir,
-        pipeline_run_id,
-        pipeline_start_time,
-    )
-    .context("could not assemble provenance BOM")?
-    .to_string();
+    let provenance_bom =
+        crate::pipeline::provenance::build_bom_for_conflated_parquet(workdir, pipeline_run_id)
+            .context("could not assemble provenance BOM")?
+            .to_string();
     let mut writer =
         ParquetWriter::create(out, /* max_rows_per_group */ 200_000, &provenance_bom)?;
     for row in sorted {
