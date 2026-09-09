@@ -167,9 +167,11 @@ $ ./cloud_test.py up --name reg1 --ssh-key my-key \
   ephemeral S3-compatible test bucket, reading credentials from
   `HETZNER_TEST_S3_ACCESS_KEY_ID`/`HETZNER_TEST_S3_ACCESS_KEY_SECRET` in
   your own environment (never passed as command-line arguments, to keep
-  them out of `ps`/shell history on the remote host). Omit it and the
-  container just doesn't upload anywhere, same as the pipeline's own
-  `S3_ENDPOINT`-unset behavior.
+  them out of `ps`/shell history on the remote host). The generated
+  `s3.env` points both of the pipeline's destinations (`PUBLIC_S3_*` and
+  `INTERNAL_S3_*`) at this one bucket. Omit it and the container just
+  doesn't upload anywhere, same as the pipeline's own
+  `*_S3_ENDPOINT`-unset behavior.
 - `--run-id ID` is passed straight through as `osm-diffs run --run_id
   ID`, embedded into the output's provenance BOM.
 

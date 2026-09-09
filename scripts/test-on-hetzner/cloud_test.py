@@ -398,12 +398,19 @@ def containerized_run_command(args, ip, workdir):
     env_flag = ""
     if args.bucket_name:
         access_key, secret_key = s3_credentials()
-        env_content = (
-            f"S3_ENDPOINT={s3_endpoint(args.bucket_region)}\n"
-            f"S3_BUCKET={args.bucket_name}\n"
-            f"S3_REGION={args.bucket_region}\n"
-            f"S3_ACCESS_KEY_ID={access_key}\n"
-            f"S3_ACCESS_KEY_SECRET={secret_key}\n"
+        # The pipeline uploads to two independent destinations
+        # (PUBLIC_S3_* for downloads, INTERNAL_S3_* for logs). For a test
+        # run both point at the one ephemeral bucket -- the split is
+        # about production topology, not something this harness needs to
+        # mirror.
+        endpoint = s3_endpoint(args.bucket_region)
+        env_content = "".join(
+            f"{prefix}_ENDPOINT={endpoint}\n"
+            f"{prefix}_BUCKET={args.bucket_name}\n"
+            f"{prefix}_REGION={args.bucket_region}\n"
+            f"{prefix}_ACCESS_KEY_ID={access_key}\n"
+            f"{prefix}_ACCESS_KEY_SECRET={secret_key}\n"
+            for prefix in ("PUBLIC_S3", "INTERNAL_S3")
         )
         with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
             f.write(env_content)
@@ -562,8 +569,8 @@ def cmd_bucket_create(args):
     client = s3_client(args.region)
     client.create_bucket(Bucket=args.name)
     print(f"\nBucket {args.name} created in {args.region}.")
-    print(f"  S3_ENDPOINT: {s3_endpoint(args.region)}")
-    print(f"  S3_BUCKET:   {args.name}")
+    print(f"  <PUBLIC_S3|INTERNAL_S3>_ENDPOINT: {s3_endpoint(args.region)}")
+    print(f"  <PUBLIC_S3|INTERNAL_S3>_BUCKET:   {args.name}")
     print(
         f"\nNext: cloud_test.py start --name <server> --containerized ... "
         f"--bucket-name {args.name} --bucket-region {args.region}"

@@ -1,13 +1,24 @@
 //! Uploads pipeline outputs to S3-compatible storage.
 //!
+//! There are two independent destinations, each with its own five-var
+//! credential set (see [`Bucket`] and [`S3Config`]):
+//!
+//! - **`PUBLIC_S3_*`** -- the public downloads bucket, fronted by a CDN:
+//!   `conflated.parquet` and the PMTiles archives. Intended for a
+//!   Bunny.net S3 instance so objects replicate to the edge.
+//! - **`INTERNAL_S3_*`** -- in-datacenter storage that never needs CDN
+//!   replication: `pipeline.log`, and any future intermediates. Intended
+//!   for something like Hetzner Object Storage.
+//!
 //! Every upload goes through [upload_file], which decides between a
 //! single PUT and a multi-part upload based on the file's size (see
 //! [MULTIPART_THRESHOLD]) -- multi-part's own per-part minimum makes it
 //! pure overhead for something as small as a log file, but it's still
 //! the right choice for larger files like tiles or `conflated.parquet`.
 //!
-//! All uploads are skipped (not an error) if `S3_ENDPOINT` isn't set --
-//! the established way to disable uploads for a local/dev run.
+//! Each destination's uploads are skipped (not an error) if its
+//! `*_ENDPOINT` isn't set -- the established way to disable uploads for a
+//! local/dev run, now per-bucket.
 
 use crate::make_download_bar;
 use anyhow::{Context, Result};
@@ -101,26 +112,47 @@ impl<'a> Drop for Upload<'a> {
     }
 }
 
-/// S3 connection details, read once from the environment and reused
-/// for every upload in a pipeline run.
+/// Which S3 bucket an upload targets. See the module doc for the split.
+#[derive(Clone, Copy, Debug)]
+enum Bucket {
+    /// The CDN-fronted public downloads bucket (`PUBLIC_S3_*`).
+    Public,
+    /// In-datacenter storage, no CDN replication (`INTERNAL_S3_*`).
+    Internal,
+}
+
+impl Bucket {
+    /// Environment-variable prefix for this bucket's five connection
+    /// settings: `<prefix>_ENDPOINT` / `_BUCKET` / `_REGION` /
+    /// `_ACCESS_KEY_ID` / `_ACCESS_KEY_SECRET`.
+    fn env_prefix(self) -> &'static str {
+        match self {
+            Bucket::Public => "PUBLIC_S3",
+            Bucket::Internal => "INTERNAL_S3",
+        }
+    }
+}
+
+/// S3 connection details for one [`Bucket`], read once from the
+/// environment and reused for every upload to it in a pipeline run.
 ///
 /// All five come from environment variables, none of them CLI flags
 /// (`osm-diffs run --help` won't mention them) -- they're ambient
-/// deployment config, the kind you'd set once for wherever this runs
-/// on a schedule, not something to pass per invocation:
+/// deployment config, the kind you'd set once for wherever this runs on
+/// a schedule, not something to pass per invocation. For prefix
+/// `PUBLIC_S3` (likewise `INTERNAL_S3`):
 ///
-/// - `S3_ENDPOINT` -- the S3-compatible service's base URL (e.g.
+/// - `PUBLIC_S3_ENDPOINT` -- the S3-compatible service's base URL (e.g.
 ///   `https://s3.amazonaws.com`, or a MinIO/other provider's own URL).
-///   Also the on/off switch: if this is unset, every upload in this
-///   module is skipped entirely (see [S3Config::from_env]) -- the
-///   established way to disable uploads for a local/dev run.
-/// - `S3_BUCKET` -- the bucket every upload in this module writes to
-///   (`edits.pmtiles`, `conflated.parquet`, `logs/<run-id>.log` all
-///   land in the same one, distinguished by key).
-/// - `S3_REGION` -- passed to the S3 client as-is; some S3-compatible
-///   services ignore it, but the client still requires a value.
-/// - `S3_ACCESS_KEY_ID` / `S3_ACCESS_KEY_SECRET` -- static credentials
-///   for that bucket.
+///   Also that bucket's on/off switch: if this is unset, every upload to
+///   that bucket is skipped entirely (see [S3Config::from_env]).
+/// - `PUBLIC_S3_BUCKET` -- the bucket every upload to that destination
+///   writes to, distinguished by key.
+/// - `PUBLIC_S3_REGION` -- passed to the S3 client as-is; some
+///   S3-compatible services ignore it, but the client still requires a
+///   value.
+/// - `PUBLIC_S3_ACCESS_KEY_ID` / `PUBLIC_S3_ACCESS_KEY_SECRET` -- static
+///   credentials for that bucket.
 struct S3Config {
     endpoint: String,
     bucket: String,
@@ -130,21 +162,23 @@ struct S3Config {
 }
 
 impl S3Config {
-    /// Reads `S3_ENDPOINT`/`S3_BUCKET`/`S3_REGION`/`S3_ACCESS_KEY_ID`/
-    /// `S3_ACCESS_KEY_SECRET` from the environment. Returns `Ok(None)`
-    /// (not an error) if `S3_ENDPOINT` specifically is unset -- that's
-    /// how uploads are deliberately disabled. Once `S3_ENDPOINT` *is*
-    /// set, every other variable missing is a real configuration error.
-    fn from_env() -> Result<Option<S3Config>> {
-        let Some(endpoint) = env::var("S3_ENDPOINT").ok() else {
+    /// Reads `<prefix>_ENDPOINT`/`_BUCKET`/`_REGION`/`_ACCESS_KEY_ID`/
+    /// `_ACCESS_KEY_SECRET` for `bucket` from the environment. Returns
+    /// `Ok(None)` (not an error) if `<prefix>_ENDPOINT` specifically is
+    /// unset -- that's how that bucket's uploads are deliberately
+    /// disabled. Once `<prefix>_ENDPOINT` *is* set, every other variable
+    /// missing is a real configuration error.
+    fn from_env(bucket: Bucket) -> Result<Option<S3Config>> {
+        let prefix = bucket.env_prefix();
+        let Some(endpoint) = env::var(format!("{prefix}_ENDPOINT")).ok() else {
             return Ok(None);
         };
         Ok(Some(S3Config {
             endpoint,
-            bucket: env_var("S3_BUCKET")?,
-            region: env_var("S3_REGION")?,
-            access_key_id: env_var("S3_ACCESS_KEY_ID")?,
-            access_key_secret: env_var("S3_ACCESS_KEY_SECRET")?,
+            bucket: env_var(&format!("{prefix}_BUCKET"))?,
+            region: env_var(&format!("{prefix}_REGION"))?,
+            access_key_id: env_var(&format!("{prefix}_ACCESS_KEY_ID"))?,
+            access_key_secret: env_var(&format!("{prefix}_ACCESS_KEY_SECRET"))?,
         }))
     }
 
@@ -174,18 +208,26 @@ fn env_var(name: &str) -> Result<String> {
     env::var(name).with_context(|| format!("Missing environment variable: {name}"))
 }
 
-/// Uploads `path` to `destination` in the configured S3 bucket. Skips
-/// entirely (logging why) if `S3_ENDPOINT` isn't set. Chooses a single
-/// PUT or a multi-part upload based on `path`'s size.
+/// Uploads `path` to `destination` in `bucket`. Skips entirely (logging
+/// why) if that bucket's `*_ENDPOINT` isn't set. Chooses a single PUT or
+/// a multi-part upload based on `path`'s size.
 fn upload_file(
+    bucket: Bucket,
     path: &Path,
     destination: &str,
     content_type: &str,
     progress_label: &str,
     progress: &MultiProgress,
 ) -> Result<()> {
+    let Some(config) = S3Config::from_env(bucket)? else {
+        log::warn!(
+            "{}_ENDPOINT not set, skipping upload of {destination}",
+            bucket.env_prefix()
+        );
+        return Ok(());
+    };
     upload_file_with_config(
-        S3Config::from_env()?.as_ref(),
+        Some(&config),
         path,
         destination,
         content_type,
@@ -209,7 +251,7 @@ fn upload_file_with_config(
     progress: &MultiProgress,
 ) -> Result<()> {
     let Some(config) = config else {
-        log::warn!("S3_ENDPOINT not set, skipping upload of {destination}");
+        log::warn!("no S3 config, skipping upload of {destination}");
         return Ok(());
     };
     let client = config.client()?;
@@ -280,6 +322,7 @@ fn upload_file_with_config(
 
 pub fn upload_tiles(tiles: &Path, progress: &MultiProgress) -> Result<()> {
     upload_file(
+        Bucket::Public,
         tiles,
         "edits.pmtiles",
         "application/vnd.pmtiles",
@@ -290,6 +333,7 @@ pub fn upload_tiles(tiles: &Path, progress: &MultiProgress) -> Result<()> {
 
 pub fn upload_conflated(conflated: &Path, progress: &MultiProgress) -> Result<()> {
     upload_file(
+        Bucket::Public,
         conflated,
         "conflated.parquet",
         "application/vnd.apache.parquet",
@@ -300,6 +344,7 @@ pub fn upload_conflated(conflated: &Path, progress: &MultiProgress) -> Result<()
 
 pub fn upload_conflated_tiles(tiles: &Path, progress: &MultiProgress) -> Result<()> {
     upload_file(
+        Bucket::Public,
         tiles,
         "conflated.pmtiles",
         "application/vnd.pmtiles",
@@ -308,7 +353,8 @@ pub fn upload_conflated_tiles(tiles: &Path, progress: &MultiProgress) -> Result<
     )
 }
 
-/// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log`.
+/// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log` on the
+/// **internal** bucket -- a log is operational, not a public download.
 ///
 /// `<run-id>` is the slugged `--run_id` (see `pipeline::run_id_slug`)
 /// when the scheduler supplied one -- so a restarted job appends to
@@ -335,6 +381,7 @@ pub fn upload_logs(
     // stalled -- see https://github.com/wardi/jsonlines/issues/19.
     // Tracked in alltheplaces/osm-diffs#684 to check back in August 2027.
     upload_file(
+        Bucket::Internal,
         &log_path,
         &destination,
         "application/x-ndjson",
@@ -396,30 +443,33 @@ mod tests {
     }
 
     #[test]
-    fn reads_config_from_env_when_s3_endpoint_set() -> Result<()> {
+    fn reads_config_from_env_per_bucket() -> Result<()> {
         // The only test touching process env vars -- every other test
         // injects an S3Config directly (see `test_config`), so there's
         // no other test racing on these same variables.
         // SAFETY: no other test in this module reads or writes these.
         unsafe {
-            env::set_var("S3_ENDPOINT", "http://example.invalid");
-            env::set_var("S3_BUCKET", "env-bucket");
-            env::set_var("S3_REGION", "env-region");
-            env::set_var("S3_ACCESS_KEY_ID", "env-key-id");
-            env::set_var("S3_ACCESS_KEY_SECRET", "env-key-secret");
+            env::set_var("PUBLIC_S3_ENDPOINT", "http://public.invalid");
+            env::set_var("PUBLIC_S3_BUCKET", "public-bucket");
+            env::set_var("PUBLIC_S3_REGION", "public-region");
+            env::set_var("PUBLIC_S3_ACCESS_KEY_ID", "public-key-id");
+            env::set_var("PUBLIC_S3_ACCESS_KEY_SECRET", "public-key-secret");
         }
-        let config = S3Config::from_env()?.expect("S3_ENDPOINT is set");
-        assert_eq!(config.endpoint, "http://example.invalid");
-        assert_eq!(config.bucket, "env-bucket");
+        let public = S3Config::from_env(Bucket::Public)?.expect("PUBLIC_S3_ENDPOINT is set");
+        assert_eq!(public.endpoint, "http://public.invalid");
+        assert_eq!(public.bucket, "public-bucket");
+        // The two buckets are independent: INTERNAL_S3_* is unset here.
+        assert!(S3Config::from_env(Bucket::Internal)?.is_none());
+
         // SAFETY: see above.
         unsafe {
-            env::remove_var("S3_ENDPOINT");
-            env::remove_var("S3_BUCKET");
-            env::remove_var("S3_REGION");
-            env::remove_var("S3_ACCESS_KEY_ID");
-            env::remove_var("S3_ACCESS_KEY_SECRET");
+            env::remove_var("PUBLIC_S3_ENDPOINT");
+            env::remove_var("PUBLIC_S3_BUCKET");
+            env::remove_var("PUBLIC_S3_REGION");
+            env::remove_var("PUBLIC_S3_ACCESS_KEY_ID");
+            env::remove_var("PUBLIC_S3_ACCESS_KEY_SECRET");
         }
-        assert!(S3Config::from_env()?.is_none());
+        assert!(S3Config::from_env(Bucket::Public)?.is_none());
         Ok(())
     }
 
