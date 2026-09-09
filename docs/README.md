@@ -22,7 +22,7 @@ Want to work on the pipeline itself, or run it somewhere? Start here.
 - [`RELEASING.md`](RELEASING.md) — how to cut a release of `osm-diffs`.
 - [`PRODUCTION.md`](PRODUCTION.md) — operational knowledge for running
   a released container somewhere real: hardware sizing, required
-  configuration, what to monitor.
+  configuration, serving the outputs over a CDN, what to monitor.
 - [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md) — the concepts
   behind our release process: containers, multi-architecture images,
   SBOM/CBOM, CycloneDX, build provenance and attestations, and

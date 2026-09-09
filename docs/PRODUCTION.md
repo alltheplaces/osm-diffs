@@ -121,6 +121,70 @@ cadence, matching how often AllThePlaces itself publishes a fresh dump
 somewhere, a scheduled GitHub Actions workflow) is future work, not
 something this repository provides today.
 
+## Serving the outputs (CDN)
+
+Nothing serves the pipeline’s outputs to the public yet. The intent is
+to put them behind the same [Bunny](https://bunny.net) CDN that
+[`osmviews`](https://github.com/brawer/osmviews) uses, sharing one
+account and one OpenTofu config
+([`brawer/production`](https://github.com/brawer/production), `bunny/`).
+The CDN and its edge-cache rules for `osmdiffs` are **already
+provisioned** there — currently against a staging hostname
+(`osmdiffs.dandelis.ch`, to be moved to a permanent one later) — so this
+section is about the shape the pipeline’s uploads must take, not infra
+still to build.
+
+### The `/data/` contract
+
+Bunny serves objects straight from the storage bucket and cannot attach
+per-object response headers, so caching is driven entirely by URL
+patterns in
+[`bunny/cdn.tf`](https://github.com/brawer/production/blob/main/bunny/cdn.tf).
+Two rules apply under `https://<host>/data/`:
+
+- **`data/datapackage.json` — 60 s TTL.** The one object allowed to
+  change at a stable URL: a
+  [Frictionless Data Package](https://datapackage.org/) descriptor,
+  overwritten in place every run, listing that run’s files with byte
+  sizes and SHA-256 hashes. It is the update-check target — a client
+  GETs ~1 KB and compares `version`. 60 s (a little more across cache
+  tiers) is then the whole propagation delay of a new run; **the
+  pipeline never purges the CDN** and never needs a Bunny account
+  credential.
+
+- **everything else under `data/` — long TTL**
+  (`local.immutable_max_age` in `cdn.tf`: 600 s today, moving to 30
+  days). Matched as a *negative* rule — “under `data/` and not
+  `datapackage.json`” — so new file types need no config change.
+
+That negative match is the load-bearing invariant:
+
+> **`data/datapackage.json` is the only object the pipeline may
+> overwrite. Every other published file must carry an immutable URL** —
+> a date or content hash in the name (`conflated-<date>.parquet`,
+> `conflated-<date>.pmtiles`, the dated CycloneDX BOM, …).
+
+Reusing a name for changed bytes would serve stale data from cache for
+up to the long TTL, recoverable only with a manual purge. Upload the
+dated files first and `datapackage.json` last, so “the manifest lists
+file X” always implies X is already there.
+
+Pruning old runs to save storage is fine — a deleted dated object just
+starts returning 404, and the CDN caches that 404 correctly. Replacing
+a published object is not.
+
+### Still open
+
+- Whether `osmdiffs` adopts a `datapackage.json` manifest at all, or a
+  lighter scheme — tracked with the `osmviews` work in
+  [brawer/osmviews#110](https://github.com/brawer/osmviews/issues/110).
+- CORS headers on `/data/*`, needed if a browser reads the outputs
+  directly —
+  [brawer/production#10](https://github.com/brawer/production/issues/10).
+- Reconciling the upload target: today one flat bucket
+  (`S3_BUCKET`, above), vs. the CDN’s expectation of a `data/` key
+  prefix in a dedicated public bucket.
+
 ## What to watch
 
 Everything below comes straight out of `pipeline.log` (see
