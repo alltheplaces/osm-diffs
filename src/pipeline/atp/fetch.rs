@@ -282,14 +282,22 @@ fn parse_run(entry: &serde_json::Value, history_url: &str) -> Result<AtpMetadata
 }
 
 async fn write_meta_json(metadata: &AtpMetadata, dest: &Path) -> Result<()> {
-    let mut file = File::create(dest)
+    // Write via a temp file and rename, so a crash mid-write can't leave
+    // a truncated sidecar that a restart would fail to parse.
+    let mut tmp = dest.to_path_buf();
+    tmp.add_extension("tmp");
+    let mut file = File::create(&tmp)
         .await
-        .with_context(|| format!("Failed to create {}", dest.display()))?;
+        .with_context(|| format!("Failed to create {}", tmp.display()))?;
     let data = serde_json::to_string(metadata)?;
     file.write_all(data.as_bytes()).await?;
     file.flush()
         .await
-        .with_context(|| format!("Failed to flush {}", dest.display()))?;
+        .with_context(|| format!("Failed to flush {}", tmp.display()))?;
+    drop(file);
+    tokio::fs::rename(&tmp, dest)
+        .await
+        .with_context(|| format!("Failed to rename {} to {}", tmp.display(), dest.display()))?;
     Ok(())
 }
 

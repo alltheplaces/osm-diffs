@@ -437,6 +437,53 @@ confirmed the design holds well below that comfortable baseline too —
 see [`PRODUCTION.md`](PRODUCTION.md) for the full results and the
 recommended production memory limit.
 
+### Reproducibility and restarts
+
+The pipeline is meant to run as a scheduled batch job — most likely a
+Kubernetes `CronJob` on an ephemeral CSI volume. That volume starts
+empty on a first attempt, but a restarted attempt (node failure,
+pre-emption, an OOM-killed step) sees a **partially populated** workdir.
+Two properties keep that safe:
+
+- **Every step writes to a temp file and atomically renames it** into
+  place once complete (`*.tmp` → `rename`). A restart therefore finds
+  each intermediate either fully written (and reuses it — every step
+  short-circuits when its output already exists) or absent (and redoes
+  it). There is never a half-written file to trip over.
+- **`conflated.parquet` is byte-reproducible.** Re-running `conflate`
+  on the same inputs produces the identical file, so it doesn’t matter
+  whether a restart reuses the first attempt’s copy or rebuilds it. This
+  requires that nothing in the output depends on the wall clock or on
+  chance:
+  - The embedded CycloneDX provenance BOM
+    ([`src/pipeline/provenance.rs`](../src/pipeline/provenance.rs))
+    anchors every timestamp (`metadata.timestamp`, the output
+    component’s `version`, the workflow’s `timeStart`/`timeEnd`) to
+    `max(AllThePlaces run start, OSM planet replication)` — the
+    freshness of the most-recently-updated input — rather than to
+    “now”. Its `serialNumber` is a version-5 UUID derived from the two
+    inputs’ SHA-256s, not a random v4 UUID.
+  - The Parquet row order is a total order
+    ([`ParquetRow::cmp`](../src/pipeline/conflate/writer.rs)): the S2
+    spatial key, then OSM id, then the ATP spider/tags, then the
+    geometry bytes as a final tie-break, so co-located near-duplicate
+    features can’t be reordered by parallel scheduling.
+  - ZSTD compression and the Arrow writer are themselves deterministic
+    for a fixed library version (pinned in the release container).
+
+The one input this leaves is `--run_id` — a scheduler-supplied
+identifier for *this execution*, distinct from the data. It appears in
+the BOM as the workflow `uid`, and it names the run’s `pipeline.log`
+object in S3. On startup the pipeline writes it to `workdir/run_id` and,
+on a restart, checks it matches — a workdir that already belongs to a
+different run is refused rather than half-overwritten. A local run
+without `--run_id` skips the check.
+
+**Not reproducible, by design:** the PMTiles archives (tippecanoe runs
+in parallel and stamps its own metadata — and they’re a debugging aid,
+not a data product) and `pipeline.log` (wall-clock timestamps, timings,
+memory snapshots — the point of a log).
+
 ### Code structure
 
 Top-level modules (see [`src/lib.rs`](../src/lib.rs)):
