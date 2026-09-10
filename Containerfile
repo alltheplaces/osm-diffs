@@ -81,10 +81,10 @@ RUN for bin in tippecanoe tile-join; do \
 
 
 # ----------------------------------------------------------------------------
-#  Stage 1.3: Build and test osm-diffs binary
+#  Stage 1.3: Build and test osmdiffs binary
 # ----------------------------------------------------------------------------
 
-WORKDIR /usr/osm-diffs
+WORKDIR /usr/osmdiffs
 
 COPY Cargo.toml Cargo.lock build.rs rust-toolchain.toml .
 COPY scripts/sbom scripts/sbom
@@ -99,7 +99,7 @@ RUN cargo test --release --locked
 #  Stage 1.4: Generate the SBOM for the container
 # ----------------------------------------------------------------------------
 #
-# Runs after both binaries (tippecanoe and osm-diffs) have been built, so a
+# Runs after both binaries (tippecanoe and osmdiffs) have been built, so a
 # single script invocation can see the facts about both of them.
 
 RUN sh scripts/sbom/generate-sbom.sh /artifacts/sbom.cdx.json
@@ -119,12 +119,12 @@ COPY --from=builder /usr/local/bin/tippecanoe /usr/local/bin/tippecanoe
 COPY --from=builder /usr/local/bin/tile-join /usr/local/bin/tile-join
     
 COPY --from=builder --chown=1000:1000  \
-    /usr/osm-diffs/target/release/osm-diffs  \
-    /app/osm-diffs
+    /usr/osmdiffs/target/release/osmdiffs  \
+    /app/osmdiffs
 
 USER 1000
 
-ENTRYPOINT ["/app/osm-diffs"]
+ENTRYPOINT ["/app/osmdiffs"]
 
 LABEL  \
     org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>"  \

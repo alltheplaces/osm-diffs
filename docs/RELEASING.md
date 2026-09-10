@@ -1,7 +1,7 @@
 # Cutting a release
 
 This document is the practical how-to for cutting a release of
-`osm-diffs`. For the concepts behind *why* the process looks like this
+`osmdiffs`. For the concepts behind *why* the process looks like this
 (SBOM, attestations, immutable releases, ...), see
 [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md).
 
@@ -27,7 +27,7 @@ the pipeline’s **output schema** — not by how much code changed.
 This is a different question than what [SemVer](https://semver.org/)
 usually answers. Programmers normally think of SemVer in terms of API
 compatibility for code that *links against* a library. Nobody links
-against `osm-diffs`:
+against `osmdiffs`:
 downstream clients only ever consume the *data* it produces. So the
 question to ask isn’t “did the code change in a breaking way,” it’s “does
 this change what a client reading our output has to handle differently”:

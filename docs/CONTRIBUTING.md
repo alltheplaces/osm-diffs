@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking a look at `osm-diffs`! 👋 Contributions, questions,
+Thanks for taking a look at `osmdiffs`! 👋 Contributions, questions,
 and bug reports are all welcome — this project is still early, so
 there’s no such thing as too small a
 [Pull Request (PR)](https://docs.github.com/en/pull-requests/get-started/about-pull-requests).
@@ -60,7 +60,7 @@ categorized release notes — so getting the type right saves the
 maintainer a manual labeling step, it’s not just a style nit.
 
 **The `!` marker is special here.** Normally it means “breaks the public
-API.” `osm-diffs` doesn’t have one client code links against — what it
+API.” `osmdiffs` doesn’t have one client code links against — what it
 has is an **output schema** (`conflated.parquet`), and that’s what
 matters to everyone downstream. So on this project, `!` means *this PR
 breaks the output schema*, per the rules in

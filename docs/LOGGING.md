@@ -1,6 +1,6 @@
 # Logging
 
-`osm-diffs run` writes `pipeline.log` to its `--workdir`, one JSON
+`osmdiffs run` writes `pipeline.log` to its `--workdir`, one JSON
 object per line ([JSON Lines](https://jsonlines.org/)) —
 machine-readable rather than free-form text, so a log can be grepped,
 `jq`’d, or loaded into whatever analysis tool you like without first
@@ -9,7 +9,7 @@ Every record has:
 
 - `timestamp` — RFC 3339, UTC.
 - `level` — `INFO`, `WARN`, `ERROR`, …
-- `target` — which module logged it (e.g. `osm_diffs::pipeline::conflate`).
+- `target` — which module logged it (e.g. `osmdiffs::pipeline::conflate`).
 - `message` — the human-readable text.
 - `fields` — present only on records that attach structured data
   (numbers, an id, …) instead of just interpolating it into the

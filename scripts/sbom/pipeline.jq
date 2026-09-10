@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 #
 # Enrich the raw CycloneDX SBOM produced by `cargo cyclonedx` for the
-# osm-diffs binary: fix up the dependency graph, attach build-environment
+# osmdiffs binary: fix up the dependency graph, attach build-environment
 # and supplier metadata, and add the vendored "data" components (and the
 # Cryptographic Bill of Materials entries) that cargo-cyclonedx cannot see
 # on its own.
 #
 # Input (stdin): the raw CycloneDX 1.5 document from `cargo cyclonedx`.
-# Output: a CycloneDX 1.7 document, still describing only the osm-diffs
+# Output: a CycloneDX 1.7 document, still describing only the osmdiffs
 #   application (not the final container -- that's assembled by merge.jq).
 #
 # Arguments (all required, passed with --arg):
@@ -42,8 +42,8 @@ def add_supplier:
     .
   end;
 
-# Patch bom-ref of main application to read "osm-diffs-1.2.3"
-# instead of "path+file:///Users/sascha/src/osm-diffs#osm-diffs".
+# Patch bom-ref of main application to read "osmdiffs-1.2.3"
+# instead of "path+file:///Users/sascha/src/osm-diffs#osmdiffs".
 .metadata.component."bom-ref" as $orig_root_ref |
 ( .metadata.component.name + "-" + .metadata.component.version ) as $root_ref |
 .metadata.component."bom-ref" = $root_ref |
@@ -273,7 +273,7 @@ else . end |
 
 if $DEV_BUILD == "true" then
   .metadata.properties = ((.metadata.properties // []) + [{
-    name: "osm-diffs:sbom:devBuild",
+    name: "osmdiffs:sbom:devBuild",
     value: "true"
   }])
 else

@@ -139,7 +139,7 @@ impl Bucket {
 /// environment and reused for every upload to it in a pipeline run.
 ///
 /// All five come from environment variables, none of them CLI flags
-/// (`osm-diffs run --help` won't mention them) -- they're ambient
+/// (`osmdiffs run --help` won't mention them) -- they're ambient
 /// deployment config, the kind you'd set once for wherever this runs on
 /// a schedule, not something to pass per invocation. For prefix
 /// `PUBLIC_S3` (likewise `INTERNAL_S3`):

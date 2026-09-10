@@ -283,7 +283,7 @@ def test_check_cgroup_signal_fails_when_conflate_end_missing():
     "dmesg_text,expected",
     [
         ("kernel: some unrelated line\n", True),
-        ("kernel: Out of memory: Killed process 123 (osm-diffs)\n", False),
+        ("kernel: Out of memory: Killed process 123 (osmdiffs)\n", False),
     ],
 )
 def test_check_no_oom(dmesg_text, expected):
@@ -348,7 +348,7 @@ def test_run_hard_checks_skips_parquet_checks_when_output_is_missing(tmp_path):
     records = [
         {"level": "INFO", "message": "conflate: start", "fields": {"step": "conflate", "phase": "start"}},
     ]
-    dmesg_text = "Memory cgroup out of memory: Killed process 2699 (osm-diffs)"
+    dmesg_text = "Memory cgroup out of memory: Killed process 2699 (osmdiffs)"
     results = v.run_hard_checks(
         con, url, records, dmesg_text=dmesg_text, mem_limit="4g", expect_pipeline_version=None, min_atp_features=None
     )

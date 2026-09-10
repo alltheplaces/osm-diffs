@@ -42,7 +42,7 @@ fn main() -> Result<()> {
     match &args.command {
         Some(Commands::Run { workdir, run_id }) => {
             let client = build_client();
-            osm_diffs::run_pipeline(&client, workdir, run_id)
+            osmdiffs::run_pipeline(&client, workdir, run_id)
         }
         None => Err(anyhow!("no subcommand given")),
     }

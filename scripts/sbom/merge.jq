@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Assemble the final, single SBOM for the container image out of the
-# osm-diffs (pipeline), tippecanoe, and tile-join component fragments.
+# osmdiffs (pipeline), tippecanoe, and tile-join component fragments.
 #
 # Invoked as `jq -n -f merge.jq` (no stdin input; all three fragments
 # are read via --slurpfile).
@@ -20,7 +20,7 @@
 #   serial      SBOM serial number (a "urn:uuid:..." string)
 #   image       container image name, e.g. "brawer/osmdiffs"
 #   timestamp   build timestamp, RFC 3339
-#   pipeline    (--slurpfile) the enriched osm-diffs SBOM fragment, as
+#   pipeline    (--slurpfile) the enriched osmdiffs SBOM fragment, as
 #               produced by pipeline.jq
 #   tippecanoe  (--slurpfile) the tippecanoe SBOM fragment, as produced
 #               by tippecanoe.jq
