@@ -63,15 +63,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use wkb::{
-    Endianness,
-    reader::read_wkb,
-    writer::{WriteOptions, write_geometry},
-};
-
-const WKB_WRITE_OPTIONS: WriteOptions = WriteOptions {
-    endianness: Endianness::LittleEndian,
-};
+use wkb::reader::read_wkb;
 
 /// Offset and length, in bytes, of a WKB blob within the spool file.
 #[derive(Clone, Copy)]
@@ -111,7 +103,7 @@ impl GeometryStore {
     /// new geometry from now on; the bytes of the previous geometry stay
     /// in the spool file as dead space.
     pub fn insert(&mut self, key: u64, geometry: &Geometry) -> Result<()> {
-        let wkb = encode_wkb(geometry);
+        let wkb = crate::geometry::encode_wkb(geometry);
         let offset = {
             let mut file = self.file.lock().expect("geometry store file lock poisoned");
             let offset = file.seek(SeekFrom::End(0))?;
@@ -149,12 +141,6 @@ impl GeometryStore {
         let err = format!("invalid WKB for key {} in {}", key, self.path.display());
         Ok(Some(read_wkb(&buf).expect(&err).to_geometry()))
     }
-}
-
-fn encode_wkb(geometry: &Geometry) -> Vec<u8> {
-    let mut buf = Vec::new();
-    write_geometry(&mut buf, geometry, &WKB_WRITE_OPTIONS).expect("wkb encoding failed");
-    buf
 }
 
 #[cfg(test)]
