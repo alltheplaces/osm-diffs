@@ -74,8 +74,8 @@
   metadata: {
     timestamp: $timestamp,
     supplier: {
-      name: "All The Places",
-      url:  ["https://github.com/alltheplaces/"]
+      name: "Sascha Brawer",
+      url:  ["https://brawer.ch"]
     },
     lifecycles: [{phase: "build"}],
     component: {

@@ -71,12 +71,22 @@ const CC0_URL: &str = "https://creativecommons.org/publicdomain/zero/1.0/legalco
 /// with this pipeline's ODbL-licensed output.
 const ATP_IN_OSM_LICENSING_DISCUSSION_URL: &str = "https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources";
 
-/// Supplier declared for this BOM and the AllThePlaces component. Copied
-/// verbatim from `scripts/sbom/merge.jq`'s `metadata.supplier` (the
-/// container-image SBOM) rather than kept in sync programmatically --
-/// the project name won't change, and if it ever does, a grep finds
-/// both places.
+/// Supplier declared for this BOM and its output component: whoever
+/// stewards this pipeline and stands behind the data it publishes. Kept
+/// in sync by grep with `scripts/sbom/merge.jq`'s `metadata.supplier`
+/// (the container-image SBOM) and `pipeline.jq`'s
+/// `metadata.component.supplier`, not programmatically.
 fn supplier() -> Value {
+    json!({
+        "name": "Sascha Brawer",
+        "url": ["https://brawer.ch"]
+    })
+}
+
+/// Supplier declared for the AllThePlaces input component only -- distinct
+/// from `supplier()`: the All The Places project, not us, supplies the
+/// scraped-POI dataset this pipeline consumes.
+fn atp_supplier() -> Value {
     json!({
         "name": "All The Places",
         "url": ["https://github.com/alltheplaces/"]
@@ -295,7 +305,7 @@ fn atp_component(atp: &AtpMetadata) -> Result<Value> {
         "type": "data",
         "name": "alltheplaces.zip",
         "version": &start_time,
-        "supplier": supplier(),
+        "supplier": atp_supplier(),
         "licenses": license("CC0-1.0", CC0_URL),
         "hashes": [{"alg": "SHA-256", "content": sha256}],
         "purl": format!(
@@ -441,7 +451,7 @@ mod tests {
         // 2026-03-04, which is later than the OSM snapshot, 2026-01-27),
         // not the wall clock -- so the BOM is reproducible.
         assert_eq!(bom["metadata"]["timestamp"], "2026-03-04T15:16:17Z");
-        assert_eq!(bom["metadata"]["supplier"]["name"], "All The Places");
+        assert_eq!(bom["metadata"]["supplier"]["name"], "Sascha Brawer");
 
         let tool = &bom["metadata"]["tools"]["components"][0];
         assert_eq!(tool["bom-ref"], "tool-osm-diffs");

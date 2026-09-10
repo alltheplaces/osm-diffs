@@ -44,7 +44,7 @@ def alpine_supplier: {name: "Alpine Linux", url: ["https://alpinelinux.org"]};
   metadata: {
     lifecycles: [{phase: "build"}],
     authors: [{name: "Sascha Brawer", email: "sascha@brawer.ch"}],
-    supplier: {name: "All The Places", url: ["https://github.com/alltheplaces/"]},
+    supplier: {name: "Sascha Brawer", url: ["https://brawer.ch"]},
     component: {
       type: "application",
       name: $NAME,

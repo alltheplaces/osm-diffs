@@ -75,8 +75,8 @@ else . end |
 .metadata.lifecycles = [{phase: "build"}] |
 .metadata.authors = [{name: "Sascha Brawer", email: "sascha@brawer.ch"}] |
 .metadata.supplier = {
-  name: "All The Places",
-  url: ["https://github.com/alltheplaces/"]
+  name: "Sascha Brawer",
+  url: ["https://brawer.ch"]
 } |
 .metadata.tools = {
   components: [{
@@ -112,7 +112,7 @@ else . end |
     }
   ]
 } |
-.metadata.component.supplier = {name: "All The Places", url: ["https://github.com/alltheplaces/"]} |
+.metadata.component.supplier = {name: "Sascha Brawer", url: ["https://brawer.ch"]} |
 .metadata.component.purl = "pkg:github/brawer/osmdiffs@" + .metadata.component.version |
 .metadata.component.licenses = [{expression: "MIT"}] |
 .components |= [ .[] | add_supplier ] |
