@@ -206,10 +206,12 @@ def test_containerized_run_command_s3_env_file(monkeypatch):
 
     assert "--env-file /root/osm-diffs/s3.env" in cmd
     env_content = scp_files["s3.env"]
-    assert "S3_ENDPOINT=https://fsn1.your-objectstorage.com" in env_content
-    assert "S3_BUCKET=b1" in env_content
-    assert "S3_ACCESS_KEY_ID=AKIA_TEST" in env_content
-    assert "S3_ACCESS_KEY_SECRET=supersecret" in env_content
+    # Both destinations, pointed at the one ephemeral test bucket.
+    for prefix in ("PUBLIC_S3", "INTERNAL_S3"):
+        assert f"{prefix}_ENDPOINT=https://fsn1.your-objectstorage.com" in env_content
+        assert f"{prefix}_BUCKET=b1" in env_content
+        assert f"{prefix}_ACCESS_KEY_ID=AKIA_TEST" in env_content
+        assert f"{prefix}_ACCESS_KEY_SECRET=supersecret" in env_content
     assert any("chmod 600" in c for c in ssh_calls)
 
 

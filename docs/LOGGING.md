@@ -32,18 +32,20 @@ fetch/open/prune/assemble/index-build phases; see
 
 ## Where weekly-run logs end up
 
-Every pipeline run uploads its `pipeline.log` to S3 storage at
-`logs/<run-id>.log`. `<run-id>` is `--run_id` — whatever identifier the
-scheduler passed in (a Kubernetes Job name, a cron invocation ID, …) —
-so a restarted attempt appends to, rather than forks, its run’s single
-log object. If that value contains anything outside `[A-Za-z0-9._-]` it
-is normalised for use as a key (unsafe character runs become `_`, with
-a short hash of the original appended so distinct IDs can’t collide); a
-value that was already safe is used as-is. That same normalised id is
-stamped into `conflated.parquet`’s provenance BOM as the workflow `uid`
-(see [`outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)), so
-a run’s log and its data output can always be tied back together. A
-local run with no `--run_id` falls back to the process start timestamp
+Every pipeline run uploads its `pipeline.log` to `logs/<run-id>.log` on
+the **internal** S3 bucket (`INTERNAL_S3_*` — a log is operational, not
+a public download; see [`PRODUCTION.md`](PRODUCTION.md)). `<run-id>` is
+`--run_id` — whatever identifier the scheduler passed in (a Kubernetes
+Job name, a cron invocation ID, …) — so a restarted attempt appends to,
+rather than forks, its run’s single log object. If that value contains
+anything outside `[A-Za-z0-9._-]` it is normalised for use as a key
+(unsafe character runs become `_`, with a short hash of the original
+appended so distinct IDs can’t collide); a value that was already safe
+is used as-is. That same normalised id is stamped into
+`conflated.parquet`’s provenance BOM as the workflow `uid` (see
+[`outputs/CONFLATED_PARQUET.md`](outputs/CONFLATED_PARQUET.md)), so a
+run’s log and its data output can always be tied back together. A local
+run with no `--run_id` falls back to the process start timestamp
 (`YYYY-MM-DD-HH-MM-SS`). Uploading happens regardless of whether the run
 succeeded — a failed run’s log is exactly the one you want archived for
 debugging, not just a successful one’s.

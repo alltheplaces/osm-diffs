@@ -91,19 +91,28 @@ podman run --rm --read-only \
 
 ## Required configuration
 
-Five environment variables, read once at startup (see
+Uploads go to **two** independent S3 destinations, each with its own
+five environment variables, read once at startup (see
 [`src/pipeline/upload.rs`](../src/pipeline/upload.rs)):
 
-- `S3_ENDPOINT` — also the on/off switch: unset it entirely to disable
-  uploads (e.g. for a local/dry-run invocation) rather than passing
-  empty values.
-- `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`, `S3_ACCESS_KEY_SECRET`
-  — required once `S3_ENDPOINT` is set; a genuine S3-compatible bucket
-  for the actual output (`conflated.parquet`, `edits.pmtiles`,
-  `logs/<run-id>.log`), never the ephemeral per-run test buckets
-  `scripts/test-on-hetzner` creates for its own testing.
+| Prefix | Holds | Intended backing store |
+|---|---|---|
+| `PUBLIC_S3_*` | `conflated.parquet`, the PMTiles archives — the public downloads | a Bunny.net S3 instance, so objects replicate to the CDN edge |
+| `INTERNAL_S3_*` | `logs/<run-id>.log`, and future intermediates | in-datacenter object storage (e.g. Hetzner Object Storage); never needs CDN replication |
 
-`S3_ACCESS_KEY_ID`/`S3_ACCESS_KEY_SECRET` are live credentials — handle
+For each prefix:
+
+- `<prefix>_ENDPOINT` — also that bucket's on/off switch: unset it
+  entirely to disable those uploads (e.g. a local/dry-run invocation, or
+  a run that only needs one of the two buckets) rather than passing
+  empty values.
+- `<prefix>_BUCKET`, `<prefix>_REGION`, `<prefix>_ACCESS_KEY_ID`,
+  `<prefix>_ACCESS_KEY_SECRET` — required once `<prefix>_ENDPOINT` is
+  set; genuine S3-compatible buckets for the actual output, never the
+  ephemeral per-run test buckets `scripts/test-on-hetzner` creates for
+  its own testing.
+
+`*_ACCESS_KEY_ID`/`*_ACCESS_KEY_SECRET` are live credentials — handle
 them as secrets, not plain configuration. Keep them out of a command
 line (visible to anyone who can `ps` the host, and easy to leak into
 shell history or CI logs) and out of any manifest committed to a repo.
@@ -184,9 +193,11 @@ a published object is not.
 - CORS headers on `/data/*`, needed if a browser reads the outputs
   directly —
   [brawer/production#10](https://github.com/brawer/production/issues/10).
-- Reconciling the upload target: today one flat bucket
-  (`S3_BUCKET`, above), vs. the CDN’s expectation of a `data/` key
-  prefix in a dedicated public bucket.
+- The dedicated public bucket now exists (`PUBLIC_S3_*`, above,
+  separate from the internal `INTERNAL_S3_*` one). Still missing: the
+  `data/` key prefix and the immutable (dated/hashed) object names the
+  CDN contract requires — the pipeline still writes flat, mutable keys
+  (`conflated.parquet`, …).
 
 ## What to watch
 

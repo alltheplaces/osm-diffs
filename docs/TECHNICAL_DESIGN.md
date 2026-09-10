@@ -187,7 +187,7 @@ graph TD
     ATP_PARQUET --> CONFLATE(conflate)
     OSM_INDEX --> CONFLATE
     CONFLATE --> CONFLATED[conflated.parquet]
-    CONFLATED --> UPLOAD_CONFLATED(upload_conflated) --> S3A[(S3)]
+    CONFLATED --> UPLOAD_CONFLATED(upload_conflated) --> S3A[("public S3")]
 
     CONFLATED --> EXTRACT_CONFLATED_LAYERS(extract_conflated_layers)
     EXTRACT_CONFLATED_LAYERS --> OVERVIEW_LAYERS["matched.jsonl,<br/>unmatched.jsonl<br/>(minimal, no tags)"]
@@ -197,11 +197,11 @@ graph TD
     OVERVIEW_PMTILES --> JOIN_CONFLATED_TILES(join_conflated_tiles/tile-join)
     DETAIL_PMTILES --> JOIN_CONFLATED_TILES
     JOIN_CONFLATED_TILES --> CONFLATED_PMTILES[conflated.pmtiles]
-    CONFLATED_PMTILES --> UPLOAD_CONFLATED_TILES(upload_conflated_tiles) --> S3C[(S3)]
+    CONFLATED_PMTILES --> UPLOAD_CONFLATED_TILES(upload_conflated_tiles) --> S3C[("public S3")]
 
     CONFLATED --> SUGGEST_EDITS(suggest_edits) --> LAYERS["*.jsonl (for visualization)"]
     LAYERS --> RENDER_TILES("render_tiles<br/>(tippecanoe, auto zoom)") --> PMTILES[diffed-places.pmtiles]
-    PMTILES --> UPLOAD_TILES(upload_tiles) --> S3B[(S3)]
+    PMTILES --> UPLOAD_TILES(upload_tiles) --> S3B[("public S3")]
 
     classDef process fill:#fce4ec,stroke:#ad1457,stroke-width:2px,color:#4a0e28,font-weight:bold;
     class IMPORT_ATP,COLLECT_WIKI,IMPORT_OSM,CONFLATE,UPLOAD_CONFLATED,EXTRACT_CONFLATED_LAYERS,RENDER_CONFLATED_OVERVIEW,RENDER_CONFLATED_DETAIL,JOIN_CONFLATED_TILES,UPLOAD_CONFLATED_TILES,SUGGEST_EDITS,RENDER_TILES,UPLOAD_TILES process;
@@ -220,10 +220,10 @@ the same directory skips whatever it already built (this also applies
 below the step level, e.g. within `import_atp`/`import_osm`’s own
 sub-stages) — though that memoization isn’t fully reliable yet, see
 [#704](https://github.com/alltheplaces/osm-diffs/issues/704).
-`pipeline.log` itself is uploaded to S3 at the very end of a run no
-matter how the run went (see
-[`upload_logs`](../src/pipeline/upload.rs)), so a failed run’s log is
-never lost.
+`pipeline.log` itself is uploaded — to the *internal* S3 bucket, not the
+CDN-fronted public one — at the very end of a run no matter how the run
+went (see [`upload_logs`](../src/pipeline/upload.rs)), so a failed run’s
+log is never lost.
 
 ### Pipeline steps
 
