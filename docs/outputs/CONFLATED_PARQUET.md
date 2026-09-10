@@ -152,7 +152,7 @@ pipeline produced it. It also records licensing information for both
 inputs and the output.
 
 The same document is also published as a **standalone file** next to the
-Parquet — the `sbom` resource in
+Parquet — the `bom` resource in
 [`datapackage.json`](README.md#downloading-the-current-output),
 `conflated-<date>-<hash8>.cdx.json` — so you can read the provenance, and
 verify the Parquet’s SHA-256/512, without downloading the ~750 MB file

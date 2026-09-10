@@ -208,7 +208,7 @@ that isn't a retry of the day's run, prune that day's `data/` objects
 first (pruning is explicitly fine; replacing is not).
 
 `datapackage.json`'s `version` (the anchor date) and its `conflated` /
-`sbom` resource entries are reproducible; the two PMTiles resource
+`bom` resource entries are reproducible; the two PMTiles resource
 entries carry per-run hashes (tippecanoe output isn't bit-stable) and so
 is the manifest as a whole — acceptable, since the PMTiles are a
 debugging aid, not a data product.

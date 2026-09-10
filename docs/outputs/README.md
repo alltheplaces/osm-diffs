@@ -36,7 +36,7 @@ curl -s "$host/data/datapackage.json" \
 ```
 
 The `conflated` resource is [`conflated.parquet`](CONFLATED_PARQUET.md);
-`sbom` is its [CycloneDX](CONFLATED_PARQUET.md#data-provenance)
+`bom` is its [CycloneDX](CONFLATED_PARQUET.md#data-provenance)
 provenance BOM as a standalone file. The two `*-tiles` resources are
 PMTiles archives you can open right in the browser via
 [`pmtiles.io`](https://pmtiles.io) (append

@@ -171,7 +171,7 @@ mod tests {
                 describes: None,
             },
             PublishedFile {
-                name: "sbom",
+                name: "bom",
                 path: "conflated-20260901-a1b2c3d4.cdx.json".to_string(),
                 title: "CycloneDX 1.7 provenance BOM",
                 description: "Provenance for conflated.parquet.",

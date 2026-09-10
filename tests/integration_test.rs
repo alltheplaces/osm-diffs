@@ -82,7 +82,7 @@ fn assert_publish_artifacts(workdir: &Path) -> Result<()> {
     assert_eq!(manifest["name"], "osm-diffs");
 
     let resources = manifest["resources"].as_array().context("no resources")?;
-    // conflated + sbom + conflated-tiles + edits-tiles
+    // conflated + bom + conflated-tiles + edits-tiles
     assert_eq!(resources.len(), 4, "manifest resources: {resources:#?}");
     // Resource name -> the workdir file it was uploaded from (the local
     // copies keep their undated names; only the S3 key and the manifest
@@ -91,7 +91,7 @@ fn assert_publish_artifacts(workdir: &Path) -> Result<()> {
         "conflated" => "conflated.parquet",
         "conflated-tiles" => "conflated.pmtiles",
         "edits-tiles" => "diffed-places.pmtiles",
-        "sbom" => "", // exists under its manifest path
+        "bom" => "", // exists under its manifest path
         other => panic!("unexpected resource {other}"),
     };
     for r in resources {
@@ -101,11 +101,7 @@ fn assert_publish_artifacts(workdir: &Path) -> Result<()> {
             "resource path {rel:?} must be a bare relative basename"
         );
         let name = r["name"].as_str().context("resource name")?;
-        let local = workdir.join(if name == "sbom" {
-            rel
-        } else {
-            local_name(name)
-        });
+        let local = workdir.join(if name == "bom" { rel } else { local_name(name) });
         assert!(
             local.exists(),
             "resource {name}: {} not in workdir",
@@ -123,13 +119,13 @@ fn assert_publish_artifacts(workdir: &Path) -> Result<()> {
         );
     }
 
-    let sbom = resources
+    let bom_resource = resources
         .iter()
-        .find(|r| r["name"] == "sbom")
-        .context("no sbom resource")?;
-    assert_eq!(sbom["describes"], "conflated");
+        .find(|r| r["name"] == "bom")
+        .context("no bom resource")?;
+    assert_eq!(bom_resource["describes"], "conflated");
     let bom: serde_json::Value = serde_json::from_slice(&std::fs::read(
-        workdir.join(sbom["path"].as_str().unwrap()),
+        workdir.join(bom_resource["path"].as_str().unwrap()),
     )?)
     .context("the .cdx.json sidecar is not valid JSON")?;
     assert_eq!(bom["bomFormat"], "CycloneDX");
@@ -166,7 +162,7 @@ fn test_reproducible_artifacts() -> Result<()> {
             .as_array()
             .unwrap()
             .iter()
-            .find(|r| r["name"] == "sbom")
+            .find(|r| r["name"] == "bom")
             .unwrap()["path"]
             .as_str()
             .unwrap()

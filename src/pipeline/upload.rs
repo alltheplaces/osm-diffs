@@ -499,7 +499,7 @@ pub fn upload_conflated_bom(
     let basename = format!("conflated-{date}-{}.cdx.json", &conflated.sha256[..8]);
     let path = workdir.join(&basename);
     write_json_pretty(&path, &bom)?;
-    let digest = crate::utils::hash_file(&path, progress, "hash.sbom", false)?;
+    let digest = crate::utils::hash_file(&path, progress, "hash.bom", false)?;
     upload_file(
         Bucket::Public,
         &path,
@@ -509,7 +509,10 @@ pub fn upload_conflated_bom(
         progress,
     )?;
     Ok(PublishedFile {
-        name: "sbom",
+        // "bom", not "sbom": this CycloneDX document describes a *data*
+        // file (its `metadata.component.type` is `data`), not a software
+        // build.
+        name: "bom",
         path: basename,
         title: "CycloneDX 1.7 provenance BOM",
         description: "Provenance for conflated.parquet: pipeline version, the two inputs, \
