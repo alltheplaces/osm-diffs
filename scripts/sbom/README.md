@@ -2,7 +2,7 @@
 
 This directory holds the scripts that generate the Software Bill of
 Materials (SBOM) — including a small Cryptographic Bill of Materials,
-CBOM — for the `osm-diffs` container image. See
+CBOM — for the `osmdiffs` container image. See
 [`../../docs/SUPPLY_CHAIN_SECURITY.md`](../../docs/SUPPLY_CHAIN_SECURITY.md)
 for what an SBOM/CBOM actually is and why we publish one; this document
 only covers how it’s implemented here.
@@ -36,13 +36,13 @@ Linux version, compiler versions, library versions, ...) using standard
 tools such as `apk`, `sed`, `awk` and `grep`. It then:
 
 1. Runs `cargo cyclonedx` to get the Rust dependency graph for the
-   `osm-diffs` binary, in CycloneDX 1.5 format (the newest that
+   `osmdiffs` binary, in CycloneDX 1.5 format (the newest that
    `cargo cyclonedx` currently supports).
 2. Pipes that through [`pipeline.jq`](pipeline.jq), which upgrades it to
    CycloneDX 1.7 and enriches it with build-environment metadata,
    supplier/license info, the CBOM facts (a `cryptographic-asset`
    component for TLS 1.3, plus `crypto:tls:*`/`crypto:catrust:*`
-   custom properties on the `osm-diffs` component — see that file’s own
+   custom properties on the `osmdiffs` component — see that file’s own
    comments for why a curated CA root bundle isn’t a good fit for
    CycloneDX’s `certificate` cryptographic-asset type), and the
    vendored “data” components (`id-tagging-schema`,
@@ -83,7 +83,7 @@ Some of the facts it normally reads via Alpine’s `apk` (the exact musl,
 sqlite and zlib versions statically linked into `tippecanoe`, the Alpine
 version itself) aren’t available outside of that build environment. In
 that case, the script inserts placeholder values, prints a warning, and
-marks the SBOM as `osm-diffs:sbom:devBuild` in its metadata properties.
+marks the SBOM as `osmdiffs:sbom:devBuild` in its metadata properties.
 Such an SBOM is useful for checking structural or semantic validity (e.g.
 with `cyclonedx-cli validate`), but must not be treated as an accurate
 description of a production build.

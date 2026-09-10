@@ -1,5 +1,5 @@
 [package]
-name = "osm-diffs"
+name = "osmdiffs"
 version = "0.8.3"
 edition = "2024"
 license = "MIT"

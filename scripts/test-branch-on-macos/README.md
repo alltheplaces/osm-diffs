@@ -17,18 +17,18 @@ hardware actually matters.
 ## Usage
 
 ```console
-$ ./test_macos.py run --workdir /tmp/osm-diffs-workdir
+$ ./test_macos.py run --workdir /tmp/osmdiffs-workdir
 + cargo build --release
    ...
-Starting monitor -> /tmp/osm-diffs-workdir/macos_monitor.log
-+ .../target/release/osm-diffs run --workdir /tmp/osm-diffs-workdir
+Starting monitor -> /tmp/osmdiffs-workdir/macos_monitor.log
++ .../target/release/osmdiffs run --workdir /tmp/osmdiffs-workdir
    ...
 
-pipeline.log: /tmp/osm-diffs-workdir/pipeline.log
-monitor log:  /tmp/osm-diffs-workdir/macos_monitor.log
+pipeline.log: /tmp/osmdiffs-workdir/pipeline.log
+monitor log:  /tmp/osmdiffs-workdir/macos_monitor.log
 ```
 
-- `--skip-build` reuses the existing `target/release/osm-diffs` as-is,
+- `--skip-build` reuses the existing `target/release/osmdiffs` as-is,
   for re-running against the same binary without waiting on a rebuild.
 - `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/
   its metadata sidecar, so re-running doesn't re-download the ~94GB
@@ -43,7 +43,7 @@ separate stop step to remember.
 ## Why the monitor re-resolves the PID every iteration
 
 An earlier, ad hoc version of this script (used during the PR 665
-experiment) resolved `osm-diffs`'s PID once at the top and never again.
+experiment) resolved `osmdiffs`'s PID once at the top and never again.
 When the process wasn't running yet at that exact moment -- or restarted
 during the run -- every subsequent `ps -p` call just failed with
 "Invalid process id" for the rest of the run, silently producing a

@@ -251,7 +251,7 @@ mod tests {
 
     /// The full serialized manifest, pinned to a committed fixture so any
     /// change to its shape shows up in review. Regenerate with
-    /// `UPDATE_GOLDEN=1 cargo test -p osm-diffs datapackage`.
+    /// `UPDATE_GOLDEN=1 cargo test -p osmdiffs datapackage`.
     #[test]
     fn matches_golden() -> Result<()> {
         let workdir = TempDir::new()?;

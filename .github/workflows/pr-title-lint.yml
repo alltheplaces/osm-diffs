@@ -36,7 +36,7 @@ jobs:
   # adds a label, never removes one, so a title edit won't strip a label a
   # human applied for an unrelated reason (e.g. good first issue).
   #
-  # Note: "!" here means the PR breaks osm-diffs' OUTPUT SCHEMA
+  # Note: "!" here means the PR breaks osmdiffs' OUTPUT SCHEMA
   # (conflated.parquet), not that it breaks some public API -- see
   # docs/CONTRIBUTING.md and docs/RELEASING.md's "Choosing the version
   # number". It's a hint for scripts/cut-release.sh, not a substitute for the

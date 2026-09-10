@@ -99,7 +99,7 @@ fi
 # ── scan for Conventional-Commits breaking markers since the last release ───
 # This is a hint, not a rule: choosing the version is still your call (see
 # "Choosing the version number" in docs/RELEASING.md). Reminder, since it's
-# easy to reach for the usual meaning by reflex: on osm-diffs, "!" flags a
+# easy to reach for the usual meaning by reflex: on osmdiffs, "!" flags a
 # commit that breaks the OUTPUT SCHEMA (conflated.parquet), not one that
 # breaks some public API -- see docs/CONTRIBUTING.md.
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"

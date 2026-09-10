@@ -1,6 +1,6 @@
 # Testing on cloud machines
 
-Two small tools: `cloud_test.py` runs the full `osm-diffs` pipeline on
+Two small tools: `cloud_test.py` runs the full `osmdiffs` pipeline on
 real Hetzner Cloud hardware, without repeating the manual VM setup by
 hand each time -- create a VM, either build a development branch's
 `Containerfile` natively on it or pull an already-built image (e.g. a
@@ -28,7 +28,7 @@ the results carefully -- it just removes the repetitive, error-prone
 parts of getting there.
 
 **Not a general-purpose deployment tool.** This has nothing to do with
-how `osm-diffs` actually gets deployed to production (see
+how `osmdiffs` actually gets deployed to production (see
 `../../docs/RELEASING.md` for that) -- it only exists to make ad hoc
 experiments on cloud hardware repeatable.
 
@@ -112,7 +112,7 @@ restart a run with a clean workdir without tearing down the VM
 | `up` | Create the server + volume, deploy, start the pipeline. |
 | `create` | Server + a formatted, attached, automounted data volume. Also collects `sysinfo` and runs `fio` once, automatically. Prints the exact `destroy` command needed to remove what it just created. |
 | `deploy` | `--branch NAME`: clone/update the given branch on an existing server and build it via the project's `Containerfile`, natively (see below for why that matters). `--image REF`: pull an already-built image instead (e.g. `ghcr.io/brawer/osmdiffs:v1.2.3`) -- either way, binaries get extracted the same way, so bare-mode `start` works unchanged regardless of which path was used. |
-| `start` | Launch `osm-diffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-download the ~94GB planet file. `--containerized --mem-limit SIZE --cpu-limit N` runs `podman run` against the image `deploy` produced instead of the bare extracted binary, for real cgroup accounting -- see below. |
+| `start` | Launch `osmdiffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-download the ~94GB planet file. `--containerized --mem-limit SIZE --cpu-limit N` runs `podman run` against the image `deploy` produced instead of the bare extracted binary, for real cgroup accounting -- see below. |
 | `status` | `systemctl status` for the run, plus `df` and the last few `pipeline.log` lines. |
 | `fio` | Random-read benchmark of the attached volume (the same command used by hand throughout the PR 665 experiment -- see `#667`). Re-runnable anytime, e.g. to check whether a result was a one-off blip. |
 | `sysinfo` | OS/kernel version, CPU model, memory, swap, disk layout, cgroup limits -- environment facts that turned out to matter for interpreting results but aren't anything this tool controls. |
@@ -172,7 +172,7 @@ $ ./cloud_test.py up --name reg1 --ssh-key my-key \
   `INTERNAL_S3_*`) at this one bucket. Omit it and the container just
   doesn't upload anywhere, same as the pipeline's own
   `*_S3_ENDPOINT`-unset behavior.
-- `--run-id ID` is passed straight through as `osm-diffs run --run_id
+- `--run-id ID` is passed straight through as `osmdiffs run --run_id
   ID`, embedded into the output's provenance BOM.
 
 Recommended: keep all of this pointed at a Hetzner project (and S3
@@ -184,7 +184,7 @@ something always goes wrong during testing.
 
 ```console
 $ ./cloud_test.py validate \
-    --bucket-name osm-diffs-container-test-1 --bucket-region fsn1 \
+    --bucket-name osmdiffs-container-test-1 --bucket-region fsn1 \
     --pipeline-log logs/reg1/pipeline.log \
     --mem-limit 4g --expect-pipeline-version 0.8.0 --min-atp-features 100000
 ```
@@ -307,7 +307,7 @@ to attach/detach.
 
 There's no separate state file tracking which instances exist --
 `list`/`destroy` query Hetzner directly (servers/volumes tagged with the
-`osm-diffs-test` label), and `workdir_for()` re-derives the mounted
+`osmdiffs-test` label), and `workdir_for()` re-derives the mounted
 volume's path from `hcloud volume describe` each time rather than
 caching it. Nothing here can drift out of sync with what Hetzner
 actually has, at the cost of an extra API round-trip per command --

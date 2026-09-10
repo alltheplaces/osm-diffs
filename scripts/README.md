@@ -39,7 +39,7 @@ process these fit into.
 
 ## Testing development branches
 
-Unrelated to how `osm-diffs` actually ships to production — this is for
+Unrelated to how `osmdiffs` actually ships to production — this is for
 ad hoc validation of a branch before it lands.
 
 - [`test-on-hetzner/`](test-on-hetzner/README.md): spins

@@ -26,7 +26,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
-BINARY = REPO_ROOT / "target" / "release" / "osm-diffs"
+BINARY = REPO_ROOT / "target" / "release" / "osmdiffs"
 PLANET_FILES = ("planet-latest.osm.pbf", "planet-latest.osm.pbf.meta.json")
 
 

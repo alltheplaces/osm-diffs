@@ -219,11 +219,12 @@ const SERIAL_NAMESPACE: Uuid = Uuid::from_bytes([
 /// rather than a fresh random v4 UUID per run, which made every BOM
 /// (and, with it, `conflated.parquet`) non-reproducible.
 fn deterministic_serial_number(atp: &AtpMetadata, osm: &OsmMetadata) -> Result<String> {
-    let atp_sha = atp.sha256.as_deref().context(
-        "AllThePlaces metadata has no sha256 (workdir from an older osm-diffs version?)",
-    )?;
+    let atp_sha = atp
+        .sha256
+        .as_deref()
+        .context("AllThePlaces metadata has no sha256 (workdir from an older osmdiffs version?)")?;
     let osm_sha = osm.sha256.as_deref().context(
-        "OpenStreetMap metadata has no sha256 (workdir from an older osm-diffs version?)",
+        "OpenStreetMap metadata has no sha256 (workdir from an older osmdiffs version?)",
     )?;
     Ok(
         Uuid::new_v5(&SERIAL_NAMESPACE, format!("{atp_sha}:{osm_sha}").as_bytes())
@@ -232,14 +233,14 @@ fn deterministic_serial_number(atp: &AtpMetadata, osm: &OsmMetadata) -> Result<S
     )
 }
 
-/// The `osm-diffs` pipeline itself, as the tool that produced the output
+/// The `osmdiffs` pipeline itself, as the tool that produced the output
 /// (distinct from `metadata.component`, which describes that output).
 fn tool_component() -> Value {
     let version = env!("CARGO_PKG_VERSION");
     json!({
-        "bom-ref": "tool-osm-diffs",
+        "bom-ref": "tool-osmdiffs",
         "type": "application",
-        "name": "osm-diffs",
+        "name": "osmdiffs",
         "version": version,
         "purl": format!("pkg:github/brawer/osmdiffs@{version}"),
         "externalReferences": [
@@ -250,7 +251,7 @@ fn tool_component() -> Value {
 }
 
 /// `conflated.parquet` itself -- the data file this BOM is embedded
-/// into, described as data (not as the `osm-diffs` tool that built it,
+/// into, described as data (not as the `osmdiffs` tool that built it,
 /// which is `tool_component()` instead).
 ///
 /// `output` (`Some` only for the standalone sidecar BOM) adds the
@@ -297,9 +298,10 @@ fn atp_component(atp: &AtpMetadata) -> Result<Value> {
     // workdir left over from before this field existed -- matches how
     // AtpMetadata's other fields are already treated: don't build a BOM
     // from data we don't actually trust.
-    let sha256 = atp.sha256.as_deref().context(
-        "AllThePlaces metadata has no sha256 (workdir from an older osm-diffs version?)",
-    )?;
+    let sha256 = atp
+        .sha256
+        .as_deref()
+        .context("AllThePlaces metadata has no sha256 (workdir from an older osmdiffs version?)")?;
     Ok(json!({
         "bom-ref": "alltheplaces.zip",
         "type": "data",
@@ -333,7 +335,7 @@ fn osm_component(osm: &OsmMetadata) -> Result<Value> {
     // workdir left over from before this field existed -- matches how
     // atp_component treats AtpMetadata::sha256.
     let sha256 = osm.sha256.as_deref().context(
-        "OpenStreetMap metadata has no sha256 (workdir from an older osm-diffs version?)",
+        "OpenStreetMap metadata has no sha256 (workdir from an older osmdiffs version?)",
     )?;
     Ok(json!({
         // Reference PLANET_PBF_FILENAME rather than a literal, so this
@@ -362,11 +364,11 @@ fn osm_component(osm: &OsmMetadata) -> Result<Value> {
 /// which inputs to produce which output.
 fn formulation(pipeline_run_id: &str, time_start: &str, time_end: &str) -> Value {
     json!({
-        "bom-ref": "formula-osm-diffs-build",
+        "bom-ref": "formula-osmdiffs-build",
         "workflows": [{
-            "bom-ref": "workflow-osm-diffs-build",
+            "bom-ref": "workflow-osmdiffs-build",
             "uid": pipeline_run_id,
-            "name": "osm-diffs conflation",
+            "name": "osmdiffs conflation",
             "taskTypes": ["build"],
             // This pipeline runs as a weekly batch job (see
             // docs/SUPPLY_CHAIN_SECURITY.md), not on manual/ad-hoc
@@ -374,13 +376,13 @@ fn formulation(pipeline_run_id: &str, time_start: &str, time_end: &str) -> Value
             // "uid" too: one trigger firing is one pipeline run here,
             // so there's no separate identifier worth inventing.
             "trigger": {
-                "bom-ref": "trigger-osm-diffs-schedule",
+                "bom-ref": "trigger-osmdiffs-schedule",
                 "uid": pipeline_run_id,
                 "type": "scheduled",
             },
             "timeStart": time_start,
             "timeEnd": time_end,
-            "resourceReferences": [{"ref": "tool-osm-diffs"}],
+            "resourceReferences": [{"ref": "tool-osmdiffs"}],
             "inputs": [
                 {"resource": {"ref": "alltheplaces.zip"}},
                 {"resource": {"ref": pipeline::PLANET_PBF_FILENAME}},
@@ -454,9 +456,9 @@ mod tests {
         assert_eq!(bom["metadata"]["supplier"]["name"], "Sascha Brawer");
 
         let tool = &bom["metadata"]["tools"]["components"][0];
-        assert_eq!(tool["bom-ref"], "tool-osm-diffs");
+        assert_eq!(tool["bom-ref"], "tool-osmdiffs");
         assert_eq!(tool["type"], "application");
-        assert_eq!(tool["name"], "osm-diffs");
+        assert_eq!(tool["name"], "osmdiffs");
         assert_eq!(tool["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             tool["purl"],
@@ -557,7 +559,7 @@ mod tests {
 
         // Every bom-ref the formulation refers to must actually exist.
         let known_refs = [
-            "tool-osm-diffs",
+            "tool-osmdiffs",
             "conflated.parquet",
             "alltheplaces.zip",
             pipeline::PLANET_PBF_FILENAME,
@@ -570,7 +572,7 @@ mod tests {
         // span -- the workflow's own `uid` is the only run-specific field.
         assert_eq!(workflow["timeStart"], "2026-03-04T15:16:17Z");
         assert_eq!(workflow["timeEnd"], bom["metadata"]["timestamp"]);
-        assert_eq!(workflow["resourceReferences"][0]["ref"], "tool-osm-diffs");
+        assert_eq!(workflow["resourceReferences"][0]["ref"], "tool-osmdiffs");
         for input in workflow["inputs"].as_array().expect("inputs") {
             let r = input["resource"]["ref"].as_str().expect("ref");
             assert!(known_refs.contains(&r), "unknown bom-ref {r}");

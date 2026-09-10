@@ -1959,7 +1959,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
-name = "osm-diffs"
+name = "osm_pbf_iter"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1998ded392212fad69f25e7510fc34d095f585fc5e67282b99f2a4f993cbcfe6"
+dependencies = [
+ "libdeflater",
+ "protobuf_iter",
+]
+
+[[package]]
+name = "osmdiffs"
 version = "0.8.3"
 dependencies = [
  "anyhow",
@@ -2008,16 +2018,6 @@ dependencies = [
  "webpki-roots",
  "wkb",
  "wkt",
-]
-
-[[package]]
-name = "osm_pbf_iter"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1998ded392212fad69f25e7510fc34d095f585fc5e67282b99f2a4f993cbcfe6"
-dependencies = [
- "libdeflater",
- "protobuf_iter",
 ]
 
 [[package]]

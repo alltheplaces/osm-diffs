@@ -21,7 +21,7 @@ ignore = [
   # XML attribute/namespace handling. Both only matter for untrusted input;
   # `s3` uses quick-xml solely to parse XML *responses from the S3 endpoint
   # we're uploading to*, not attacker-controlled input, so this isn't
-  # exploitable in how osm-diffs uses it. Fix is upstream in `s3`, not
+  # exploitable in how osmdiffs uses it. Fix is upstream in `s3`, not
   # something we can patch here (no git/path deps -- see docs/CONTRIBUTING.md
   # on why): https://github.com/lvillis/s3-rs/pull/15 bumps it to >=0.41.0.
   # Re-run `cargo deny check advisories` after that merges and a new `s3`

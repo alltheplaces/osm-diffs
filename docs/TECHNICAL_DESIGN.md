@@ -1,4 +1,4 @@
-# Technical design: `osm-diffs`
+# Technical design: `osmdiffs`
 
 Status: Work in Progress — see [“Status”](#status) at the end of this
 document for what’s still ahead.

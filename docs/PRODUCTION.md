@@ -1,6 +1,6 @@
-# Running `osm-diffs` in production
+# Running `osmdiffs` in production
 
-`osm-diffs` doesn’t run anywhere permanent yet — see
+`osmdiffs` doesn’t run anywhere permanent yet — see
 [`TECHNICAL_DESIGN.md`](TECHNICAL_DESIGN.md)’s “Status” section. This
 document isn’t a description of an existing deployment; it’s the
 operational knowledge gathered from testing on Hetzner Cloud
