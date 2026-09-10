@@ -15,15 +15,7 @@ use anyhow::Result;
 use geo::Geometry;
 use geo_traits::to_geo::ToGeoGeometry;
 use std::{path::Path, time::SystemTime};
-use wkb::{
-    Endianness,
-    reader::read_wkb,
-    writer::{WriteOptions, write_geometry},
-};
-
-const WKB_WRITE_OPTIONS: WriteOptions = WriteOptions {
-    endianness: Endianness::LittleEndian,
-};
+use wkb::reader::read_wkb;
 
 pub struct GeometryTable<'a> {
     blobs: BlobTable<'a>,
@@ -43,7 +35,7 @@ impl<'a> GeometryTable<'a> {
         chunk_bytes: usize,
     ) -> Result<GeometryTable<'a>> {
         let blobs = BlobTable::create(
-            geometries.map(|(key, geometry)| (key, encode_wkb(&geometry))),
+            geometries.map(|(key, geometry)| (key, crate::geometry::encode_wkb(&geometry))),
             workdir,
             out,
             chunk_bytes,
@@ -74,12 +66,6 @@ impl<'a> GeometryTable<'a> {
     pub fn modified(&self) -> Result<SystemTime> {
         self.blobs.modified()
     }
-}
-
-fn encode_wkb(geometry: &Geometry) -> Vec<u8> {
-    let mut buf = Vec::new();
-    write_geometry(&mut buf, geometry, &WKB_WRITE_OPTIONS).expect("wkb encoding failed");
-    buf
 }
 
 fn decode_wkb(key: u64, wkb: &[u8]) -> Geometry {
