@@ -35,7 +35,7 @@ DEFAULT_IMAGE = "debian-13"
 DEFAULT_LOCATION = "hel1"
 DEFAULT_TYPE = "cpx32"
 DEFAULT_VOLUME_SIZE = 400
-DEFAULT_REPO = "https://github.com/alltheplaces/osm-diffs.git"
+DEFAULT_REPO = "https://github.com/brawer/osmdiffs.git"
 LABEL_KEY = "osm-diffs-test"
 REMOTE_DIR = "/root/osm-diffs"
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -171,7 +171,7 @@ def label_flags(name, branch=None, image=None):
         labels.append(f"{LABEL_KEY}-branch={branch.replace('/', '--')}")
     if image:
         # Same restriction as branch names, plus image refs also use ":"
-        # for the tag (e.g. ghcr.io/alltheplaces/osm-diffs:v1.2.3).
+        # for the tag (e.g. ghcr.io/brawer/osmdiffs:v1.2.3).
         sanitized = image.replace("/", "--").replace(":", "--")
         labels.append(f"{LABEL_KEY}-image={sanitized}")
     flags = []
@@ -697,7 +697,7 @@ def main():
         group.add_argument("--branch", help="git branch/ref to build")
         group.add_argument(
             "--image",
-            help="pull this image instead of building (e.g. ghcr.io/alltheplaces/osm-diffs:v1.2.3)",
+            help="pull this image instead of building (e.g. ghcr.io/brawer/osmdiffs:v1.2.3)",
         )
         p.add_argument("--repo", default=DEFAULT_REPO, help="ignored with --image")
 

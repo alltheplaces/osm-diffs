@@ -48,7 +48,7 @@ coverage instrumentation), exported as
 [Cobertura XML](https://www.baeldung.com/cobertura) — originally a
 Java coverage tool’s report format, now emitted by plenty of non-Java
 tools too, `cargo-llvm-cov` among them — and uploaded to
-[Coveralls](https://coveralls.io/github/alltheplaces/osm-diffs?branch=main)
+[Coveralls](https://coveralls.io/github/brawer/osmdiffs?branch=main)
 — that’s the little coverage badge at the top of the main
 [`README.md`](../README.md). CI fails if line coverage drops below the
 threshold set in `test.yml`.
@@ -62,10 +62,10 @@ On a PR, findings post directly on the review thread.
 `codeql.yml` also runs on a weekly schedule against `main`, independent
 of any PR or push; *those* findings don’t have a PR to comment on, so
 they show up instead as code scanning alerts on the repository’s
-[Security tab](https://github.com/alltheplaces/osm-diffs/security).
+[Security tab](https://github.com/brawer/osmdiffs/security).
 
 `main` is protected by a
-[ruleset](https://github.com/alltheplaces/osm-diffs/rules/11597145)
+[ruleset](https://github.com/brawer/osmdiffs/rules/11597145)
 requiring `test.yml`’s tests and a clean CodeQL scan before merging —
 so a red check there isn’t optional. `test-container.yml` isn’t part
 of that ruleset (it only triggers on the paths above, and GitHub can’t

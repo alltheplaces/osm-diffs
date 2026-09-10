@@ -59,12 +59,12 @@ thing. Two concrete examples of what this data enables, both written by
 [Claude Code](https://claude.com/claude-code) straight from a run’s
 logs, with no other tooling built for the purpose:
 
-- [alltheplaces/osm-diffs#665, comment](https://github.com/alltheplaces/osm-diffs/pull/665#issuecomment-5303068423) —
+- [brawer/osmdiffs#665, comment](https://github.com/brawer/osmdiffs/pull/665#issuecomment-5303068423) —
   a full memory/disk/timing analysis of a full-planet run on
   memory-constrained hardware, validating the design assumption behind
   `OsmFeatureIndex` (relying on the OS page cache instead of an
   explicit decode cache).
-- [alltheplaces/osm-diffs#636](https://github.com/alltheplaces/osm-diffs/issues/636) —
+- [brawer/osmdiffs#636](https://github.com/brawer/osmdiffs/issues/636) —
   a survey of OpenStreetMap data-quality issues, found by combing
   through `pipeline.log`’s `could not build geometry` warnings and
   cross-referencing the flagged features against the live OSM API.

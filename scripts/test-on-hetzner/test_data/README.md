@@ -7,7 +7,7 @@ what these logs actually look like, and as fixtures for exercising
 
 Assembled from real values captured during the PR 665 (`OsmFeatureIndex`/
 `conflate`) Hetzner experiment (see
-[#667](https://github.com/alltheplaces/osm-diffs/issues/667)) -- real
+[#667](https://github.com/brawer/osmdiffs/issues/667)) -- real
 message text, field names, and typical magnitudes -- but reassembled and
 re-timestamped into one small, internally-consistent example rather than
 a verbatim capture of any single run. In particular, `pipeline.log`

@@ -113,7 +113,7 @@ else . end |
   ]
 } |
 .metadata.component.supplier = {name: "All The Places", url: ["https://github.com/alltheplaces/"]} |
-.metadata.component.purl = "pkg:github/alltheplaces/osm-diffs@" + .metadata.component.version |
+.metadata.component.purl = "pkg:github/brawer/osmdiffs@" + .metadata.component.version |
 .metadata.component.licenses = [{expression: "MIT"}] |
 .components |= [ .[] | add_supplier ] |
 

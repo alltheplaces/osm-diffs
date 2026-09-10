@@ -67,7 +67,7 @@ A few things worth calling out that aren’t obvious from the above:
   changeset number resolves, via OSM’s own public API, to the account
   that made the edit — unlike a node/way/relation ID, which only
   identifies a place. See
-  [#730](https://github.com/alltheplaces/osm-diffs/issues/730) for the
+  [#730](https://github.com/brawer/osmdiffs/issues/730) for the
   full reasoning and trade-offs.
 - **`osm.way_members`/`osm.relation_members` are `null`, not an empty
   list, when they don’t apply** — a `null` `way_members` means “this

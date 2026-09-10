@@ -110,7 +110,7 @@ enum ChainEnd {
 /// after every cutting round and only stops once a round leaves the piece
 /// count unchanged, so `A,B` and `B,D,E,A` end up merged back into the
 /// closed ring they were always meant to be. See
-/// <https://github.com/alltheplaces/osm-diffs/issues/537>.
+/// <https://github.com/brawer/osmdiffs/issues/537>.
 ///
 /// # Duplicate segments
 /// A segment shared verbatim by two ways in the *same* direction (as
@@ -124,7 +124,7 @@ enum ChainEnd {
 /// (`cut_round`, via [`line_key`]) for exactly this reason -- the same
 /// idea as [`PolygonAssembler`](super::PolygonAssembler)'s duplicate-ring
 /// guard, applied to open pieces instead of closed rings. See
-/// <https://github.com/alltheplaces/osm-diffs/issues/541>.
+/// <https://github.com/brawer/osmdiffs/issues/541>.
 pub struct LineStitcher {
     lines: Vec<VecDeque<Coord<f64>>>,
     reference_x: Option<f64>,
@@ -201,7 +201,7 @@ impl LineStitcher {
     /// `power=generator`/`generator:source=solar` multipolygon mapped
     /// panel-by-panel), every single one can collapse this way, and the
     /// whole relation's geometry vanishes. See
-    /// <https://github.com/alltheplaces/osm-diffs/issues/635>.
+    /// <https://github.com/brawer/osmdiffs/issues/635>.
     fn compact(&mut self) {
         for _ in 0..40 {
             if self.total_coords <= self.max_coordinates {
@@ -634,7 +634,7 @@ mod tests {
         }
     }
 
-    /// https://github.com/alltheplaces/osm-diffs/issues/537, mirroring
+    /// https://github.com/brawer/osmdiffs/issues/537, mirroring
     /// osm-testdata grid fixture `7/742`: two ways sharing both endpoints
     /// but doubling back on one segment (`A→B→C` and `C→B→D→E→A`) stitch
     /// into a chain that revisits `B`. Cutting that "spike" away should
@@ -665,7 +665,7 @@ mod tests {
         }
     }
 
-    /// https://github.com/alltheplaces/osm-diffs/issues/541, mirroring
+    /// https://github.com/brawer/osmdiffs/issues/541, mirroring
     /// osm-testdata grid fixture `7/711`: two ways sharing the same
     /// segment in the *same* direction (`A→B→C` and `B→C→D→A`) -- unlike
     /// a spike's reversal -- should still close into the one ring they
@@ -769,7 +769,7 @@ mod tests {
 
     #[test]
     fn many_small_closed_loops_survive_compaction_as_valid_rings() {
-        // Regression test for https://github.com/alltheplaces/osm-diffs/issues/635:
+        // Regression test for https://github.com/brawer/osmdiffs/issues/635:
         // a large `type=multipolygon` relation whose member ways are each
         // individually closed but untagged (so `assemble_ways` routes them
         // through `build_line`/`LineStitcher` rather than `build_ring`,

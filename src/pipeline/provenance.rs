@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 /// GitHub repository this pipeline is published from -- used to build
 /// `metadata.tools.components[0]`'s external references and purl.
-const REPO_URL: &str = "https://github.com/alltheplaces/osm-diffs";
+const REPO_URL: &str = "https://github.com/brawer/osmdiffs";
 
 /// Canonical license text URL for `ODbL-1.0`, shared with
 /// `pipeline::datapackage` (the Frictionless manifest's `licenses`).
@@ -197,7 +197,9 @@ fn anchor_timestamp(atp: &AtpMetadata, osm: &OsmMetadata) -> UtcDateTime {
 /// BOM's `serialNumber` -- a constant so the derivation
 /// `UUIDv5(namespace, atp_sha256 ":" osm_sha256)` is entirely
 /// self-contained. Generated once as `UUIDv5(URL,
-/// "https://github.com/alltheplaces/osm-diffs#provenance-bom-serial")`.
+/// "https://github.com/alltheplaces/osm-diffs#provenance-bom-serial")`
+/// -- the repo's pre-2026-09 path, kept verbatim because the value is
+/// frozen.
 const SERIAL_NAMESPACE: Uuid = Uuid::from_bytes([
     0x18, 0x68, 0x7b, 0x2b, 0xa4, 0x9c, 0x56, 0x07, 0xb1, 0xe7, 0xf7, 0x40, 0xda, 0xee, 0x83, 0x2f,
 ]);
@@ -229,7 +231,7 @@ fn tool_component() -> Value {
         "type": "application",
         "name": "osm-diffs",
         "version": version,
-        "purl": format!("pkg:github/alltheplaces/osm-diffs@{version}"),
+        "purl": format!("pkg:github/brawer/osmdiffs@{version}"),
         "externalReferences": [
             {"type": "vcs", "url": REPO_URL},
             {"type": "release-notes", "url": format!("{REPO_URL}/releases/tag/{version}")},
@@ -448,10 +450,7 @@ mod tests {
         assert_eq!(tool["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             tool["purl"],
-            format!(
-                "pkg:github/alltheplaces/osm-diffs@{}",
-                env!("CARGO_PKG_VERSION")
-            )
+            format!("pkg:github/brawer/osmdiffs@{}", env!("CARGO_PKG_VERSION"))
         );
 
         let output = &bom["metadata"]["component"];

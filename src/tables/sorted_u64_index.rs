@@ -16,7 +16,7 @@
 //! win when a table's working set doesn't fit in RAM and lookups are
 //! genuinely page-fault-bound, but that wasn't validated, so plain binary
 //! search is what's here. See
-//! <https://github.com/alltheplaces/osm-diffs/issues/620> for the
+//! <https://github.com/brawer/osmdiffs/issues/620> for the
 //! benchmark and discussion.
 
 /// Returns the index of `key` in `keys`, or `None` if it is absent.

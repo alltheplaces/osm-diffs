@@ -21,7 +21,7 @@
 FROM rust:1.98.0-alpine3.23 AS builder
 
 ARG BUILD_TIMESTAMP
-ARG IMAGE_NAME=alltheplaces/osm-diffs
+ARG IMAGE_NAME=brawer/osmdiffs
 ARG TIPPECANOE_VERSION=2.79.0
 # Commit that the "2.79.0" tag pointed to as of 2026-08-08. Pinned by
 # commit, not by tag/branch name: git tags are mutable references that
@@ -129,7 +129,7 @@ ENTRYPOINT ["/app/osm-diffs"]
 LABEL  \
     org.opencontainers.image.authors="Sascha Brawer <sascha@brawer.ch>"  \
     org.opencontainers.image.created=$BUILD_TIMESTAMP  \
-    org.opencontainers.image.description="Data pipeline for alltheplaces/osm-diffs"  \
+    org.opencontainers.image.description="Data pipeline for brawer/osmdiffs"  \
     org.opencontainers.image.licenses="MIT"  \
     org.opencontainers.image.revision=$VCS_REF  \
     org.opencontainers.image.source=$VCS_URL  \
