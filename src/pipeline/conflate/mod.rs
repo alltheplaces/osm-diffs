@@ -228,10 +228,13 @@ fn write_conflated(
         std::io::Result::Ok(row)
     }))?;
     progress.set_length(row_count.load(Ordering::SeqCst));
-    let provenance_bom =
-        crate::pipeline::provenance::build_bom_for_conflated_parquet(workdir, pipeline_run_id)
-            .context("could not assemble provenance BOM")?
-            .to_string();
+    let provenance_bom = crate::pipeline::provenance::build_bom_for_conflated_parquet(
+        workdir,
+        pipeline_run_id,
+        None, // the standalone sidecar BOM carries the file's own hashes; this embedded copy can't
+    )
+    .context("could not assemble provenance BOM")?
+    .to_string();
     let mut writer =
         ParquetWriter::create(out, /* max_rows_per_group */ 200_000, &provenance_bom)?;
     for row in sorted {

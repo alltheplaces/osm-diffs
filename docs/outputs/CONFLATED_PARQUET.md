@@ -151,6 +151,15 @@ OpenStreetMap snapshot went into this file, and which version of our
 pipeline produced it. It also records licensing information for both
 inputs and the output.
 
+The same document is also published as a **standalone file** next to the
+Parquet — the `bom` resource in
+[`datapackage.json`](README.md#downloading-the-current-output),
+`conflated-<date>-<hash8>.cdx.json` — so you can read the provenance, and
+verify the Parquet’s SHA-256/512, without downloading the ~750 MB file
+first. It is byte-for-byte reproducible from the same inputs (timestamps
+are anchored to the inputs, not the wall clock; the `serialNumber` is
+derived from the inputs’ hashes).
+
 ```sh
 duckdb -c "
 SELECT

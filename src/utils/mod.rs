@@ -6,6 +6,11 @@
 
 pub(crate) mod parquet;
 
+use anyhow::{Context, Result};
+use aws_lc_rs::digest::{Context as DigestContext, SHA256, SHA512};
+use indicatif::MultiProgress;
+use std::{fs::File, io::Read, path::Path};
+
 /// Renders `bytes` as a lowercase hex string, e.g. for a digest.
 pub(crate) fn to_hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
@@ -18,10 +23,65 @@ pub(crate) fn to_hex(bytes: &[u8]) -> String {
 
 /// Lowercase-hex SHA-256 of `bytes`, via the same `aws_lc_rs` crypto
 /// library this crate already uses for TLS -- for small in-memory
-/// values (to hash a whole file, stream it instead).
+/// values (to hash a whole file, stream it via [`hash_file`] instead).
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
-    use aws_lc_rs::digest::{SHA256, digest};
-    to_hex(digest(&SHA256, bytes).as_ref())
+    to_hex(aws_lc_rs::digest::digest(&SHA256, bytes).as_ref())
+}
+
+/// The size and digests of a file, from [`hash_file`].
+pub(crate) struct FileDigest {
+    pub bytes: u64,
+    /// Lowercase hex.
+    pub sha256: String,
+    /// Lowercase hex; `Some` only when `also_sha512` was requested.
+    pub sha512: Option<String>,
+}
+
+/// Reads `path` sequentially in fixed-size chunks and returns its size
+/// and SHA-256 (plus SHA-512 when `also_sha512`), via the same
+/// `aws_lc_rs` crypto library this crate already uses for TLS, not a
+/// second hashing implementation. `label` names the progress bar.
+///
+/// Deliberately a plain buffered read, not `memmap2::Mmap`: some of the
+/// files hashed here are large (`conflated.parquet` ~750 MB,
+/// `conflated.pmtiles` ~1.8 GB), and mmap'ing something that large risks
+/// inflating RSS/page-cache accounting in ways that could trip this
+/// pipeline's own cgroup memory-limit warnings (see
+/// `pipeline::memstats`); a small fixed buffer keeps memory flat
+/// regardless of file size.
+pub(crate) fn hash_file(
+    path: &Path,
+    progress: &MultiProgress,
+    label: &str,
+    also_sha512: bool,
+) -> Result<FileDigest> {
+    let mut file = File::open(path).with_context(|| format!("could not open `{path:?}`"))?;
+    let len = file.metadata().map(|m| m.len()).ok();
+    let bar = crate::make_download_bar(progress, label, len);
+    let mut sha256 = DigestContext::new(&SHA256);
+    let mut sha512 = also_sha512.then(|| DigestContext::new(&SHA512));
+    let mut buf = vec![0u8; 8 * 1024 * 1024]; // 8 MiB
+    let mut total: u64 = 0;
+    loop {
+        let n = file
+            .read(&mut buf)
+            .with_context(|| format!("could not read `{path:?}`"))?;
+        if n == 0 {
+            break;
+        }
+        sha256.update(&buf[..n]);
+        if let Some(h) = sha512.as_mut() {
+            h.update(&buf[..n]);
+        }
+        total += n as u64;
+        bar.inc(n as u64);
+    }
+    bar.finish();
+    Ok(FileDigest {
+        bytes: total,
+        sha256: to_hex(sha256.finish().as_ref()),
+        sha512: sha512.map(|h| to_hex(h.finish().as_ref())),
+    })
 }
 
 /// (De)serializes [`time::UtcDateTime`] as RFC 3339 strings, e.g.

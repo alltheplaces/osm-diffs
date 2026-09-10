@@ -21,6 +21,8 @@
 //! local/dev run, now per-bucket.
 
 use crate::make_download_bar;
+use crate::pipeline::datapackage::{self, PublishedFile};
+use crate::pipeline::provenance;
 use anyhow::{Context, Result};
 use indicatif::MultiProgress;
 use std::{env, fs::File, io::Read, path::Path};
@@ -256,6 +258,24 @@ fn upload_file_with_config(
     };
     let client = config.client()?;
 
+    // Only `data/datapackage.json` is meant to be overwritten (see
+    // docs/PRODUCTION.md). Every other key carries a content hash, so an
+    // identical rebuild re-PUTs identical bytes -- harmless -- but a key
+    // that already exists with *different* bytes means a second run this
+    // day published something else under the same name, and the CDN will
+    // serve stale bytes until the long TTL expires. Warn, don't fail: a
+    // mid-run retry legitimately re-uploads its own partial objects.
+    if destination != "data/datapackage.json"
+        && let Ok(existing) = client.objects().head(&config.bucket, destination).send()
+    {
+        log::warn!(
+            s3_url = format!("s3://{}/{}", config.bucket, destination),
+            existing_etag = existing.etag.as_deref();
+            "upload_file: object already exists, replacing it -- if this isn't a retry of \
+             today's run, prune this day's data/ objects and re-run"
+        );
+    }
+
     let mut file = File::open(path).with_context(|| format!("cannot open {path:?}"))?;
     let num_bytes = file.metadata()?.len();
     let progress_bar = make_download_bar(progress, progress_label, Some(num_bytes));
@@ -320,37 +340,265 @@ fn upload_file_with_config(
     Ok(())
 }
 
-pub fn upload_tiles(tiles: &Path, progress: &MultiProgress) -> Result<()> {
+/// Canonical host for the absolute URLs the standalone BOM records
+/// (`externalReferences[].url`). A staging hostname during the CDN
+/// migration (see `docs/PRODUCTION.md`); renamed at cutover. The
+/// manifest itself carries only relative `resources[].path`, so it has
+/// no hostname to rename.
+const PUBLIC_HOST: &str = "https://osmdiffs.dandelis.ch";
+
+/// A file `publish` hashes, names `data/<stem>-<date>-<hash8>.<ext>`,
+/// uploads to the public bucket, and returns as a [`PublishedFile`] for
+/// the manifest. All the per-artifact constants in one place.
+struct Publish {
+    /// Frictionless resource name.
+    name: &'static str,
+    /// Filename stem before `-<date>-<hash8>`.
+    stem: &'static str,
+    ext: &'static str,
+    title: &'static str,
+    description: &'static str,
+    /// Frictionless resource `type`. `"file"` for everything here: the
+    /// GeoParquet's WKB geometry columns don't fit a Frictionless Table
+    /// Schema, and the PMTiles are opaque binary -- consumers use a
+    /// GeoParquet / PMTiles reader, not Frictionless's own table parser.
+    frictionless_type: &'static str,
+    /// Frictionless `format` (bare, e.g. `"parquet"`).
+    format: &'static str,
+    /// Media type -- also the S3 `Content-Type`.
+    mediatype: &'static str,
+    describes: Option<&'static str>,
+    /// Also compute SHA-512 (only `conflated.parquet` needs it, for its
+    /// standalone BOM).
+    sha512: bool,
+}
+
+const CONFLATED: Publish = Publish {
+    name: "conflated",
+    stem: "conflated",
+    ext: "parquet",
+    title: "Conflated AllThePlaces/OpenStreetMap dataset (GeoParquet)",
+    description: "This dated object is immutable; the manifest's version is what advances.",
+    frictionless_type: "file",
+    format: "parquet",
+    mediatype: "application/vnd.apache.parquet",
+    describes: None,
+    sha512: true,
+};
+
+const CONFLATED_TILES: Publish = Publish {
+    name: "conflated-tiles",
+    stem: "conflated",
+    ext: "pmtiles",
+    title: "conflated.pmtiles \u{2014} visualization of conflated.parquet",
+    description: "Debugging aid for reviewing the matching step. Not a data product; \
+        structure may change, or production may stop, without notice.",
+    frictionless_type: "file",
+    format: "pmtiles",
+    mediatype: "application/vnd.pmtiles",
+    describes: None,
+    sha512: false,
+};
+
+const EDITS_TILES: Publish = Publish {
+    name: "edits-tiles",
+    stem: "edits",
+    ext: "pmtiles",
+    title: "edits.pmtiles \u{2014} visualization of suggested edits",
+    description: "Debugging aid. Not a data product; may change, or stop being produced, \
+        without notice.",
+    frictionless_type: "file",
+    format: "pmtiles",
+    mediatype: "application/vnd.pmtiles",
+    describes: None,
+    sha512: false,
+};
+
+/// Hashes `local`, uploads it to `data/<stem>-<date>-<hash8>.<ext>` on
+/// the public bucket, and returns its manifest entry.
+fn publish(
+    spec: &Publish,
+    local: &Path,
+    date: &str,
+    progress: &MultiProgress,
+) -> Result<PublishedFile> {
+    let digest =
+        crate::utils::hash_file(local, progress, &format!("hash.{}", spec.name), spec.sha512)?;
+    let basename = format!("{}-{date}-{}.{}", spec.stem, &digest.sha256[..8], spec.ext);
     upload_file(
         Bucket::Public,
-        tiles,
-        "edits.pmtiles",
-        "application/vnd.pmtiles",
-        "upload.tiles",
+        local,
+        &format!("data/{basename}"),
+        spec.mediatype,
+        &format!("upload.{}", spec.name),
+        progress,
+    )?;
+    Ok(PublishedFile {
+        name: spec.name,
+        path: basename,
+        title: spec.title,
+        description: spec.description,
+        frictionless_type: spec.frictionless_type,
+        format: spec.format,
+        mediatype: spec.mediatype,
+        bytes: digest.bytes,
+        sha256: digest.sha256,
+        sha512: digest.sha512,
+        describes: spec.describes,
+    })
+}
+
+pub fn upload_tiles(tiles: &Path, date: &str, progress: &MultiProgress) -> Result<PublishedFile> {
+    publish(&EDITS_TILES, tiles, date, progress)
+}
+
+pub fn upload_conflated(
+    conflated: &Path,
+    date: &str,
+    progress: &MultiProgress,
+) -> Result<PublishedFile> {
+    publish(&CONFLATED, conflated, date, progress)
+}
+
+pub fn upload_conflated_tiles(
+    tiles: &Path,
+    date: &str,
+    progress: &MultiProgress,
+) -> Result<PublishedFile> {
+    publish(&CONFLATED_TILES, tiles, date, progress)
+}
+
+/// Writes the standalone CycloneDX BOM sidecar for `conflated.parquet`
+/// -- `data/conflated-<date>-<parquet-hash8>.cdx.json` -- and uploads
+/// it. Same document as the copy embedded in the Parquet, plus the
+/// finished file's own SHA-256/512 and its published-at URL (see
+/// [`provenance::OutputFileRef`]). Paired to the Parquet by hash8, so
+/// the two basenames line up.
+pub fn upload_conflated_bom(
+    workdir: &Path,
+    pipeline_run_id: &str,
+    conflated: &PublishedFile,
+    date: &str,
+    progress: &MultiProgress,
+) -> Result<PublishedFile> {
+    let distribution_url = format!("{PUBLIC_HOST}/data/{}", conflated.path);
+    let bom = provenance::build_bom_for_conflated_parquet(
+        workdir,
+        pipeline_run_id,
+        Some(provenance::OutputFileRef {
+            sha256: &conflated.sha256,
+            sha512: conflated
+                .sha512
+                .as_deref()
+                .context("conflated.parquet's SHA-512 was not computed")?,
+            distribution_url: &distribution_url,
+        }),
+    )
+    .context("could not assemble standalone provenance BOM")?;
+
+    let basename = format!("conflated-{date}-{}.cdx.json", &conflated.sha256[..8]);
+    let path = workdir.join(&basename);
+    write_json_pretty(&path, &bom)?;
+    let digest = crate::utils::hash_file(&path, progress, "hash.bom", false)?;
+    upload_file(
+        Bucket::Public,
+        &path,
+        &format!("data/{basename}"),
+        "application/vnd.cyclonedx+json; version=1.7",
+        "upload.conflated-bom",
+        progress,
+    )?;
+    Ok(PublishedFile {
+        // "bom", not "sbom": this CycloneDX document describes a *data*
+        // file (its `metadata.component.type` is `data`), not a software
+        // build.
+        name: "bom",
+        path: basename,
+        title: "CycloneDX 1.7 provenance BOM",
+        description: "Provenance for conflated.parquet: pipeline version, the two inputs, \
+            and the Parquet's own SHA-256/512.",
+        frictionless_type: "json",
+        format: "json",
+        mediatype: "application/vnd.cyclonedx+json; version=1.7",
+        bytes: digest.bytes,
+        sha256: digest.sha256,
+        sha512: None,
+        describes: Some("conflated"),
+    })
+}
+
+/// Builds `data/datapackage.json` over everything published this run and
+/// uploads it -- **last**, so "listed in the manifest" always implies
+/// "already uploaded". The one object at a stable key.
+pub fn upload_datapackage(
+    workdir: &Path,
+    anchor: time::UtcDateTime,
+    published: &[PublishedFile],
+    progress: &MultiProgress,
+) -> Result<()> {
+    let doc = datapackage::build_datapackage(workdir, anchor, published)?;
+    verify_manifest(&doc, published)?;
+    let path = workdir.join("datapackage.json");
+    write_json_pretty(&path, &doc)?;
+    upload_file(
+        Bucket::Public,
+        &path,
+        "data/datapackage.json",
+        "application/json",
+        "upload.datapackage",
         progress,
     )
 }
 
-pub fn upload_conflated(conflated: &Path, progress: &MultiProgress) -> Result<()> {
-    upload_file(
-        Bucket::Public,
-        conflated,
-        "conflated.parquet",
-        "application/vnd.apache.parquet",
-        "upload.conflated",
-        progress,
-    )
+/// Post-build self-check: every resource the manifest lists must be one
+/// this run actually uploaded, with a matching size and hash and a bare
+/// relative path. Catches a wiring bug before the manifest goes live.
+fn verify_manifest(doc: &serde_json::Value, published: &[PublishedFile]) -> Result<()> {
+    let resources = doc["resources"]
+        .as_array()
+        .context("built manifest has no resources array")?;
+    anyhow::ensure!(
+        resources.len() == published.len(),
+        "manifest lists {} resources but {} were published",
+        resources.len(),
+        published.len()
+    );
+    for (r, f) in resources.iter().zip(published) {
+        anyhow::ensure!(
+            !f.path.contains('/') && !f.path.contains(':'),
+            "resource path {:?} is not a bare relative basename",
+            f.path
+        );
+        anyhow::ensure!(
+            r["path"] == f.path.as_str(),
+            "manifest resource path {:?} != published {:?}",
+            r["path"],
+            f.path
+        );
+        anyhow::ensure!(
+            r["bytes"] == f.bytes,
+            "manifest byte size for {} disagrees with what was uploaded",
+            f.path
+        );
+        anyhow::ensure!(
+            r["hash"] == format!("sha256:{}", f.sha256),
+            "manifest hash for {} disagrees with what was uploaded",
+            f.path
+        );
+    }
+    Ok(())
 }
 
-pub fn upload_conflated_tiles(tiles: &Path, progress: &MultiProgress) -> Result<()> {
-    upload_file(
-        Bucket::Public,
-        tiles,
-        "conflated.pmtiles",
-        "application/vnd.pmtiles",
-        "upload.conflated-tiles",
-        progress,
-    )
+/// Writes `value` as pretty JSON to `path` via a temp file and rename,
+/// so a crash mid-write leaves no half-written file for a restart.
+fn write_json_pretty(path: &Path, value: &serde_json::Value) -> Result<()> {
+    let mut tmp = path.to_path_buf();
+    tmp.add_extension("tmp");
+    let data = serde_json::to_vec_pretty(value)?;
+    std::fs::write(&tmp, &data).with_context(|| format!("failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("failed to rename {} to {}", tmp.display(), path.display()))?;
+    Ok(())
 }
 
 /// Uploads `workdir`'s `pipeline.log` to `logs/<run-id>.log` on the

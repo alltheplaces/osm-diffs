@@ -173,8 +173,7 @@ That negative match is the load-bearing invariant:
 
 > **`data/datapackage.json` is the only object the pipeline may
 > overwrite. Every other published file must carry an immutable URL** —
-> a date or content hash in the name (`conflated-<date>.parquet`,
-> `conflated-<date>.pmtiles`, the dated CycloneDX BOM, …).
+> a date *and* a content hash in the name.
 
 Reusing a name for changed bytes would serve stale data from cache for
 up to the long TTL, recoverable only with a manual purge. Upload the
@@ -185,19 +184,49 @@ Pruning old runs to save storage is fine — a deleted dated object just
 starts returning 404, and the CDN caches that 404 correctly. Replacing
 a published object is not.
 
+### What the pipeline publishes
+
+The `PUBLIC_S3_*` bucket, under `data/`:
+
+| Key | Notes |
+|---|---|
+| `data/conflated-<YYYYMMDD>-<hash8>.parquet` | the data product |
+| `data/conflated-<YYYYMMDD>-<hash8>.cdx.json` | its CycloneDX provenance BOM as a standalone sidecar (`<hash8>` is the Parquet's, so the two names pair) |
+| `data/conflated-<YYYYMMDD>-<hash8>.pmtiles` | visualization of the above; debugging aid |
+| `data/edits-<YYYYMMDD>-<hash8>.pmtiles` | visualization of suggested edits; debugging aid |
+| `data/datapackage.json` | the manifest, overwritten each run, uploaded last |
+
+`<YYYYMMDD>` is `max(AllThePlaces run start, OSM planet replication)` —
+the same input-anchored date the provenance BOM uses (see
+[`TECHNICAL_DESIGN.md`](TECHNICAL_DESIGN.md#reproducibility-and-restarts)),
+so a rebuild from the same inputs produces the same names. `<hash8>` is
+the first 8 hex characters of the file's SHA-256: an identical rebuild
+re-`PUT`s an identical key (a no-op); a *different* dataset the same day
+lands on a different key rather than clobbering the first. The pipeline
+logs a `WARN` if it's about to replace an existing dated object — if
+that isn't a retry of the day's run, prune that day's `data/` objects
+first (pruning is explicitly fine; replacing is not).
+
+`datapackage.json`'s `version` (the anchor date) and its `conflated` /
+`bom` resource entries are reproducible; the two PMTiles resource
+entries carry per-run hashes (tippecanoe output isn't bit-stable) and so
+is the manifest as a whole — acceptable, since the PMTiles are a
+debugging aid, not a data product.
+
+**First production run:** do it by hand and check
+`https://<host>/data/datapackage.json` on the CDN looks right before
+wiring up a cron — nothing here has run against a real public bucket +
+CDN yet.
+
 ### Still open
 
-- Whether `osmdiffs` adopts a `datapackage.json` manifest at all, or a
-  lighter scheme — tracked with the `osmviews` work in
-  [brawer/osmviews#110](https://github.com/brawer/osmviews/issues/110).
 - CORS headers on `/data/*`, needed if a browser reads the outputs
   directly —
   [brawer/production#10](https://github.com/brawer/production/issues/10).
-- The dedicated public bucket now exists (`PUBLIC_S3_*`, above,
-  separate from the internal `INTERNAL_S3_*` one). Still missing: the
-  `data/` key prefix and the immutable (dated/hashed) object names the
-  CDN contract requires — the pipeline still writes flat, mutable keys
-  (`conflated.parquet`, …).
+- The permanent public hostname (the standalone BOM's absolute URLs use
+  the staging `osmdiffs.dandelis.ch` for now; renamed at cutover).
+- A `--prune` helper for old `data/` runs — today pruning is a manual
+  `aws s3 rm`.
 
 ## What to watch
 

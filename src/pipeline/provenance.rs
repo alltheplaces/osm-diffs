@@ -25,15 +25,42 @@ use uuid::Uuid;
 /// `metadata.tools.components[0]`'s external references and purl.
 const REPO_URL: &str = "https://github.com/alltheplaces/osm-diffs";
 
+/// Canonical license text URL for `ODbL-1.0`, shared with
+/// `pipeline::datapackage` (the Frictionless manifest's `licenses`).
+pub(crate) const ODBL_URL: &str = "https://opendatacommons.org/licenses/odbl/1-0/";
+
+/// Extra facts a *standalone* BOM file can carry that the copy embedded
+/// in `conflated.parquet` cannot: the finished Parquet file's own
+/// digests (a file can't hash itself before it's written) and the URL it
+/// is published at. Passed to [`build_bom_for_conflated_parquet`] as
+/// `Some` only for the sidecar `conflated-<date>-<hash8>.cdx.json`.
+pub(crate) struct OutputFileRef<'a> {
+    pub sha256: &'a str,
+    pub sha512: &'a str,
+    pub distribution_url: &'a str,
+}
+
+/// The input-anchored timestamp every reproducible artifact keys off:
+/// `max(AllThePlaces run start, OSM planet replication)`, read back from
+/// the metadata `import_atp`/`import_osm` left in `workdir`. See
+/// [`build_bom_for_conflated_parquet`].
+pub(crate) fn read_anchor(workdir: &Path) -> Result<UtcDateTime> {
+    let atp = pipeline::read_cached_atp_metadata(workdir)
+        .context("could not read AllThePlaces provenance")?;
+    let osm = pipeline::read_cached_metadata(workdir)
+        .context("could not read OpenStreetMap provenance")?;
+    Ok(anchor_timestamp(&atp, &osm))
+}
+
 /// Standard OSM attribution notice, distinct from the license itself:
 /// ODbL requires reproducing this in any produced/derivative work, and
 /// that requirement propagates to `conflated.parquet` the same way the
 /// license itself does (see `output_component()`).
 const OSM_COPYRIGHT: &str = "© OpenStreetMap contributors";
 
-/// Canonical license text URLs, confirmed against the SPDX license
-/// list's own `seeAlso` references for `ODbL-1.0` / `CC0-1.0`.
-const ODBL_URL: &str = "https://opendatacommons.org/licenses/odbl/1-0/";
+/// Canonical license text URL for `CC0-1.0`, confirmed against the SPDX
+/// license list's own `seeAlso` references (the `ODbL-1.0` companion is
+/// [`ODBL_URL`], defined above since it's shared with `datapackage`).
 const CC0_URL: &str = "https://creativecommons.org/publicdomain/zero/1.0/legalcode";
 
 /// Minutes of the OpenStreetMap Foundation's Licensing Working Group
@@ -110,7 +137,15 @@ fn license_external_reference(url: &str) -> Value {
 /// volume -- produces a byte-identical BOM. `pipeline_run_id` (from
 /// `--run_id`) is the one field that legitimately identifies this
 /// particular execution rather than the data.
-pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) -> Result<Value> {
+///
+/// `output` is `Some` only when building the standalone sidecar BOM
+/// file (see [`OutputFileRef`]); `None` for the copy embedded into the
+/// Parquet's own metadata.
+pub fn build_bom_for_conflated_parquet(
+    workdir: &Path,
+    pipeline_run_id: &str,
+    output: Option<OutputFileRef<'_>>,
+) -> Result<Value> {
     let atp_metadata = pipeline::read_cached_atp_metadata(workdir)
         .context("could not read AllThePlaces provenance")?;
     let osm_metadata = pipeline::read_cached_metadata(workdir)
@@ -130,7 +165,7 @@ pub fn build_bom_for_conflated_parquet(workdir: &Path, pipeline_run_id: &str) ->
             "tools": {
                 "components": [tool_component()],
             },
-            "component": output_component(&anchor),
+            "component": output_component(&anchor, output.as_ref()),
         },
         "components": [
             atp_component(&atp_metadata)?,
@@ -205,13 +240,21 @@ fn tool_component() -> Value {
 /// `conflated.parquet` itself -- the data file this BOM is embedded
 /// into, described as data (not as the `osm-diffs` tool that built it,
 /// which is `tool_component()` instead).
-fn output_component(run_timestamp: &str) -> Value {
-    json!({
+///
+/// `output` (`Some` only for the standalone sidecar BOM) adds the
+/// finished file's SHA-256/512 and its published-at URL -- facts the
+/// embedded copy can't carry.
+fn output_component(anchor: &str, output: Option<&OutputFileRef>) -> Value {
+    let mut external_references = vec![
+        json!({"type": "documentation", "url": format!("{REPO_URL}/blob/main/docs/outputs/CONFLATED_PARQUET.md")}),
+        license_external_reference(ODBL_URL),
+    ];
+    let mut component = json!({
         "bom-ref": "conflated.parquet",
         "type": "data",
         "name": "conflated.parquet",
         "mime-type": "application/vnd.apache.parquet",
-        "version": run_timestamp,
+        "version": anchor,
         "description": "Conflated AllThePlaces/OpenStreetMap dataset.",
         // ODbL, not CC0: ODbL's share-alike clause propagates to any
         // produced/derivative work incorporating OpenStreetMap data,
@@ -220,12 +263,17 @@ fn output_component(run_timestamp: &str) -> Value {
         // attribution notice below.
         "licenses": license("ODbL-1.0", ODBL_URL),
         "copyright": OSM_COPYRIGHT,
-        "externalReferences": [
-            {"type": "documentation", "url": format!("{REPO_URL}/blob/main/docs/outputs/CONFLATED_PARQUET.md")},
-            license_external_reference(ODBL_URL),
-        ],
         "data": [{"type": "dataset"}],
-    })
+    });
+    if let Some(o) = output {
+        component["hashes"] = json!([
+            {"alg": "SHA-256", "content": o.sha256},
+            {"alg": "SHA-512", "content": o.sha512},
+        ]);
+        external_references.push(json!({"type": "distribution", "url": o.distribution_url}));
+    }
+    component["externalReferences"] = Value::Array(external_references);
+    component
 }
 
 fn atp_component(atp: &AtpMetadata) -> Result<Value> {
@@ -380,7 +428,7 @@ mod tests {
         let workdir = TempDir::new()?;
         write_fixtures(workdir.path())?;
 
-        let bom = build_bom_for_conflated_parquet(workdir.path(), "k8s-job-42")?;
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "k8s-job-42", None)?;
 
         assert_eq!(bom["bomFormat"], "CycloneDX");
         assert_eq!(bom["specVersion"], "1.7");
@@ -533,7 +581,7 @@ mod tests {
         let workdir = TempDir::new()?;
         write_fixtures(workdir.path())?;
 
-        let bom = build_bom_for_conflated_parquet(workdir.path(), "")?;
+        let bom = build_bom_for_conflated_parquet(workdir.path(), "", None)?;
         assert_eq!(bom["formulation"][0]["workflows"][0]["uid"], "");
         assert_eq!(bom["formulation"][0]["workflows"][0]["trigger"]["uid"], "");
         Ok(())
@@ -542,7 +590,7 @@ mod tests {
     #[test]
     fn test_build_missing_atp_metadata() {
         let workdir = TempDir::new().expect("tempdir");
-        assert!(build_bom_for_conflated_parquet(workdir.path(), "").is_err());
+        assert!(build_bom_for_conflated_parquet(workdir.path(), "", None).is_err());
     }
 
     #[test]
@@ -553,8 +601,8 @@ mod tests {
         let workdir = TempDir::new()?;
         write_fixtures(workdir.path())?;
 
-        let first = build_bom_for_conflated_parquet(workdir.path(), "job-1")?;
-        let second = build_bom_for_conflated_parquet(workdir.path(), "job-1")?;
+        let first = build_bom_for_conflated_parquet(workdir.path(), "job-1", None)?;
+        let second = build_bom_for_conflated_parquet(workdir.path(), "job-1", None)?;
         assert_eq!(first, second);
         assert!(
             first["serialNumber"]
@@ -564,7 +612,7 @@ mod tests {
         );
 
         // A different --run_id changes only the workflow uid, nothing else.
-        let other = build_bom_for_conflated_parquet(workdir.path(), "job-2")?;
+        let other = build_bom_for_conflated_parquet(workdir.path(), "job-2", None)?;
         assert_eq!(other["serialNumber"], first["serialNumber"]);
         assert_eq!(
             other["metadata"]["timestamp"],
@@ -573,6 +621,51 @@ mod tests {
         assert_ne!(
             other["formulation"][0]["workflows"][0]["uid"],
             first["formulation"][0]["workflows"][0]["uid"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_with_output_ref_adds_hashes_and_distribution() -> Result<()> {
+        let workdir = TempDir::new()?;
+        write_fixtures(workdir.path())?;
+
+        let embedded = build_bom_for_conflated_parquet(workdir.path(), "job-1", None)?;
+        let (sha256, sha512) = ("aa".repeat(32), "bb".repeat(64));
+        let url = "https://osmdiffs.dandelis.ch/data/conflated-20260304-aabbccdd.parquet";
+        let standalone = build_bom_for_conflated_parquet(
+            workdir.path(),
+            "job-1",
+            Some(OutputFileRef {
+                sha256: &sha256,
+                sha512: &sha512,
+                distribution_url: url,
+            }),
+        )?;
+
+        // The embedded copy can't hash the file it lives in.
+        assert!(embedded["metadata"]["component"].get("hashes").is_none());
+
+        let component = &standalone["metadata"]["component"];
+        assert_eq!(component["hashes"][0]["alg"], "SHA-256");
+        assert_eq!(component["hashes"][0]["content"], sha256);
+        assert_eq!(component["hashes"][1]["alg"], "SHA-512");
+        let distribution = component["externalReferences"]
+            .as_array()
+            .expect("externalReferences")
+            .iter()
+            .find(|r| r["type"] == "distribution")
+            .expect("a distribution external reference");
+        assert_eq!(
+            distribution["url"],
+            "https://osmdiffs.dandelis.ch/data/conflated-20260304-aabbccdd.parquet"
+        );
+
+        // Everything else is unchanged from the embedded BOM.
+        assert_eq!(standalone["serialNumber"], embedded["serialNumber"]);
+        assert_eq!(
+            standalone["metadata"]["timestamp"],
+            embedded["metadata"]["timestamp"]
         );
         Ok(())
     }

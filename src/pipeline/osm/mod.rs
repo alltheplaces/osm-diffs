@@ -1,5 +1,4 @@
 use anyhow::{Context, Ok, Result, anyhow};
-use aws_lc_rs::digest::{Context as DigestContext, SHA256};
 use indicatif::MultiProgress;
 use osm_pbf_iter::{Blob, Primitive, PrimitiveBlock, RelationMemberType};
 use protobuf_iter::MessageIter;
@@ -12,9 +11,7 @@ use std::sync::mpsc::SyncSender;
 use time::UtcDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::make_download_bar;
 use crate::tables::OsmFeatures;
-use crate::utils::to_hex;
 
 mod assemble;
 mod fetch;
@@ -207,16 +204,17 @@ pub(crate) fn read_cached_metadata(workdir: &Path) -> Result<OsmMetadata> {
 /// Computes a fully-populated [`OsmMetadata`] for a freshly downloaded
 /// planet file at `pbf_path` -- its header (cheap, via [`read_header`])
 /// and the SHA-256 of its entire contents (not cheap: one dedicated
-/// sequential read pass over the whole file, see [`hash_file`]) -- and
-/// persists it to `workdir`, so a later call in the same `workdir` reads
-/// it back via [`read_cached_metadata`] instead of re-hashing.
+/// sequential read pass over the whole file, see
+/// [`crate::utils::hash_file`]) -- and persists it to `workdir`, so a
+/// later call in the same `workdir` reads it back via
+/// [`read_cached_metadata`] instead of re-hashing.
 pub(crate) fn compute_and_persist_metadata(
     pbf_path: &Path,
     workdir: &Path,
     progress: &MultiProgress,
 ) -> Result<OsmMetadata> {
     let header = read_header(pbf_path)?;
-    let sha256 = hash_file(pbf_path, progress)?;
+    let sha256 = crate::utils::hash_file(pbf_path, progress, "osm.hash      ", false)?.sha256;
     let metadata = OsmMetadata {
         sha256: Some(sha256),
         ..header
@@ -231,38 +229,6 @@ pub(crate) fn compute_and_persist_metadata(
     std::fs::rename(&tmp, &path)
         .with_context(|| format!("Failed to rename {} to {}", tmp.display(), path.display()))?;
     Ok(metadata)
-}
-
-/// Reads `path` sequentially in fixed-size chunks and returns its
-/// SHA-256 as lowercase hex, via the same `aws_lc_rs` crypto library
-/// this crate already uses for TLS (see `build_client()` in
-/// `main.rs`), not a second, separate hashing implementation.
-///
-/// Deliberately a plain buffered read, not `memmap2::Mmap` (which this
-/// crate does use elsewhere, e.g. for the AllThePlaces zip): `path`
-/// here is the OSM planet dump, tens of GB, and mmap'ing something that
-/// large risks inflating RSS/page-cache accounting in ways that could
-/// trip this pipeline's own cgroup memory-limit warnings (see
-/// `pipeline::memstats`) for no benefit -- a small fixed buffer keeps
-/// memory flat regardless of file size.
-fn hash_file(path: &Path, progress: &MultiProgress) -> Result<String> {
-    let mut file = File::open(path).with_context(|| format!("could not open file `{:?}`", path))?;
-    let len = file.metadata().map(|m| m.len()).ok();
-    let bar = make_download_bar(progress, "osm.hash      ", len);
-    let mut hasher = DigestContext::new(&SHA256);
-    let mut buf = vec![0u8; 8 * 1024 * 1024]; // 8 MiB
-    loop {
-        let n = file
-            .read(&mut buf)
-            .with_context(|| format!("could not read file `{:?}`", path))?;
-        if n == 0 {
-            break;
-        }
-        hasher.update(&buf[..n]);
-        bar.inc(n as u64);
-    }
-    bar.finish();
-    Ok(to_hex(hasher.finish().as_ref()))
 }
 
 /// Reads data blobs from OpenStreetMap PBF files.
