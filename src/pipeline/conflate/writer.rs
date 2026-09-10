@@ -599,7 +599,7 @@ impl ParquetRow {
         // correct if a caller ever does construct an OSM-only row (e.g.
         // a future "suggest creating this as a new OSM feature" flow).
         // Feature carries no precomputed position the way Place does
-        // (see https://github.com/alltheplaces/osm-diffs/issues/662), so
+        // (see https://github.com/brawer/osmdiffs/issues/662), so
         // that branch has to decode geometry and compute a centroid --
         // fine for a today-unreached path, not fine to do unconditionally.
         let s2_cell_id = if let Some(ref atp) = atp {

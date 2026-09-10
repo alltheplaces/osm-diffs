@@ -49,7 +49,7 @@ pub struct Place {
     /// only points. `pipeline::conflate` works around that by searching
     /// a radius around this cell instead of querying by actual coverage
     /// -- see
-    /// [alltheplaces/osm-diffs#700](https://github.com/alltheplaces/osm-diffs/issues/700)
+    /// [brawer/osmdiffs#700](https://github.com/brawer/osmdiffs/issues/700)
     /// for the plan to fix this once the library gains that support.
     pub s2_cell_id: u64,
     pub spider: String,
@@ -216,7 +216,7 @@ mod tests {
     }
 
     /// Regression test for
-    /// alltheplaces/osm-diffs#690: `Place::shape()` must return this
+    /// brawer/osmdiffs#690: `Place::shape()` must return this
     /// feature's real geometry, not a point reconstructed from
     /// `s2_cell_id` -- so this pins a *non-point* shape and a `coord`
     /// that's deliberately not one of its vertices (a real representative

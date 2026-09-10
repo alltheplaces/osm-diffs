@@ -1,6 +1,6 @@
 # Connector-line visualization: a zoom-runaway gotcha, and the fix
 
-Investigation note for [#775](https://github.com/alltheplaces/osm-diffs/issues/775)
+Investigation note for [#775](https://github.com/brawer/osmdiffs/issues/775)
 (visualize the ATP↔OSM offset in `conflated.pmtiles` with a connector
 line). A prototype, its measurements, and six real sample renders are
 published as an artifact:

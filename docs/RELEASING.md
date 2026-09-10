@@ -145,7 +145,7 @@ two checks described in
 done for real rather than assumed. This is exactly what was done by hand
 to confirm v0.6.9, the first release cut with `cut-release.sh` — see the
 comment trail on
-[alltheplaces/osm-diffs#562](https://github.com/alltheplaces/osm-diffs/pull/562)
+[brawer/osmdiffs#562](https://github.com/brawer/osmdiffs/pull/562)
 for that walkthrough, which is what `verify-release.sh` automates.
 
 ## Rules
@@ -219,8 +219,8 @@ for that walkthrough, which is what `verify-release.sh` automates.
 - A few low-priority, deliberately-deferred items are tracked separately
   and don’t block anything: automated freshness checks for vendored
   dependencies
-  ([#555](https://github.com/alltheplaces/osm-diffs/issues/555)), moving
+  ([#555](https://github.com/brawer/osmdiffs/issues/555)), moving
   `cargo-cyclonedx` off Alpine’s edge repo once it’s available in stable
-  ([#556](https://github.com/alltheplaces/osm-diffs/issues/556)), and
+  ([#556](https://github.com/brawer/osmdiffs/issues/556)), and
   watching for an emerging standard on index-level SBOMs for multi-arch
-  images ([#589](https://github.com/alltheplaces/osm-diffs/issues/589)).
+  images ([#589](https://github.com/brawer/osmdiffs/issues/589)).

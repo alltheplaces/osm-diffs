@@ -134,7 +134,7 @@ reusable workflow,
 that file and
 [`verify-release.sh`](../scripts/verify-release.sh) for the mechanism,
 and
-[alltheplaces/osm-diffs#608](https://github.com/alltheplaces/osm-diffs/pull/608)
+[brawer/osmdiffs#608](https://github.com/brawer/osmdiffs/pull/608)
 for this having been checked against a real release, not just assumed.
 
 We use GitHub’s native
@@ -151,7 +151,7 @@ per-architecture image gets its own SBOM and provenance attestation,
 while the top-level manifest list gets only provenance — it has no
 software content of its own to describe. This matches current
 mainstream practice; see
-[alltheplaces/osm-diffs#589](https://github.com/alltheplaces/osm-diffs/issues/589)
+[brawer/osmdiffs#589](https://github.com/brawer/osmdiffs/issues/589)
 for where it might evolve.
 
 ## Immutable releases

@@ -88,7 +88,7 @@ pub fn import_osm<'a>(
     // index-build into one undifferentiated number; not enough
     // resolution to tell which of those actually needs the memory a
     // tight `--mem-limit` run runs short on (see #711's investigation,
-    // e.g. alltheplaces/osm-diffs#711's comments for a real case where
+    // e.g. brawer/osmdiffs#711's comments for a real case where
     // that distinction mattered).
     let (pbf, fetch_metadata) = super::run_step("import_osm.fetch", || {
         fetch::fetch_planet(http_client, progress, workdir)

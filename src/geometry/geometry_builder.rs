@@ -652,7 +652,7 @@ mod tests {
         }
     }
 
-    /// https://github.com/alltheplaces/osm-diffs/issues/531: a ring made
+    /// https://github.com/brawer/osmdiffs/issues/531: a ring made
     /// of 2+ *open* member ways (rather than one already-closed way)
     /// closes once `LineStitcher` stitches them together, and in
     /// Containment mode that closed loop should be promoted to a ring --
@@ -704,7 +704,7 @@ mod tests {
         }
     }
 
-    /// The https://github.com/alltheplaces/osm-diffs/issues/533 scenario,
+    /// The https://github.com/brawer/osmdiffs/issues/533 scenario,
     /// end to end through `GeometryBuilder`: an "outline" member that's
     /// the exact union of the other members should reconstruct the full
     /// outline under `PolygonFill::Union`, not (as `Containment` would)

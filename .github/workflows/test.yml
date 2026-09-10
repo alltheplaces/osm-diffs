@@ -37,7 +37,7 @@ jobs:
     # toggled) showed it saves ~180s on a typical PR, since Cargo still
     # re-invokes rustc for much of the dependency graph even when the
     # restored target/ cache matches Cargo.lock exactly. See
-    # https://github.com/alltheplaces/osm-diffs/issues/597 for the numbers.
+    # https://github.com/brawer/osmdiffs/issues/597 for the numbers.
     env:
       RUSTC_WRAPPER: "sccache"
       SCCACHE_GHA_ENABLED: "true"

@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 /// GitHub repository this pipeline is published from -- used to build
 /// `metadata.tools.components[0]`'s external references and purl.
-const REPO_URL: &str = "https://github.com/alltheplaces/osm-diffs";
+const REPO_URL: &str = "https://github.com/brawer/osmdiffs";
 
 /// Canonical license text URL for `ODbL-1.0`, shared with
 /// `pipeline::datapackage` (the Frictionless manifest's `licenses`).
@@ -71,12 +71,22 @@ const CC0_URL: &str = "https://creativecommons.org/publicdomain/zero/1.0/legalco
 /// with this pipeline's ODbL-licensed output.
 const ATP_IN_OSM_LICENSING_DISCUSSION_URL: &str = "https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources";
 
-/// Supplier declared for this BOM and the AllThePlaces component. Copied
-/// verbatim from `scripts/sbom/merge.jq`'s `metadata.supplier` (the
-/// container-image SBOM) rather than kept in sync programmatically --
-/// the project name won't change, and if it ever does, a grep finds
-/// both places.
+/// Supplier declared for this BOM and its output component: whoever
+/// stewards this pipeline and stands behind the data it publishes. Kept
+/// in sync by grep with `scripts/sbom/merge.jq`'s `metadata.supplier`
+/// (the container-image SBOM) and `pipeline.jq`'s
+/// `metadata.component.supplier`, not programmatically.
 fn supplier() -> Value {
+    json!({
+        "name": "Sascha Brawer",
+        "url": ["https://brawer.ch"]
+    })
+}
+
+/// Supplier declared for the AllThePlaces input component only -- distinct
+/// from `supplier()`: the All The Places project, not us, supplies the
+/// scraped-POI dataset this pipeline consumes.
+fn atp_supplier() -> Value {
     json!({
         "name": "All The Places",
         "url": ["https://github.com/alltheplaces/"]
@@ -197,7 +207,9 @@ fn anchor_timestamp(atp: &AtpMetadata, osm: &OsmMetadata) -> UtcDateTime {
 /// BOM's `serialNumber` -- a constant so the derivation
 /// `UUIDv5(namespace, atp_sha256 ":" osm_sha256)` is entirely
 /// self-contained. Generated once as `UUIDv5(URL,
-/// "https://github.com/alltheplaces/osm-diffs#provenance-bom-serial")`.
+/// "https://github.com/alltheplaces/osm-diffs#provenance-bom-serial")`
+/// -- the repo's pre-2026-09 path, kept verbatim because the value is
+/// frozen.
 const SERIAL_NAMESPACE: Uuid = Uuid::from_bytes([
     0x18, 0x68, 0x7b, 0x2b, 0xa4, 0x9c, 0x56, 0x07, 0xb1, 0xe7, 0xf7, 0x40, 0xda, 0xee, 0x83, 0x2f,
 ]);
@@ -229,7 +241,7 @@ fn tool_component() -> Value {
         "type": "application",
         "name": "osm-diffs",
         "version": version,
-        "purl": format!("pkg:github/alltheplaces/osm-diffs@{version}"),
+        "purl": format!("pkg:github/brawer/osmdiffs@{version}"),
         "externalReferences": [
             {"type": "vcs", "url": REPO_URL},
             {"type": "release-notes", "url": format!("{REPO_URL}/releases/tag/{version}")},
@@ -293,7 +305,7 @@ fn atp_component(atp: &AtpMetadata) -> Result<Value> {
         "type": "data",
         "name": "alltheplaces.zip",
         "version": &start_time,
-        "supplier": supplier(),
+        "supplier": atp_supplier(),
         "licenses": license("CC0-1.0", CC0_URL),
         "hashes": [{"alg": "SHA-256", "content": sha256}],
         "purl": format!(
@@ -439,7 +451,7 @@ mod tests {
         // 2026-03-04, which is later than the OSM snapshot, 2026-01-27),
         // not the wall clock -- so the BOM is reproducible.
         assert_eq!(bom["metadata"]["timestamp"], "2026-03-04T15:16:17Z");
-        assert_eq!(bom["metadata"]["supplier"]["name"], "All The Places");
+        assert_eq!(bom["metadata"]["supplier"]["name"], "Sascha Brawer");
 
         let tool = &bom["metadata"]["tools"]["components"][0];
         assert_eq!(tool["bom-ref"], "tool-osm-diffs");
@@ -448,10 +460,7 @@ mod tests {
         assert_eq!(tool["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             tool["purl"],
-            format!(
-                "pkg:github/alltheplaces/osm-diffs@{}",
-                env!("CARGO_PKG_VERSION")
-            )
+            format!("pkg:github/brawer/osmdiffs@{}", env!("CARGO_PKG_VERSION"))
         );
 
         let output = &bom["metadata"]["component"];

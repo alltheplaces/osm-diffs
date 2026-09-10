@@ -79,7 +79,7 @@ fn assert_publish_artifacts(workdir: &Path) -> Result<()> {
             .starts_with("https://datapackage.org/profiles/2.0/"),
         "datapackage.json is not a Frictionless v2 profile: {manifest}"
     );
-    assert_eq!(manifest["name"], "osm-diffs");
+    assert_eq!(manifest["name"], "osmdiffs");
 
     let resources = manifest["resources"].as_array().context("no resources")?;
     // conflated + bom + conflated-tiles + edits-tiles
@@ -472,7 +472,7 @@ fn assert_shops_jsonl(path: &Path) -> Result<()> {
     // OSM base version it was suggested against -- needed to detect
     // edit conflicts later (OSM's own edit API uses the version number,
     // not the changeset, for this), even though nothing uploads edits
-    // yet. Deliberately no changeset here -- see alltheplaces/osm-diffs#730.
+    // yet. Deliberately no changeset here -- see brawer/osmdiffs#730.
     for feature in &features {
         assert_eq!(feature["type"], "Feature");
         assert_eq!(feature["geometry"]["type"], "Point");

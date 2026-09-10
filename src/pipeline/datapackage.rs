@@ -24,19 +24,20 @@ use time::UtcDateTime;
 use time::format_description::well_known::Rfc3339;
 
 const SCHEMA: &str = "https://datapackage.org/profiles/2.0/datapackage.json";
-const NAME: &str = "osm-diffs";
+const NAME: &str = "osmdiffs";
 
 /// The dataset's stable identity -- the same value for every build,
 /// forever; a downstream catalog keys on it. Generated once as
 /// `UUIDv5(URL, "https://github.com/alltheplaces/osm-diffs#datapackage")`
-/// and frozen here. **Never regenerate this.**
+/// -- the repo's pre-2026-09 path, kept verbatim because the value is
+/// frozen -- and frozen here. **Never regenerate this.**
 const ID: &str = "5a01ca49-df2a-5645-8108-bb28c7ab246f";
 
 const TITLE: &str = "AllThePlaces \u{2194} OpenStreetMap conflation";
 const DESCRIPTION: &str = "For every AllThePlaces feature that plausibly maps to OpenStreetMap, \
     one row pairing it with its matched OpenStreetMap feature (or with no match). GeoParquet 2.0, \
     with an AllThePlaces geometry column and an OpenStreetMap one.";
-const HOMEPAGE: &str = "https://github.com/alltheplaces/osm-diffs";
+const HOMEPAGE: &str = "https://github.com/brawer/osmdiffs";
 
 /// One file published under `data/` -- carries everything both the S3
 /// upload and the manifest's `resources[]` entry need. Built by
@@ -200,7 +201,7 @@ mod tests {
                 .unwrap()
                 .starts_with("https://datapackage.org/profiles/2.0/")
         );
-        assert_eq!(doc["name"], "osm-diffs");
+        assert_eq!(doc["name"], "osmdiffs");
         assert_eq!(doc["id"], ID);
         // version = the anchor's date; created = its full timestamp.
         assert_eq!(doc["version"], "2026-09-01");

@@ -18,7 +18,7 @@
 #
 # Arguments (all required, passed with --arg unless noted):
 #   serial      SBOM serial number (a "urn:uuid:..." string)
-#   image       container image name, e.g. "alltheplaces/osm-diffs"
+#   image       container image name, e.g. "brawer/osmdiffs"
 #   timestamp   build timestamp, RFC 3339
 #   pipeline    (--slurpfile) the enriched osm-diffs SBOM fragment, as
 #               produced by pipeline.jq
@@ -74,8 +74,8 @@
   metadata: {
     timestamp: $timestamp,
     supplier: {
-      name: "All The Places",
-      url:  ["https://github.com/alltheplaces/"]
+      name: "Sascha Brawer",
+      url:  ["https://brawer.ch"]
     },
     lifecycles: [{phase: "build"}],
     component: {

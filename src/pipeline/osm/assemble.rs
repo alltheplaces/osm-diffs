@@ -293,7 +293,7 @@ fn assemble_ways<'a>(
                         // possible area. Route those straight to `build_line` instead of
                         // calling `build_ring` just to watch it correctly reject an
                         // unbuildable ring (and drop the feature).
-                        // See https://github.com/alltheplaces/osm-diffs/issues/627.
+                        // See https://github.com/brawer/osmdiffs/issues/627.
                         let geometry = if is_area(is_closed, way.tags())
                             && ring_is_geometrically_possible(way_members_count)
                         {
@@ -389,7 +389,7 @@ struct AssembledLeafRelations<'a> {
 /// -- e.g. `A, B, A`, a path that goes out and immediately doubles back
 /// on itself -- `build_ring` is guaranteed to return `None`, no matter
 /// what `is_area()`'s tag heuristic says. See
-/// <https://github.com/alltheplaces/osm-diffs/issues/627>.
+/// <https://github.com/brawer/osmdiffs/issues/627>.
 fn ring_is_geometrically_possible(way_members_count: usize) -> bool {
     way_members_count >= 4
 }
@@ -889,8 +889,8 @@ fn relation_type_from_feature_tags<'a>(tags: &[u32], strings: &'a StringPool) ->
 /// defined in a similar manner as multipolygons: they must contain at
 /// least one outer way, and additional ways can be used to define
 /// enclaves or exclaves"). See also
-/// <https://github.com/alltheplaces/osm-diffs/issues/533> and
-/// <https://github.com/alltheplaces/osm-diffs/issues/534> for the bug this
+/// <https://github.com/brawer/osmdiffs/issues/533> and
+/// <https://github.com/brawer/osmdiffs/issues/534> for the bug this
 /// function fixes.
 fn polygon_fill_for_relation_type(relation_type: Option<&str>) -> PolygonFill {
     match relation_type {

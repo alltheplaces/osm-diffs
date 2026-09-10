@@ -627,7 +627,7 @@ pub fn upload_logs(
     // JSON Lines here, but as of August 2026, no consensus has yet been
     // reached on what string to use, so the registration appears to be
     // stalled -- see https://github.com/wardi/jsonlines/issues/19.
-    // Tracked in alltheplaces/osm-diffs#684 to check back in August 2027.
+    // Tracked in brawer/osmdiffs#684 to check back in August 2027.
     upload_file(
         Bucket::Internal,
         &log_path,

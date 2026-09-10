@@ -35,8 +35,8 @@ def test_label_flags_sanitizes_branch_slash():
 
 
 def test_label_flags_sanitizes_image_slash_and_colon():
-    flags = ct.label_flags("myname", image="ghcr.io/alltheplaces/osm-diffs:v1.2.3")
-    assert flags[-1] == "osm-diffs-test-image=ghcr.io--alltheplaces--osm-diffs--v1.2.3"
+    flags = ct.label_flags("myname", image="ghcr.io/brawer/osmdiffs:v1.2.3")
+    assert flags[-1] == "osm-diffs-test-image=ghcr.io--brawer--osmdiffs--v1.2.3"
 
 
 def test_label_flags_no_branch_or_image():

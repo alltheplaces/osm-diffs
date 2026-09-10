@@ -12,12 +12,12 @@ time.
 Runs either bare (the pipeline binary extracted straight onto the VM)
 or, via `start --containerized`, inside `podman run --memory=/--cpus=`
 for real cgroup memory/CPU accounting -- see
-[#722](https://github.com/alltheplaces/osm-diffs/issues/722) for why
+[#722](https://github.com/brawer/osmdiffs/issues/722) for why
 that distinction matters (a bare VM run can never populate
 `pipeline.log`'s own `cgroup_*` fields; a containerized one can).
 
 This exists because staged rollouts of large pipeline changes (see e.g.
-[#655](https://github.com/alltheplaces/osm-diffs/issues/655)) call for
+[#655](https://github.com/brawer/osmdiffs/issues/655)) call for
 repeating this exact dance on cloud hardware at multiple points, not
 just once -- and doing it by hand each time is slow and error-prone (in
 one evening we hit: an accidentally-wrong OS image, a default file
@@ -111,7 +111,7 @@ restart a run with a clean workdir without tearing down the VM
 |---|---|
 | `up` | Create the server + volume, deploy, start the pipeline. |
 | `create` | Server + a formatted, attached, automounted data volume. Also collects `sysinfo` and runs `fio` once, automatically. Prints the exact `destroy` command needed to remove what it just created. |
-| `deploy` | `--branch NAME`: clone/update the given branch on an existing server and build it via the project's `Containerfile`, natively (see below for why that matters). `--image REF`: pull an already-built image instead (e.g. `ghcr.io/alltheplaces/osm-diffs:v1.2.3`) -- either way, binaries get extracted the same way, so bare-mode `start` works unchanged regardless of which path was used. |
+| `deploy` | `--branch NAME`: clone/update the given branch on an existing server and build it via the project's `Containerfile`, natively (see below for why that matters). `--image REF`: pull an already-built image instead (e.g. `ghcr.io/brawer/osmdiffs:v1.2.3`) -- either way, binaries get extracted the same way, so bare-mode `start` works unchanged regardless of which path was used. |
 | `start` | Launch `osm-diffs run` and the vmstat/disk monitor, both detached via `systemd-run`. `--clean` clears the workdir first but keeps `planet-latest.osm.pbf`/its metadata sidecar, so re-running doesn't re-download the ~94GB planet file. `--containerized --mem-limit SIZE --cpu-limit N` runs `podman run` against the image `deploy` produced instead of the bare extracted binary, for real cgroup accounting -- see below. |
 | `status` | `systemctl status` for the run, plus `df` and the last few `pipeline.log` lines. |
 | `fio` | Random-read benchmark of the attached volume (the same command used by hand throughout the PR 665 experiment -- see `#667`). Re-runnable anytime, e.g. to check whether a result was a one-off blip. |
@@ -130,7 +130,7 @@ are `cpx32` / `hel1` / a 400GB volume, all overridable.
 
 ```console
 $ ./cloud_test.py up --name reg1 --ssh-key my-key \
-    --image ghcr.io/alltheplaces/osm-diffs:v1.2.3 \
+    --image ghcr.io/brawer/osmdiffs:v1.2.3 \
     --containerized --mem-limit 4g --cpu-limit 2 \
     --regional-extract europe/switzerland
 ```
