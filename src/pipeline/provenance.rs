@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 /// GitHub repository this pipeline is published from -- used to build
 /// `metadata.tools.components[0]`'s external references and purl.
-const REPO_URL: &str = "https://github.com/alltheplaces/osm-diffs";
+const REPO_URL: &str = "https://github.com/brawer/osmdiffs";
 
 /// Canonical license text URL for `ODbL-1.0`, shared with
 /// `pipeline::datapackage` (the Frictionless manifest's `licenses`).
@@ -71,12 +71,22 @@ const CC0_URL: &str = "https://creativecommons.org/publicdomain/zero/1.0/legalco
 /// with this pipeline's ODbL-licensed output.
 const ATP_IN_OSM_LICENSING_DISCUSSION_URL: &str = "https://osmfoundation.org/wiki/Licensing_Working_Group/Minutes/2023-08-14#Ticket%232023081110000064_%E2%80%94_First_party_websites_as_sources";
 
-/// Supplier declared for this BOM and the AllThePlaces component. Copied
-/// verbatim from `scripts/sbom/merge.jq`'s `metadata.supplier` (the
-/// container-image SBOM) rather than kept in sync programmatically --
-/// the project name won't change, and if it ever does, a grep finds
-/// both places.
+/// Supplier declared for this BOM and its output component: whoever
+/// stewards this pipeline and stands behind the data it publishes. Kept
+/// in sync by grep with `scripts/sbom/merge.jq`'s `metadata.supplier`
+/// (the container-image SBOM) and `pipeline.jq`'s
+/// `metadata.component.supplier`, not programmatically.
 fn supplier() -> Value {
+    json!({
+        "name": "Sascha Brawer",
+        "url": ["https://brawer.ch"]
+    })
+}
+
+/// Supplier declared for the AllThePlaces input component only -- distinct
+/// from `supplier()`: the All The Places project, not us, supplies the
+/// scraped-POI dataset this pipeline consumes.
+fn atp_supplier() -> Value {
     json!({
         "name": "All The Places",
         "url": ["https://github.com/alltheplaces/"]
@@ -197,7 +207,9 @@ fn anchor_timestamp(atp: &AtpMetadata, osm: &OsmMetadata) -> UtcDateTime {
 /// BOM's `serialNumber` -- a constant so the derivation
 /// `UUIDv5(namespace, atp_sha256 ":" osm_sha256)` is entirely
 /// self-contained. Generated once as `UUIDv5(URL,
-/// "https://github.com/alltheplaces/osm-diffs#provenance-bom-serial")`.
+/// "https://github.com/alltheplaces/osm-diffs#provenance-bom-serial")`
+/// -- the repo's pre-2026-09 path, kept verbatim because the value is
+/// frozen.
 const SERIAL_NAMESPACE: Uuid = Uuid::from_bytes([
     0x18, 0x68, 0x7b, 0x2b, 0xa4, 0x9c, 0x56, 0x07, 0xb1, 0xe7, 0xf7, 0x40, 0xda, 0xee, 0x83, 0x2f,
 ]);
@@ -207,11 +219,12 @@ const SERIAL_NAMESPACE: Uuid = Uuid::from_bytes([
 /// rather than a fresh random v4 UUID per run, which made every BOM
 /// (and, with it, `conflated.parquet`) non-reproducible.
 fn deterministic_serial_number(atp: &AtpMetadata, osm: &OsmMetadata) -> Result<String> {
-    let atp_sha = atp.sha256.as_deref().context(
-        "AllThePlaces metadata has no sha256 (workdir from an older osm-diffs version?)",
-    )?;
+    let atp_sha = atp
+        .sha256
+        .as_deref()
+        .context("AllThePlaces metadata has no sha256 (workdir from an older osmdiffs version?)")?;
     let osm_sha = osm.sha256.as_deref().context(
-        "OpenStreetMap metadata has no sha256 (workdir from an older osm-diffs version?)",
+        "OpenStreetMap metadata has no sha256 (workdir from an older osmdiffs version?)",
     )?;
     Ok(
         Uuid::new_v5(&SERIAL_NAMESPACE, format!("{atp_sha}:{osm_sha}").as_bytes())
@@ -220,16 +233,16 @@ fn deterministic_serial_number(atp: &AtpMetadata, osm: &OsmMetadata) -> Result<S
     )
 }
 
-/// The `osm-diffs` pipeline itself, as the tool that produced the output
+/// The `osmdiffs` pipeline itself, as the tool that produced the output
 /// (distinct from `metadata.component`, which describes that output).
 fn tool_component() -> Value {
     let version = env!("CARGO_PKG_VERSION");
     json!({
-        "bom-ref": "tool-osm-diffs",
+        "bom-ref": "tool-osmdiffs",
         "type": "application",
-        "name": "osm-diffs",
+        "name": "osmdiffs",
         "version": version,
-        "purl": format!("pkg:github/alltheplaces/osm-diffs@{version}"),
+        "purl": format!("pkg:github/brawer/osmdiffs@{version}"),
         "externalReferences": [
             {"type": "vcs", "url": REPO_URL},
             {"type": "release-notes", "url": format!("{REPO_URL}/releases/tag/{version}")},
@@ -238,7 +251,7 @@ fn tool_component() -> Value {
 }
 
 /// `conflated.parquet` itself -- the data file this BOM is embedded
-/// into, described as data (not as the `osm-diffs` tool that built it,
+/// into, described as data (not as the `osmdiffs` tool that built it,
 /// which is `tool_component()` instead).
 ///
 /// `output` (`Some` only for the standalone sidecar BOM) adds the
@@ -285,15 +298,16 @@ fn atp_component(atp: &AtpMetadata) -> Result<Value> {
     // workdir left over from before this field existed -- matches how
     // AtpMetadata's other fields are already treated: don't build a BOM
     // from data we don't actually trust.
-    let sha256 = atp.sha256.as_deref().context(
-        "AllThePlaces metadata has no sha256 (workdir from an older osm-diffs version?)",
-    )?;
+    let sha256 = atp
+        .sha256
+        .as_deref()
+        .context("AllThePlaces metadata has no sha256 (workdir from an older osmdiffs version?)")?;
     Ok(json!({
         "bom-ref": "alltheplaces.zip",
         "type": "data",
         "name": "alltheplaces.zip",
         "version": &start_time,
-        "supplier": supplier(),
+        "supplier": atp_supplier(),
         "licenses": license("CC0-1.0", CC0_URL),
         "hashes": [{"alg": "SHA-256", "content": sha256}],
         "purl": format!(
@@ -321,7 +335,7 @@ fn osm_component(osm: &OsmMetadata) -> Result<Value> {
     // workdir left over from before this field existed -- matches how
     // atp_component treats AtpMetadata::sha256.
     let sha256 = osm.sha256.as_deref().context(
-        "OpenStreetMap metadata has no sha256 (workdir from an older osm-diffs version?)",
+        "OpenStreetMap metadata has no sha256 (workdir from an older osmdiffs version?)",
     )?;
     Ok(json!({
         // Reference PLANET_PBF_FILENAME rather than a literal, so this
@@ -350,11 +364,11 @@ fn osm_component(osm: &OsmMetadata) -> Result<Value> {
 /// which inputs to produce which output.
 fn formulation(pipeline_run_id: &str, time_start: &str, time_end: &str) -> Value {
     json!({
-        "bom-ref": "formula-osm-diffs-build",
+        "bom-ref": "formula-osmdiffs-build",
         "workflows": [{
-            "bom-ref": "workflow-osm-diffs-build",
+            "bom-ref": "workflow-osmdiffs-build",
             "uid": pipeline_run_id,
-            "name": "osm-diffs conflation",
+            "name": "osmdiffs conflation",
             "taskTypes": ["build"],
             // This pipeline runs as a weekly batch job (see
             // docs/SUPPLY_CHAIN_SECURITY.md), not on manual/ad-hoc
@@ -362,13 +376,13 @@ fn formulation(pipeline_run_id: &str, time_start: &str, time_end: &str) -> Value
             // "uid" too: one trigger firing is one pipeline run here,
             // so there's no separate identifier worth inventing.
             "trigger": {
-                "bom-ref": "trigger-osm-diffs-schedule",
+                "bom-ref": "trigger-osmdiffs-schedule",
                 "uid": pipeline_run_id,
                 "type": "scheduled",
             },
             "timeStart": time_start,
             "timeEnd": time_end,
-            "resourceReferences": [{"ref": "tool-osm-diffs"}],
+            "resourceReferences": [{"ref": "tool-osmdiffs"}],
             "inputs": [
                 {"resource": {"ref": "alltheplaces.zip"}},
                 {"resource": {"ref": pipeline::PLANET_PBF_FILENAME}},
@@ -439,19 +453,16 @@ mod tests {
         // 2026-03-04, which is later than the OSM snapshot, 2026-01-27),
         // not the wall clock -- so the BOM is reproducible.
         assert_eq!(bom["metadata"]["timestamp"], "2026-03-04T15:16:17Z");
-        assert_eq!(bom["metadata"]["supplier"]["name"], "All The Places");
+        assert_eq!(bom["metadata"]["supplier"]["name"], "Sascha Brawer");
 
         let tool = &bom["metadata"]["tools"]["components"][0];
-        assert_eq!(tool["bom-ref"], "tool-osm-diffs");
+        assert_eq!(tool["bom-ref"], "tool-osmdiffs");
         assert_eq!(tool["type"], "application");
-        assert_eq!(tool["name"], "osm-diffs");
+        assert_eq!(tool["name"], "osmdiffs");
         assert_eq!(tool["version"], env!("CARGO_PKG_VERSION"));
         assert_eq!(
             tool["purl"],
-            format!(
-                "pkg:github/alltheplaces/osm-diffs@{}",
-                env!("CARGO_PKG_VERSION")
-            )
+            format!("pkg:github/brawer/osmdiffs@{}", env!("CARGO_PKG_VERSION"))
         );
 
         let output = &bom["metadata"]["component"];
@@ -548,7 +559,7 @@ mod tests {
 
         // Every bom-ref the formulation refers to must actually exist.
         let known_refs = [
-            "tool-osm-diffs",
+            "tool-osmdiffs",
             "conflated.parquet",
             "alltheplaces.zip",
             pipeline::PLANET_PBF_FILENAME,
@@ -561,7 +572,7 @@ mod tests {
         // span -- the workflow's own `uid` is the only run-specific field.
         assert_eq!(workflow["timeStart"], "2026-03-04T15:16:17Z");
         assert_eq!(workflow["timeEnd"], bom["metadata"]["timestamp"]);
-        assert_eq!(workflow["resourceReferences"][0]["ref"], "tool-osm-diffs");
+        assert_eq!(workflow["resourceReferences"][0]["ref"], "tool-osmdiffs");
         for input in workflow["inputs"].as_array().expect("inputs") {
             let r = input["resource"]["ref"].as_str().expect("ref");
             assert!(known_refs.contains(&r), "unknown bom-ref {r}");

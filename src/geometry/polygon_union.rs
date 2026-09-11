@@ -210,7 +210,7 @@ mod tests {
     }
 
     /// The scenario from
-    /// <https://github.com/alltheplaces/osm-diffs/issues/533>: an
+    /// <https://github.com/brawer/osmdiffs/issues/533>: an
     /// `outline` polygon that's the exact union of several `part`
     /// polygons should union back to the full outline, not (as
     /// `PolygonAssembler`'s nesting rule would do) have the parts punched

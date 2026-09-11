@@ -1,7 +1,7 @@
 # Cutting a release
 
 This document is the practical how-to for cutting a release of
-`osm-diffs`. For the concepts behind *why* the process looks like this
+`osmdiffs`. For the concepts behind *why* the process looks like this
 (SBOM, attestations, immutable releases, ...), see
 [`SUPPLY_CHAIN_SECURITY.md`](SUPPLY_CHAIN_SECURITY.md).
 
@@ -27,7 +27,7 @@ the pipeline’s **output schema** — not by how much code changed.
 This is a different question than what [SemVer](https://semver.org/)
 usually answers. Programmers normally think of SemVer in terms of API
 compatibility for code that *links against* a library. Nobody links
-against `osm-diffs`:
+against `osmdiffs`:
 downstream clients only ever consume the *data* it produces. So the
 question to ask isn’t “did the code change in a breaking way,” it’s “does
 this change what a client reading our output has to handle differently”:
@@ -145,7 +145,7 @@ two checks described in
 done for real rather than assumed. This is exactly what was done by hand
 to confirm v0.6.9, the first release cut with `cut-release.sh` — see the
 comment trail on
-[alltheplaces/osm-diffs#562](https://github.com/alltheplaces/osm-diffs/pull/562)
+[brawer/osmdiffs#562](https://github.com/brawer/osmdiffs/pull/562)
 for that walkthrough, which is what `verify-release.sh` automates.
 
 ## Rules
@@ -219,8 +219,8 @@ for that walkthrough, which is what `verify-release.sh` automates.
 - A few low-priority, deliberately-deferred items are tracked separately
   and don’t block anything: automated freshness checks for vendored
   dependencies
-  ([#555](https://github.com/alltheplaces/osm-diffs/issues/555)), moving
+  ([#555](https://github.com/brawer/osmdiffs/issues/555)), moving
   `cargo-cyclonedx` off Alpine’s edge repo once it’s available in stable
-  ([#556](https://github.com/alltheplaces/osm-diffs/issues/556)), and
+  ([#556](https://github.com/brawer/osmdiffs/issues/556)), and
   watching for an emerging standard on index-level SBOMs for multi-arch
-  images ([#589](https://github.com/alltheplaces/osm-diffs/issues/589)).
+  images ([#589](https://github.com/brawer/osmdiffs/issues/589)).

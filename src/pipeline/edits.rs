@@ -51,7 +51,7 @@ pub struct SuggestedEdit {
     pub tags: Vec<(String, String)>,
     /// (longitude, latitude). Just the OSM feature's centroid for now,
     /// not its full shape -- see the plan referenced in
-    /// alltheplaces/osm-diffs#655 for why this is deliberately scoped
+    /// brawer/osmdiffs#655 for why this is deliberately scoped
     /// down; revisit once tile layers are known to handle non-point
     /// geometry the way this pipeline needs.
     centroid: (f64, f64),

@@ -6,41 +6,41 @@ report it privately.
 We prefer the [GitHub mechanism for privately reporting a
 vulnerability](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing/privately-reporting-a-security-vulnerability#privately-reporting-a-security-vulnerability):
 under the [repository’s security
-tab](https://github.com/alltheplaces/osm-diffs/security), click
+tab](https://github.com/brawer/osmdiffs/security), click
 “Report a vulnerability” to open the advisory form.
 
 For how we secure the release process itself — build provenance,
 SBOMs, signed attestations — see
-[`SUPPLY_CHAIN_SECURITY.md`](https://github.com/alltheplaces/osm-diffs/blob/main/docs/SUPPLY_CHAIN_SECURITY.md).
+[`SUPPLY_CHAIN_SECURITY.md`](https://github.com/brawer/osmdiffs/blob/main/docs/SUPPLY_CHAIN_SECURITY.md).
 Our container has no OS at all, so there’s no OS trust store to verify
 outbound TLS connections against either — see that document’s
 [“Certificate
-trust”](https://github.com/alltheplaces/osm-diffs/blob/main/docs/SUPPLY_CHAIN_SECURITY.md#certificate-trust)
+trust”](https://github.com/brawer/osmdiffs/blob/main/docs/SUPPLY_CHAIN_SECURITY.md#certificate-trust)
 section for what we do instead.
 
 Every change also goes through
 [SAST](https://en.wikipedia.org/wiki/Static_application_security_testing)
 via [GitHub CodeQL](https://codeql.github.com/), enforced by branch
 protection on `main` — see
-[`TESTING.md`](https://github.com/alltheplaces/osm-diffs/blob/main/docs/TESTING.md)
+[`TESTING.md`](https://github.com/brawer/osmdiffs/blob/main/docs/TESTING.md)
 for details. We publish an [OSSF
-Scorecard](https://scorecard.dev/viewer/?uri=github.com/alltheplaces/osm-diffs)
+Scorecard](https://scorecard.dev/viewer/?uri=github.com/brawer/osmdiffs)
 analysis on every push to `main` (badge in the
-[README](https://github.com/alltheplaces/osm-diffs#readme)); its
+[README](https://github.com/brawer/osmdiffs#readme)); its
 “Vulnerabilities” check reports known, already-public advisories in
 our dependencies (RUSTSEC/OSV) — the same ones
-[Dependabot](https://github.com/alltheplaces/osm-diffs/network/updates)
+[Dependabot](https://github.com/brawer/osmdiffs/network/updates)
 already opens PRs for. A nonzero score there isn’t a new finding and
 doesn’t need private disclosure; check [open pull
-requests](https://github.com/alltheplaces/osm-diffs/pulls) for the fix
+requests](https://github.com/brawer/osmdiffs/pulls) for the fix
 already in progress.
 
 On top of that,
-[`cargo-deny.yml`](https://github.com/alltheplaces/osm-diffs/blob/main/.github/workflows/cargo-deny.yml)
+[`cargo-deny.yml`](https://github.com/brawer/osmdiffs/blob/main/.github/workflows/cargo-deny.yml)
 gates PRs and runs weekly, via
 [`cargo-deny`](https://github.com/EmbarkStudios/cargo-deny) against
 the rules in
-[`deny.toml`](https://github.com/alltheplaces/osm-diffs/blob/main/deny.toml) —
+[`deny.toml`](https://github.com/brawer/osmdiffs/blob/main/deny.toml) —
 dependency licenses, banned/duplicated crates, untrusted sources, and
 known advisories alike. An advisory that’s already known, already
 tracked, and not fixable from this repo (e.g. pinned deep in a

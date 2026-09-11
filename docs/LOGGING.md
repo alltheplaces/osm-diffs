@@ -1,6 +1,6 @@
 # Logging
 
-`osm-diffs run` writes `pipeline.log` to its `--workdir`, one JSON
+`osmdiffs run` writes `pipeline.log` to its `--workdir`, one JSON
 object per line ([JSON Lines](https://jsonlines.org/)) —
 machine-readable rather than free-form text, so a log can be grepped,
 `jq`’d, or loaded into whatever analysis tool you like without first
@@ -9,7 +9,7 @@ Every record has:
 
 - `timestamp` — RFC 3339, UTC.
 - `level` — `INFO`, `WARN`, `ERROR`, …
-- `target` — which module logged it (e.g. `osm_diffs::pipeline::conflate`).
+- `target` — which module logged it (e.g. `osmdiffs::pipeline::conflate`).
 - `message` — the human-readable text.
 - `fields` — present only on records that attach structured data
   (numbers, an id, …) instead of just interpolating it into the
@@ -59,12 +59,12 @@ thing. Two concrete examples of what this data enables, both written by
 [Claude Code](https://claude.com/claude-code) straight from a run’s
 logs, with no other tooling built for the purpose:
 
-- [alltheplaces/osm-diffs#665, comment](https://github.com/alltheplaces/osm-diffs/pull/665#issuecomment-5303068423) —
+- [brawer/osmdiffs#665, comment](https://github.com/brawer/osmdiffs/pull/665#issuecomment-5303068423) —
   a full memory/disk/timing analysis of a full-planet run on
   memory-constrained hardware, validating the design assumption behind
   `OsmFeatureIndex` (relying on the OS page cache instead of an
   explicit decode cache).
-- [alltheplaces/osm-diffs#636](https://github.com/alltheplaces/osm-diffs/issues/636) —
+- [brawer/osmdiffs#636](https://github.com/brawer/osmdiffs/issues/636) —
   a survey of OpenStreetMap data-quality issues, found by combing
   through `pipeline.log`’s `could not build geometry` warnings and
   cross-referencing the flagged features against the live OSM API.

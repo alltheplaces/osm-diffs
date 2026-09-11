@@ -18,7 +18,7 @@ hardware.
 Both are run by hand when someone notices upstream has moved; nothing
 here notifies you of a new release. Automating that is a low-priority,
 deliberately deferred feature request, tracked in
-[alltheplaces/osm-diffs#555](https://github.com/alltheplaces/osm-diffs/issues/555).
+[brawer/osmdiffs#555](https://github.com/brawer/osmdiffs/issues/555).
 
 ## Release engineering
 
@@ -39,17 +39,17 @@ process these fit into.
 
 ## Testing development branches
 
-Unrelated to how `osm-diffs` actually ships to production — this is for
+Unrelated to how `osmdiffs` actually ships to production — this is for
 ad hoc validation of a branch before it lands.
 
 - [`test-on-hetzner/`](test-on-hetzner/README.md): spins
   up a Hetzner Cloud VM, builds a given git branch on it, runs the
   pipeline against it, and pulls back logs — one command instead of
   repeating the manual setup by hand each time. See
-  [alltheplaces/osm-diffs#667](https://github.com/alltheplaces/osm-diffs/issues/667)
+  [brawer/osmdiffs#667](https://github.com/brawer/osmdiffs/issues/667)
   for why this exists.
 - [`test-branch-on-macos/`](test-branch-on-macos/README.md): the same
   idea, much smaller — build and run the current checkout locally with
   a `vm_stat`/RSS monitor alongside it, for fast local iteration rather
   than matching production hardware/toolchain. See
-  [alltheplaces/osm-diffs#669](https://github.com/alltheplaces/osm-diffs/issues/669).
+  [brawer/osmdiffs#669](https://github.com/brawer/osmdiffs/issues/669).

@@ -1,4 +1,4 @@
-# Technical design: `osm-diffs`
+# Technical design: `osmdiffs`
 
 Status: Work in Progress — see [“Status”](#status) at the end of this
 document for what’s still ahead.
@@ -103,7 +103,7 @@ its own. That’s not just assumed to work — it’s been verified on real,
 memory-constrained hardware, including inside a container under a real
 cgroup memory limit; see [“Why `conflate` doesn’t need its own
 cache”](#why-conflate-doesnt-need-its-own-cache) below, and
-[#711](https://github.com/alltheplaces/osm-diffs/issues/711) for the
+[#711](https://github.com/brawer/osmdiffs/issues/711) for the
 full sweep.
 
 ### What AllThePlaces does
@@ -216,7 +216,7 @@ graph TD
 (Pink boxes are processing steps; plain rectangles are the files they
 read or write. `alltheplaces.wikidata-ids` has no outgoing edge above:
 nothing consumes it yet, it’s generated on behalf of planned future
-work, see [#682](https://github.com/alltheplaces/osm-diffs/issues/682).)
+work, see [#682](https://github.com/brawer/osmdiffs/issues/682).)
 
 Every top-level step above is logged with its own wall-clock time and
 memory snapshot, regardless of success or failure — see
@@ -225,7 +225,7 @@ against files already in `--workdir`, so re-running the pipeline in
 the same directory skips whatever it already built (this also applies
 below the step level, e.g. within `import_atp`/`import_osm`’s own
 sub-stages) — though that memoization isn’t fully reliable yet, see
-[#704](https://github.com/alltheplaces/osm-diffs/issues/704).
+[#704](https://github.com/brawer/osmdiffs/issues/704).
 `pipeline.log` itself is uploaded — to the *internal* S3 bucket, not the
 CDN-fronted public one — at the very end of a run no matter how the run
 went (see [`upload_logs`](../src/pipeline/upload.rs)), so a failed run’s
@@ -236,10 +236,10 @@ log is never lost.
 Timings below come from two full-planet runs on production-representative
 hardware, not a dev machine: a deliberately memory-constrained, bare
 (uncontainerized) Hetzner cpx22 (2 vCPU / 4 GB RAM, peaking at ~174 GB
-disk used) — see [#665](https://github.com/alltheplaces/osm-diffs/issues/665)
+disk used) — see [#665](https://github.com/brawer/osmdiffs/issues/665)
 for the full writeup — and a later, containerized Hetzner cpx42 (8 vCPU
 / 16 GB RAM, `podman run --memory=12g --cpus=6`) from the
-[#711](https://github.com/alltheplaces/osm-diffs/issues/711)/[#722](https://github.com/alltheplaces/osm-diffs/issues/722)
+[#711](https://github.com/brawer/osmdiffs/issues/711)/[#722](https://github.com/brawer/osmdiffs/issues/722)
 `--mem-limit` sweep — see [`PRODUCTION.md`](PRODUCTION.md) for that
 sweep’s full results and the recommended production configuration. The
 two runs used different hardware and container configuration, so
@@ -262,12 +262,12 @@ fetch away.
   ([`src/pipeline/atp/wikidata_ids.rs`](../src/pipeline/atp/wikidata_ids.rs)) — extracts
   every `wikidata`/`brand:wikidata`/… tag value ATP carries, for a
   planned future feature (flagging OSM-only features whose brand ATP
-  tracks elsewhere, [#682](https://github.com/alltheplaces/osm-diffs/issues/682));
+  tracks elsewhere, [#682](https://github.com/brawer/osmdiffs/issues/682));
   not consumed by anything yet. Not separately timed.
 - **`import_osm`** ([`src/pipeline/osm/`](../src/pipeline/osm/)) —
   downloads the OpenStreetMap planet dump over plain HTTPS (`fetch.rs`;
   a redirect straight to a well-provisioned cloud object store, not
-  BitTorrent — see [#755](https://github.com/alltheplaces/osm-diffs/pull/755)
+  BitTorrent — see [#755](https://github.com/brawer/osmdiffs/pull/755)
   for why that switch happened); does a first pass over it that
   decides, by tag, which nodes/ways/relations are even worth fully
   assembling, and which node coordinates and relation members they’ll
@@ -425,7 +425,7 @@ on production hardware, not just a development machine, since
 page-cache behavior under real memory pressure and container limits
 doesn’t reliably transfer from a laptop.
 
-On the same [#665](https://github.com/alltheplaces/osm-diffs/issues/665)
+On the same [#665](https://github.com/brawer/osmdiffs/issues/665)
 run, peak RSS was 3.16–3.39 GiB on a 3.7 GiB box (cgroup accounting
 agrees: ~3.5 GB) — and during `conflate.match` specifically, over 94%
 of that was page-cache-backed (`rss_file_bytes`), not heap. That’s not
@@ -450,7 +450,7 @@ again dominated during `conflate.match` (11.0 GB of 11.2 GB total
 RSS), with no OOM-kill even while `cgroup_current_bytes` briefly
 touched 89–90% of the limit during the later, non-`conflate` steps. A
 follow-up `--mem-limit` sweep down to genuinely tight limits
-([#711](https://github.com/alltheplaces/osm-diffs/issues/711))
+([#711](https://github.com/brawer/osmdiffs/issues/711))
 confirmed the design holds well below that comfortable baseline too —
 see [`PRODUCTION.md`](PRODUCTION.md) for the full results and the
 recommended production memory limit.
@@ -556,8 +556,8 @@ until the full pipeline was proven out:
   `brand:wikidata`, and matching well beyond stores (a tree matcher
   conflating municipal tree datasets against OSM by spatial distance
   and species looks particularly tractable). See
-  [#708](https://github.com/alltheplaces/osm-diffs/issues/708).
+  [#708](https://github.com/brawer/osmdiffs/issues/708).
 - There’s no per-row match-confidence or cartographic-importance
   signal yet, so both PMTiles archives rely entirely on tippecanoe’s
   own density-based dropping at low zoom — see
-  [#713](https://github.com/alltheplaces/osm-diffs/issues/713).
+  [#713](https://github.com/brawer/osmdiffs/issues/713).

@@ -249,7 +249,7 @@ mod linux {
         #[test]
         fn test_parse_proc_status() {
             let content = "\
-Name:\tosm-diffs
+Name:\tosmdiffs
 State:\tR (running)
 VmPeak:\t 2000000 kB
 VmSize:\t 1900000 kB
@@ -273,7 +273,7 @@ Threads:\t8
 
         #[test]
         fn test_parse_proc_status_missing_fields() {
-            let stats = parse_proc_status("Name:\tosm-diffs\nState:\tR (running)\n");
+            let stats = parse_proc_status("Name:\tosmdiffs\nState:\tR (running)\n");
             assert_eq!(stats, MemStats::default());
         }
 

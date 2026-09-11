@@ -3,7 +3,7 @@
 //! *matching* step itself -- every AllThePlaces feature, matched or
 //! not -- independent of whatever `crate::pipeline::edits` separately
 //! decides to propose as an edit (see
-//! [#709](https://github.com/alltheplaces/osm-diffs/issues/709)).
+//! [#709](https://github.com/brawer/osmdiffs/issues/709)).
 //!
 //! Unlike `edits`, this doesn't need an external sort: every output
 //! feature comes from exactly one input row (a row contributes one
@@ -41,7 +41,7 @@
 //! unmatched features -- which have no stable id, `conflated.parquet`
 //! carries none for the ATP side -- match the nearest `part: "atp"`
 //! detail feature of the same `spider`. See
-//! [#775](https://github.com/alltheplaces/osm-diffs/issues/775) for
+//! [#775](https://github.com/brawer/osmdiffs/issues/775) for
 //! the full design discussion.
 
 use crate::utils::parquet::{get_binary, get_string, get_struct, get_tags, get_u64};

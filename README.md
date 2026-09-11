@@ -1,7 +1,7 @@
 # OSM Diffs
 
-[![Coverage Status](https://coveralls.io/repos/github/alltheplaces/osm-diffs/badge.svg?branch=main)](https://coveralls.io/github/alltheplaces/osm-diffs?branch=main)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/alltheplaces/osm-diffs/badge)](https://scorecard.dev/viewer/?uri=github.com/alltheplaces/osm-diffs)
+[![Coverage Status](https://coveralls.io/repos/github/brawer/osmdiffs/badge.svg?branch=main)](https://coveralls.io/github/brawer/osmdiffs?branch=main)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/brawer/osmdiffs/badge)](https://scorecard.dev/viewer/?uri=github.com/brawer/osmdiffs)
 [![Project Status: WIP – Initial development is in progress, but there has not yet been a stable, usable release suitable for the public.](https://www.repostatus.org/badges/latest/wip.svg)](https://www.repostatus.org/#wip)
 
 Once completed, this will be a pipeline to compute weekly diffs
@@ -17,7 +17,7 @@ feed edit proposals to tools such as
 [MapRoulette](https://maproulette.org/), where human users can
 manually check each edit before applying it to OpenStreetMap — which
 edits go where is still being worked out, see
-[#696](https://github.com/alltheplaces/osm-diffs/issues/696).
+[#696](https://github.com/brawer/osmdiffs/issues/696).
 
 Just want the data this pipeline produces? See
 [`docs/outputs/`](docs/outputs/) for what’s in it and how to read it.

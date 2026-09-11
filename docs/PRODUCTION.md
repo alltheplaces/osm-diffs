@@ -1,12 +1,12 @@
-# Running `osm-diffs` in production
+# Running `osmdiffs` in production
 
-`osm-diffs` doesn’t run anywhere permanent yet — see
+`osmdiffs` doesn’t run anywhere permanent yet — see
 [`TECHNICAL_DESIGN.md`](TECHNICAL_DESIGN.md)’s “Status” section. This
 document isn’t a description of an existing deployment; it’s the
 operational knowledge gathered from testing on Hetzner Cloud
 ([`scripts/test-on-hetzner`](../scripts/test-on-hetzner/README.md),
-[#711](https://github.com/alltheplaces/osm-diffs/issues/711),
-[#722](https://github.com/alltheplaces/osm-diffs/issues/722)), written
+[#711](https://github.com/brawer/osmdiffs/issues/711),
+[#722](https://github.com/brawer/osmdiffs/issues/722)), written
 down now so whoever sets up the actual deployment doesn’t have to
 re-establish it from scratch.
 
@@ -47,7 +47,7 @@ generous limit.
 to **~143GB** once `import_osm` finishes and its temporary files are
 cleaned up — consistent across two independent runs on different
 hardware (this sweep, and the earlier
-[#665](https://github.com/alltheplaces/osm-diffs/issues/665) shakedown,
+[#665](https://github.com/brawer/osmdiffs/issues/665) shakedown,
 which saw ~174GB peak / ~148GB settled). **220–250GB** gives reasonable
 headroom over that peak without being wildly oversized; the 400GB
 default `scripts/test-on-hetzner/cloud_test.py` uses for testing is
@@ -55,9 +55,9 @@ itself generous margin, not a sizing recommendation.
 
 ## Container invocation
 
-The published image (`ghcr.io/alltheplaces/osm-diffs:vX.Y.Z` — pin an
+The published image (`ghcr.io/brawer/osmdiffs:vX.Y.Z` — pin an
 exact tag; see
-[the releases page](https://github.com/alltheplaces/osm-diffs/releases)
+[the releases page](https://github.com/brawer/osmdiffs/releases)
 for the current version and its notes) runs as:
 
 ```sh
@@ -65,7 +65,7 @@ podman run --rm --read-only \
   --memory=8g --cpus=6 \
   -v /path/to/workdir:/workdir \
   --env-file s3.env \
-  ghcr.io/alltheplaces/osm-diffs:vX.Y.Z \
+  ghcr.io/brawer/osmdiffs:vX.Y.Z \
   run --workdir /workdir --run_id "$RUN_ID"
 ```
 
@@ -249,7 +249,7 @@ get started:
 - **Step timings drifting**: `import_osm`’s own sub-steps
   (`import_osm.fetch`/`.open`/`.prune`/`.assemble`/`.index`, logged
   individually as of
-  [#761](https://github.com/alltheplaces/osm-diffs/pull/761)) are worth
+  [#761](https://github.com/brawer/osmdiffs/pull/761)) are worth
   watching over time as the planet grows — a slow drift is expected;
   a sudden jump on an otherwise-unchanged config is worth investigating
   the way this document’s own `--mem-limit` sweep did.

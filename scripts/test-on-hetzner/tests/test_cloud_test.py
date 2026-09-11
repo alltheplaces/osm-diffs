@@ -26,22 +26,22 @@ def test_label_flags_sanitizes_branch_slash():
     flags = ct.label_flags("myname", branch="feature/foo")
     assert flags == [
         "--label",
-        "osm-diffs-test=true",
+        "osmdiffs-test=true",
         "--label",
-        "osm-diffs-test-owner=myname",
+        "osmdiffs-test-owner=myname",
         "--label",
-        "osm-diffs-test-branch=feature--foo",
+        "osmdiffs-test-branch=feature--foo",
     ]
 
 
 def test_label_flags_sanitizes_image_slash_and_colon():
-    flags = ct.label_flags("myname", image="ghcr.io/alltheplaces/osm-diffs:v1.2.3")
-    assert flags[-1] == "osm-diffs-test-image=ghcr.io--alltheplaces--osm-diffs--v1.2.3"
+    flags = ct.label_flags("myname", image="ghcr.io/brawer/osmdiffs:v1.2.3")
+    assert flags[-1] == "osmdiffs-test-image=ghcr.io--brawer--osmdiffs--v1.2.3"
 
 
 def test_label_flags_no_branch_or_image():
     flags = ct.label_flags("myname")
-    assert flags == ["--label", "osm-diffs-test=true", "--label", "osm-diffs-test-owner=myname"]
+    assert flags == ["--label", "osmdiffs-test=true", "--label", "osmdiffs-test-owner=myname"]
 
 
 # ── s3_credentials / s3_endpoint / s3_client ─────────────────────────
@@ -145,7 +145,7 @@ def test_containerized_run_command_basic_flags(monkeypatch):
     assert "--memory=4g" in cmd
     assert "--cpus=2" in cmd
     assert "-v /workdir:/workdir" in cmd
-    assert "osm-diffs-test run --workdir /workdir" in cmd
+    assert "osmdiffs-test run --workdir /workdir" in cmd
     assert "--run_id" not in cmd
 
 
@@ -204,7 +204,7 @@ def test_containerized_run_command_s3_env_file(monkeypatch):
 
     cmd = ct.containerized_run_command(args, "1.2.3.4", "/workdir")
 
-    assert "--env-file /root/osm-diffs/s3.env" in cmd
+    assert "--env-file /root/osmdiffs/s3.env" in cmd
     env_content = scp_files["s3.env"]
     # Both destinations, pointed at the one ephemeral test bucket.
     for prefix in ("PUBLIC_S3", "INTERNAL_S3"):
@@ -400,14 +400,14 @@ def test_cmd_list_skips_buckets_without_bucket_region(monkeypatch, capsys):
 def test_cmd_list_lists_buckets_with_bucket_region(monkeypatch, capsys):
     mock_client = MagicMock()
     mock_client.list_buckets.return_value = {
-        "Buckets": [{"Name": "osm-diffs-container-test-1", "CreationDate": datetime(2026, 1, 1, tzinfo=UTC)}]
+        "Buckets": [{"Name": "osmdiffs-container-test-1", "CreationDate": datetime(2026, 1, 1, tzinfo=UTC)}]
     }
     monkeypatch.setattr(ct, "hcloud_json", lambda args: [])
     monkeypatch.setattr(ct, "s3_client", lambda region: mock_client)
 
     ct.cmd_list(Args(bucket_region="fsn1"))
 
-    assert "osm-diffs-container-test-1" in capsys.readouterr().out
+    assert "osmdiffs-container-test-1" in capsys.readouterr().out
 
 
 # ── cmd_create prints the teardown command ────────────────────────────

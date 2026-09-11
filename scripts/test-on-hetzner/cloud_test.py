@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Spins up a Hetzner Cloud VM and runs the full osm-diffs pipeline on it
+"""Spins up a Hetzner Cloud VM and runs the full osmdiffs pipeline on it
 -- either built from a given git branch or pulled as an already-built
 image (e.g. a released `ghcr.io` container) -- so testing on real cloud
 hardware doesn't mean re-deriving the VM setup dance by hand each time.
@@ -35,9 +35,9 @@ DEFAULT_IMAGE = "debian-13"
 DEFAULT_LOCATION = "hel1"
 DEFAULT_TYPE = "cpx32"
 DEFAULT_VOLUME_SIZE = 400
-DEFAULT_REPO = "https://github.com/alltheplaces/osm-diffs.git"
-LABEL_KEY = "osm-diffs-test"
-REMOTE_DIR = "/root/osm-diffs"
+DEFAULT_REPO = "https://github.com/brawer/osmdiffs.git"
+LABEL_KEY = "osmdiffs-test"
+REMOTE_DIR = "/root/osmdiffs"
 SCRIPT_DIR = Path(__file__).resolve().parent
 LOGS_DIR = SCRIPT_DIR / "logs"
 PRICING_URL = "https://api.hetzner.cloud/v1/pricing"
@@ -171,7 +171,7 @@ def label_flags(name, branch=None, image=None):
         labels.append(f"{LABEL_KEY}-branch={branch.replace('/', '--')}")
     if image:
         # Same restriction as branch names, plus image refs also use ":"
-        # for the tag (e.g. ghcr.io/alltheplaces/osm-diffs:v1.2.3).
+        # for the tag (e.g. ghcr.io/brawer/osmdiffs:v1.2.3).
         sanitized = image.replace("/", "--").replace(":", "--")
         labels.append(f"{LABEL_KEY}-image={sanitized}")
     flags = []
@@ -294,7 +294,7 @@ def cmd_deploy(args):
     ip = server_ip(args.name)
     ssh_cmd(ip, f"mkdir -p {REMOTE_DIR}")
     # Both the build and pull paths end by extracting binaries out of the
-    # locally tagged osm-diffs-test image, via the shared script.
+    # locally tagged osmdiffs-test image, via the shared script.
     scp_to(ip, SCRIPT_DIR / "remote" / "extract-binaries.sh", f"{REMOTE_DIR}/extract-binaries.sh")
     ssh_cmd(ip, f"chmod +x {REMOTE_DIR}/extract-binaries.sh")
 
@@ -306,7 +306,7 @@ def cmd_deploy(args):
     else:
         scp_to(ip, SCRIPT_DIR / "remote" / "build.sh", f"{REMOTE_DIR}/build.sh")
         ssh_cmd(ip, f"chmod +x {REMOTE_DIR}/build.sh")
-        remote_checkout = f"{REMOTE_DIR}/osm-diffs-src"
+        remote_checkout = f"{REMOTE_DIR}/osmdiffs-src"
         ssh_cmd(
             ip,
             f"{REMOTE_DIR}/build.sh {shlex.quote(args.repo)} "
@@ -345,7 +345,7 @@ def cmd_start(args):
     # free, without needing a terminal multiplexer at all.
     ssh_cmd(
         ip,
-        "systemd-run --unit=osm-diffs-monitor --collect "
+        "systemd-run --unit=osmdiffs-monitor --collect "
         f"--working-directory={REMOTE_DIR} --setenv=WORKDIR={workdir} -- "
         f"/bin/bash {REMOTE_DIR}/monitor.sh",
     )
@@ -353,11 +353,11 @@ def cmd_start(args):
     if containerized:
         run_command = containerized_run_command(args, ip, workdir)
     else:
-        run_command = f"/usr/local/bin/osm-diffs run --workdir {shlex.quote(workdir)}"
+        run_command = f"/usr/local/bin/osmdiffs run --workdir {shlex.quote(workdir)}"
 
     ssh_cmd(
         ip,
-        "systemd-run --unit=osm-diffs-run --collect "
+        "systemd-run --unit=osmdiffs-run --collect "
         # Debian's systemd defaults new units to the same 1024
         # soft-limit open-file cap an interactive shell gets --
         # switching to systemd-run does NOT fix the EMFILE crash a
@@ -440,14 +440,14 @@ def containerized_run_command(args, ip, workdir):
         "podman run --rm --read-only "
         f"--memory={shlex.quote(args.mem_limit)} --cpus={shlex.quote(args.cpu_limit)} "
         f"-v {shlex.quote(workdir)}:/workdir {env_flag}"
-        f"osm-diffs-test run --workdir /workdir{run_id_flag}"
+        f"osmdiffs-test run --workdir /workdir{run_id_flag}"
     )
 
 
 def cmd_status(args):
     ip = server_ip(args.name)
     workdir = workdir_for(args.name)
-    ssh_cmd(ip, "systemctl status osm-diffs-run --no-pager -l || true")
+    ssh_cmd(ip, "systemctl status osmdiffs-run --no-pager -l || true")
     ssh_cmd(ip, f"df -h {shlex.quote(workdir)}")
     ssh_cmd(ip, f"tail -5 {shlex.quote(workdir)}/pipeline.log 2>/dev/null || true")
 
@@ -476,7 +476,7 @@ def cmd_logs(args):
 
 def cmd_stop(args):
     ip = server_ip(args.name)
-    ssh_cmd(ip, "systemctl stop osm-diffs-run osm-diffs-monitor || true")
+    ssh_cmd(ip, "systemctl stop osmdiffs-run osmdiffs-monitor || true")
 
 
 def fetch_pricing():
@@ -654,7 +654,7 @@ def cmd_validate(args):
 def cmd_list(args):
     servers = hcloud_json(["server", "list", "-l", f"{LABEL_KEY}=true"])
     if not servers:
-        print("No osm-diffs-test instances running.")
+        print("No osmdiffs-test instances running.")
     for s in servers:
         labels = s.get("labels", {})
         branch = labels.get(f"{LABEL_KEY}-branch", "?").replace("--", "/")
@@ -697,7 +697,7 @@ def main():
         group.add_argument("--branch", help="git branch/ref to build")
         group.add_argument(
             "--image",
-            help="pull this image instead of building (e.g. ghcr.io/alltheplaces/osm-diffs:v1.2.3)",
+            help="pull this image instead of building (e.g. ghcr.io/brawer/osmdiffs:v1.2.3)",
         )
         p.add_argument("--repo", default=DEFAULT_REPO, help="ignored with --image")
 
@@ -843,7 +843,7 @@ def main():
     )
     p_validate.set_defaults(func=cmd_validate)
 
-    p_list = sub.add_parser("list", help="list all osm-diffs-test instances")
+    p_list = sub.add_parser("list", help="list all osmdiffs-test instances")
     p_list.add_argument(
         "--bucket-region", help="also list S3 test buckets in this Hetzner Object Storage region"
     )

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pushed to the remote VM and run there by `cloud_test.py deploy --image`.
-# Pulls an already-built image -- e.g. a released osm-diffs container
+# Pulls an already-built image -- e.g. a released osmdiffs container
 # from ghcr.io -- instead of building one from source, then extracts
 # binaries the same way build.sh does after a local build, via the
 # shared extract-binaries.sh, so bare-mode `start` works unchanged
@@ -17,6 +17,6 @@ podman pull "$image"
 # extract-binaries.sh (and containerized `start`) both expect this fixed
 # local name, regardless of what registry/tag the image actually came
 # from -- same convention build.sh already uses for a locally built image.
-podman tag "$image" osm-diffs-test
+podman tag "$image" osmdiffs-test
 
 "$(dirname "$0")/extract-binaries.sh"

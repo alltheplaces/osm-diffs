@@ -139,7 +139,7 @@ impl Bucket {
 /// environment and reused for every upload to it in a pipeline run.
 ///
 /// All five come from environment variables, none of them CLI flags
-/// (`osm-diffs run --help` won't mention them) -- they're ambient
+/// (`osmdiffs run --help` won't mention them) -- they're ambient
 /// deployment config, the kind you'd set once for wherever this runs on
 /// a schedule, not something to pass per invocation. For prefix
 /// `PUBLIC_S3` (likewise `INTERNAL_S3`):
@@ -627,7 +627,7 @@ pub fn upload_logs(
     // JSON Lines here, but as of August 2026, no consensus has yet been
     // reached on what string to use, so the registration appears to be
     // stalled -- see https://github.com/wardi/jsonlines/issues/19.
-    // Tracked in alltheplaces/osm-diffs#684 to check back in August 2027.
+    // Tracked in brawer/osmdiffs#684 to check back in August 2027.
     upload_file(
         Bucket::Internal,
         &log_path,

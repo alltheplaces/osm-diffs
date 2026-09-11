@@ -6,7 +6,7 @@ process itself. This document explains the security practices we use
 around ours (see [`RELEASING.md`](RELEASING.md) for the actual,
 repo-specific steps). It’s written for someone who can code but hasn’t
 necessarily done release engineering before. None of it is original to
-`osm-diffs` — everything here is standard practice, just explained in
+`osmdiffs` — everything here is standard practice, just explained in
 one place.
 
 ## Containers
@@ -18,7 +18,7 @@ virtual machine, since it shares the host’s kernel instead of running
 its own, while still keeping what’s inside isolated from everything
 else on that host.
 
-We publish `osm-diffs` as an [OCI image](https://opencontainers.org/) —
+We publish `osmdiffs` as an [OCI image](https://opencontainers.org/) —
 the open, vendor-neutral standard most container tooling implements
 today — to a
 [container registry](https://www.redhat.com/en/topics/cloud-native-apps/what-is-a-container-registry)
@@ -31,7 +31,7 @@ a plain-text file listing the build steps, one instruction per line.
 ## Minimal containers
 
 `Containerfile` builds in two stages, and only the second one ships:
-`FROM scratch`, containing nothing but the `osm-diffs` and `tippecanoe`
+`FROM scratch`, containing nothing but the `osmdiffs` and `tippecanoe`
 binaries. The whole build toolchain (Rust, a C compiler, `apk`, `git`,
 ...) stays behind in the discarded first stage. Both binaries are
 statically linked against [musl](https://en.wikipedia.org/wiki/Musl),
@@ -64,7 +64,7 @@ for your machine.
 Because we ship `FROM scratch` (see “Minimal containers” above),
 there’s no `/etc/ssl` in the final image either — no OS-provided CA
 trust store to fall back on for verifying a TLS server’s certificate.
-Rather than adding one, `osm-diffs` embeds Mozilla’s own CA root
+Rather than adding one, `osmdiffs` embeds Mozilla’s own CA root
 bundle directly into the binary at compile time, via the
 [`webpki-roots`](https://github.com/rustls/webpki-roots) crate (see
 `main.rs`’s `build_client()`) — the same trust store
@@ -91,7 +91,7 @@ library X?” without rebuilding the software or reading its source.
 ## SBOM and CBOM
 
 Our SBOM describes the container image we publish: the Rust dependency
-graph of the `osm-diffs` binary, the statically linked `tippecanoe`
+graph of the `osmdiffs` binary, the statically linked `tippecanoe`
 binary and its libraries, build-environment details, and licenses.
 
 Alongside it, our SBOM includes a small
@@ -134,7 +134,7 @@ reusable workflow,
 that file and
 [`verify-release.sh`](../scripts/verify-release.sh) for the mechanism,
 and
-[alltheplaces/osm-diffs#608](https://github.com/alltheplaces/osm-diffs/pull/608)
+[brawer/osmdiffs#608](https://github.com/brawer/osmdiffs/pull/608)
 for this having been checked against a real release, not just assumed.
 
 We use GitHub’s native
@@ -151,7 +151,7 @@ per-architecture image gets its own SBOM and provenance attestation,
 while the top-level manifest list gets only provenance — it has no
 software content of its own to describe. This matches current
 mainstream practice; see
-[alltheplaces/osm-diffs#589](https://github.com/alltheplaces/osm-diffs/issues/589)
+[brawer/osmdiffs#589](https://github.com/brawer/osmdiffs/issues/589)
 for where it might evolve.
 
 ## Immutable releases
@@ -175,7 +175,7 @@ image* was built by our workflow from our source (provenance), and
 
 ## Is this overkill for a project like this?
 
-Fair question. `osm-diffs` is open source, processes only public data,
+Fair question. `osmdiffs` is open source, processes only public data,
 and handles no secrets — our actual threat model is modest compared to
 a service handling user data or credentials. So no, this
 isn’t strictly *necessary* the way it would be for many other projects.
@@ -205,7 +205,7 @@ requirement, for example under the US
 and the EU
 [Cyber Resilience Act](https://en.wikipedia.org/wiki/Cyber_Resilience_Act).
 
-None of that raises `osm-diffs`’s own threat model much — and
+None of that raises `osmdiffs`’s own threat model much — and
 honestly, everything in this document is overkill for what a project
 like this actually needs. We set it up anyway to make a different
 point: this level of rigor doesn’t require a large company’s

@@ -373,7 +373,7 @@ fn parse_geometry(geojson: &GeoJson) -> Option<geo::Geometry<f64>> {
 /// `pipeline::conflate` searches a radius around this point instead of
 /// querying by actual coverage the way it does for OSM features (see
 /// `tables::feature_index`'s module doc comment); see
-/// [alltheplaces/osm-diffs#700](https://github.com/alltheplaces/osm-diffs/issues/700).
+/// [brawer/osmdiffs#700](https://github.com/brawer/osmdiffs/issues/700).
 fn find_point(geom: &geo::Geometry<f64>) -> Option<Point> {
     match geom {
         geo::Geometry::LineString(line_string) => {
@@ -518,7 +518,7 @@ mod tests {
         geo::Geometry::from(Point::new(x, y))
     }
 
-    /// Regression test for alltheplaces/osm-diffs#690: `find_point`
+    /// Regression test for brawer/osmdiffs#690: `find_point`
     /// reduces a line/polygon down to a single point for
     /// `Place::s2_cell_id`, but `Place::shape()` must return the
     /// feature's real (non-point) geometry, not that reduced point.

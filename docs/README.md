@@ -17,9 +17,9 @@ Want to work on the pipeline itself, or run it somewhere? Start here.
 - [`TESTING.md`](TESTING.md) — how this project’s tests are organized,
   what CI enforces, and how to try a change on real hardware before it
   lands.
-- [`LOGGING.md`](LOGGING.md) — the JSON log format `osm-diffs run`
+- [`LOGGING.md`](LOGGING.md) — the JSON log format `osmdiffs run`
   writes, and where weekly-run logs end up archived in S3.
-- [`RELEASING.md`](RELEASING.md) — how to cut a release of `osm-diffs`.
+- [`RELEASING.md`](RELEASING.md) — how to cut a release of `osmdiffs`.
 - [`PRODUCTION.md`](PRODUCTION.md) — operational knowledge for running
   a released container somewhere real: hardware sizing, required
   configuration, serving the outputs over a CDN, what to monitor.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pushed to the remote VM and run there by `cloud_test.py deploy`. Clones
-# (or updates) the given branch and builds osm-diffs + tippecanoe via the
+# (or updates) the given branch and builds osmdiffs + tippecanoe via the
 # project's own Containerfile -- natively, no QEMU emulation. Building
 # this same Containerfile locally on an Apple Silicon dev machine forces
 # --platform linux/amd64, which is slow enough (~2 hours, including one
@@ -25,7 +25,7 @@ else
 fi
 
 cd "$dir"
-podman build -t osm-diffs-test \
+podman build -t osmdiffs-test \
     --build-arg BUILD_TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
     -f Containerfile .
 

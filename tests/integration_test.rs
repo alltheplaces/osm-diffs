@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Sets up a workdir with the fixture inputs symlinked in (so the
-/// pipeline uses them instead of fetching), runs `osm-diffs run` to
+/// pipeline uses them instead of fetching), runs `osmdiffs run` to
 /// completion, and returns the workdir.
 fn run_pipeline_on_fixtures(extra_args: &[&str]) -> Result<TempDir> {
     use std::os::unix::fs::symlink;
@@ -37,7 +37,7 @@ fn run_pipeline_on_fixtures(extra_args: &[&str]) -> Result<TempDir> {
         workdir.path().join("planet-latest.osm.pbf.meta.json"),
     )?;
 
-    Command::new(cargo_bin!("osm-diffs"))
+    Command::new(cargo_bin!("osmdiffs"))
         .arg("run")
         .arg("--workdir")
         .arg(workdir.path())
@@ -79,7 +79,7 @@ fn assert_publish_artifacts(workdir: &Path) -> Result<()> {
             .starts_with("https://datapackage.org/profiles/2.0/"),
         "datapackage.json is not a Frictionless v2 profile: {manifest}"
     );
-    assert_eq!(manifest["name"], "osm-diffs");
+    assert_eq!(manifest["name"], "osmdiffs");
 
     let resources = manifest["resources"].as_array().context("no resources")?;
     // conflated + bom + conflated-tiles + edits-tiles
@@ -185,7 +185,7 @@ fn test_workdir_run_id_guard() -> Result<()> {
     let workdir = run_pipeline_on_fixtures(&["--run_id", "run-A"])?;
 
     // Same run id, same workdir: a restart -- succeeds (steps are cached).
-    Command::new(cargo_bin!("osm-diffs"))
+    Command::new(cargo_bin!("osmdiffs"))
         .arg("run")
         .arg("--workdir")
         .arg(workdir.path())
@@ -194,7 +194,7 @@ fn test_workdir_run_id_guard() -> Result<()> {
         .success();
 
     // Different run id, same workdir: refused.
-    Command::new(cargo_bin!("osm-diffs"))
+    Command::new(cargo_bin!("osmdiffs"))
         .arg("run")
         .arg("--workdir")
         .arg(workdir.path())
@@ -472,7 +472,7 @@ fn assert_shops_jsonl(path: &Path) -> Result<()> {
     // OSM base version it was suggested against -- needed to detect
     // edit conflicts later (OSM's own edit API uses the version number,
     // not the changeset, for this), even though nothing uploads edits
-    // yet. Deliberately no changeset here -- see alltheplaces/osm-diffs#730.
+    // yet. Deliberately no changeset here -- see brawer/osmdiffs#730.
     for feature in &features {
         assert_eq!(feature["type"], "Feature");
         assert_eq!(feature["geometry"]["type"], "Point");
@@ -642,7 +642,7 @@ fn assert_conflated_tile_layers(workdir: &Path) -> Result<()> {
 
 #[test]
 fn test_no_subcommand() {
-    Command::new(cargo_bin!("osm-diffs"))
+    Command::new(cargo_bin!("osmdiffs"))
         .assert()
         .failure()
         .stderr(predicates::str::contains("no subcommand given"));
@@ -652,7 +652,7 @@ fn test_no_subcommand() {
 fn test_version_flag() {
     // Asserts against CARGO_PKG_VERSION (rather than a hardcoded string) so
     // this doesn't need updating every time cut-release.sh bumps the version.
-    Command::new(cargo_bin!("osm-diffs"))
+    Command::new(cargo_bin!("osmdiffs"))
         .arg("--version")
         .assert()
         .success()
@@ -661,7 +661,7 @@ fn test_version_flag() {
 
 #[test]
 fn test_help_flag() {
-    Command::new(cargo_bin!("osm-diffs"))
+    Command::new(cargo_bin!("osmdiffs"))
         .arg("--help")
         .assert()
         .success()

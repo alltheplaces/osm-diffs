@@ -3,7 +3,7 @@
 #
 # Build a CycloneDX 1.7 SBOM fragment for one statically compiled
 # binary from the felt/tippecanoe build that we ship alongside
-# osm-diffs in the OCI container image -- tippecanoe itself, or its
+# osmdiffs in the OCI container image -- tippecanoe itself, or its
 # sibling tile-join (used by pipeline::tiles::join_tiles to merge
 # conflated.pmtiles' overview and detail passes; see
 # pipeline::conflated_tiles' module doc comment for why that split
@@ -44,7 +44,7 @@ def alpine_supplier: {name: "Alpine Linux", url: ["https://alpinelinux.org"]};
   metadata: {
     lifecycles: [{phase: "build"}],
     authors: [{name: "Sascha Brawer", email: "sascha@brawer.ch"}],
-    supplier: {name: "All The Places", url: ["https://github.com/alltheplaces/"]},
+    supplier: {name: "Sascha Brawer", url: ["https://brawer.ch"]},
     component: {
       type: "application",
       name: $NAME,
@@ -79,7 +79,7 @@ def alpine_supplier: {name: "Alpine Linux", url: ["https://alpinelinux.org"]};
       }]
     },
     properties: (if $DEV_BUILD == "true" then
-        [{name: "osm-diffs:sbom:devBuild", value: "true"}]
+        [{name: "osmdiffs:sbom:devBuild", value: "true"}]
       else
         []
       end)

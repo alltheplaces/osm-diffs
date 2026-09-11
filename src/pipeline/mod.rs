@@ -10,7 +10,7 @@ use time::UtcDateTime;
 /// across this pipeline (see the `ext_sort` crate) -- a single, named
 /// knob to bump if a chunk size ever turns out wrong, instead of hunting
 /// down ad hoc magic numbers scattered across call sites (see
-/// https://github.com/alltheplaces/osm-diffs/issues/657, resolved by
+/// https://github.com/brawer/osmdiffs/issues/657, resolved by
 /// consolidating every call site onto this constant). A chunk is also a
 /// unit of concurrently-open file descriptors: `ext_sort` keeps every
 /// spilled chunk's file open at once during its final merge, so a

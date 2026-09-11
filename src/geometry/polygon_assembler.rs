@@ -33,7 +33,7 @@ const DEFAULT_MAX_RING_COORDINATES: usize = 2000;
 /// against this by dropping any ring that's an exact duplicate -- up to
 /// starting point and winding direction -- of one already added (see
 /// [`ring_key`]), rather than letting an even multiplicity cancel it out.
-/// See <https://github.com/alltheplaces/osm-diffs/issues/532>.
+/// See <https://github.com/brawer/osmdiffs/issues/532>.
 ///
 /// # Antimeridian handling
 /// Rings passed in are assumed to already be internally antimeridian-safe
@@ -384,7 +384,7 @@ mod tests {
         }
     }
 
-    /// https://github.com/alltheplaces/osm-diffs/issues/532, mirroring
+    /// https://github.com/brawer/osmdiffs/issues/532, mirroring
     /// grid fixture `7/790`: a ring added twice (the same OSM way listed
     /// twice as a member) must not cancel itself out under the even-odd
     /// rule -- it should still resolve to that one ring's shape.

@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: MIT
 #
 # Generate the CycloneDX Software Bill of Materials (SBOM) for the
-# osm-diffs container image: one single file, describing the osm-diffs
+# osmdiffs container image: one single file, describing the osmdiffs
 # binary (with its Rust dependency graph) and the two statically
 # linked tippecanoe-project binaries that ship alongside it, tippecanoe
 # and tile-join.
@@ -24,7 +24,7 @@
 # printed. Such a placeholder-filled SBOM is fine for checking structural
 # or semantic validity, but MUST NOT be treated as an accurate SBOM for a
 # production build; the output is marked as such in its own metadata
-# (metadata.properties: "osm-diffs:sbom:devBuild").
+# (metadata.properties: "osmdiffs:sbom:devBuild").
 #
 # Note on the image digest: this script does not, and cannot, know the
 # digest of the container image it is building -- that digest only
@@ -46,12 +46,12 @@
 
 set -eu
 
-# The registry-qualified image name (e.g. "ghcr.io/alltheplaces/osm-diffs")
+# The registry-qualified image name (e.g. "ghcr.io/brawer/osmdiffs")
 # is known before the build runs, so -- unlike the image digest -- release.yml
 # can just pass it in as a build arg instead of patching it in afterwards.
 # Falls back to a plain default for local development and test-container.yml,
 # neither of which push a real, registry-qualified image.
-IMAGE_NAME="${IMAGE_NAME:-alltheplaces/osm-diffs}"
+IMAGE_NAME="${IMAGE_NAME:-brawer/osmdiffs}"
 
 # ── locate project root and jq scripts ──────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -126,11 +126,11 @@ else
   exit 1
 fi
 
-# ── build the osm-diffs (pipeline) SBOM fragment ─────────────────────────────
+# ── build the osmdiffs (pipeline) SBOM fragment ─────────────────────────────
 # cargo cyclonedx always writes next to Cargo.toml, named after the binary
 # target; move it into our workdir once it's done so it can't be mistaken
 # for a second, independently meaningful SBOM file.
-RAW_PIPELINE="${PROJECT_ROOT}/osm-diffs_bin.cdx.json"
+RAW_PIPELINE="${PROJECT_ROOT}/osmdiffs_bin.cdx.json"
 rm -f "$RAW_PIPELINE"  # clean up any leftover file from a previous failed run
 
 cargo cyclonedx \

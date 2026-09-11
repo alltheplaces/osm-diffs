@@ -2,7 +2,7 @@
   "$schema": "https://datapackage.org/profiles/2.0/datapackage.json",
   "created": "2026-09-01T00:00:02Z",
   "description": "For every AllThePlaces feature that plausibly maps to OpenStreetMap, one row pairing it with its matched OpenStreetMap feature (or with no match). GeoParquet 2.0, with an AllThePlaces geometry column and an OpenStreetMap one.",
-  "homepage": "https://github.com/alltheplaces/osm-diffs",
+  "homepage": "https://github.com/brawer/osmdiffs",
   "id": "5a01ca49-df2a-5645-8108-bb28c7ab246f",
   "licenses": [
     {
@@ -11,7 +11,7 @@
       "title": "Open Data Commons Open Database License v1.0"
     }
   ],
-  "name": "osm-diffs",
+  "name": "osmdiffs",
   "resources": [
     {
       "bytes": 786432000,
